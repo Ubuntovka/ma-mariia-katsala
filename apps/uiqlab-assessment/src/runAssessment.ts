@@ -145,6 +145,13 @@ interface MetricInfo {
 let cachedMetrics: MetricInfo[] = [];
 
 /**
+ * Get metric info by its ID (e.g., "m1_png_file_size" or "m1").
+ */
+export function getMetricInfoById(metricId: string): MetricInfo | undefined {
+	return cachedMetrics.find((m) => m.id === metricId || m.id === metricId.split('_')[0]);
+}
+
+/**
  * Fetch available metric indices from the orchestrator and map them to
  * human-readable assessment names. The orchestrator returns an array of
  * metric objects with `id` (like "m1", "m10") and `name` properties.
