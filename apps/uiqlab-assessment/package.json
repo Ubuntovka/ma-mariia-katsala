@@ -10,14 +10,14 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:uiqlab-assessment.helloWorld"
+    "onCommand:uiqlab-assessment.runAssessment"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "uiqlab-assessment.helloWorld",
-        "title": "Hello World"
+        "command": "uiqlab-assessment.runAssessment",
+        "title": "Run Assessment"
       }
     ]
   },
