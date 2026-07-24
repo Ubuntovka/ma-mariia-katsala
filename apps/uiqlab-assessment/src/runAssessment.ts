@@ -1,18 +1,18 @@
 export const ASSESSMENTS = [
-	'PNG size',
-	'JPEG size/compression',
-	'colorfulness',
-	'color average/standard deviation',
-	'whitespace',
-	'UI Interpretation',
-	'UMSI',
-	'word count',
-	'edges',
-	'congestion',
-	'subband entropy',
-	'Shannon entropy',
-	'accessibility',
-	'NIMA',
+	'PNG file size',
+	'JPEG file size and compression ratio',
+	'Colorfulness',
+	'CIELab color average & standard deviation',
+	'White space proportion',
+	'UIED segmentation',
+	'UMSI (Unified Model of Saliency and Importance)',
+	'Word count',
+	'Edge density',
+	'Feature congestion',
+	'Subband entropy',
+	'Shannon\'s information entropy',
+	'Accessibility checks',
+	'NIMA (Neural IMage Assessment)',
 ] as const;
 
 export const DATA_SOURCE_OPTIONS = [
@@ -20,7 +20,7 @@ export const DATA_SOURCE_OPTIONS = [
 	'Take from my current code',
 ] as const;
 
-export type AssessmentName = (typeof ASSESSMENTS)[number];
+export type AssessmentName = string;
 export type DataSourceOption = (typeof DATA_SOURCE_OPTIONS)[number];
 
 export interface DeploymentUrlDataSource {
@@ -69,8 +69,161 @@ export function resolveCurrentCodeLocation(window: WindowLike, workspace: Worksp
 	return window.activeTextEditor?.document.uri.fsPath ?? workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
 
+import * as http from 'http';
+import * as https from 'https';
+
+const ORCHESTRATOR_BASE = 'http://127.0.0.1:8181';
+
+async function httpGetJson<T>(url: string): Promise<T> {
+	const parsed = new URL(url);
+	const lib = parsed.protocol === 'https:' ? https : http;
+
+	return new Promise<T>((resolve, reject) => {
+		const req = lib.get(parsed, (res: any) => {
+			let data = '';
+			res.on('data', (chunk: any) => { data += chunk; });
+			res.on('end', () => {
+				try {
+					if (res.statusCode && res.statusCode >= 400) {
+						reject(new Error(`HTTP ${res.statusCode} from ${url}`));
+						return;
+					}
+					resolve(JSON.parse(data));
+				} catch (err) {
+					reject(err);
+				}
+			});
+		});
+		req.on('error', reject);
+		req.end();
+	});
+}
+
+async function httpPostJson<T>(url: string, body: any): Promise<T> {
+	const parsed = new URL(url);
+	const lib = parsed.protocol === 'https:' ? https : http;
+	const payload = JSON.stringify(body);
+
+	const opts: any = {
+		host: parsed.hostname,
+		port: parsed.port,
+		path: parsed.pathname + parsed.search,
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			'Content-Length': Buffer.byteLength(payload),
+		},
+	};
+
+	return new Promise<T>((resolve, reject) => {
+		const req = lib.request(opts, (res: any) => {
+			let data = '';
+			res.on('data', (chunk: any) => { data += chunk; });
+			res.on('end', () => {
+				try {
+					if (res.statusCode && res.statusCode >= 400) {
+						reject(new Error(`HTTP ${res.statusCode} from ${url}`));
+						return;
+					}
+					resolve(JSON.parse(data));
+				} catch (err) {
+					reject(err);
+				}
+			});
+		});
+		req.on('error', reject);
+		req.write(payload);
+		req.end();
+	});
+}
+
+interface MetricInfo {
+	name: AssessmentName;
+	id: string;
+}
+
+let cachedMetrics: MetricInfo[] = [];
+
+/**
+ * Fetch available metric indices from the orchestrator and map them to
+ * human-readable assessment names. The orchestrator returns an array of
+ * metric objects with `id` (like "m1", "m10") and `name` properties.
+ */
+export async function fetchAvailableAssessments(): Promise<AssessmentName[]> {
+	try {
+		const resp: any = await httpGetJson(`${ORCHESTRATOR_BASE}/eval/mm`);
+
+		let items: any[] = [];
+
+		if (Array.isArray(resp)) {
+			items = resp;
+		} else if (Array.isArray(resp.metrics)) {
+			items = resp.metrics;
+		} else if (Array.isArray(resp.available_metrics)) {
+			items = resp.available_metrics;
+		} else {
+			// Try to coerce the response into an array if possible
+			for (const k of Object.keys(resp)) {
+				if (Array.isArray((resp as any)[k])) {
+					items = (resp as any)[k];
+					break;
+				}
+			}
+		}
+
+		// Extract metric names from the response objects and cache the mapping.
+		// Each item is expected to be: { id: "m1", name: "PNG file size", ... }
+		cachedMetrics = items.map((it) => {
+			if (typeof it === 'object' && it !== null && it.name && it.id) {
+				// Object with name and id properties: use them directly
+				return {
+					name: it.name as AssessmentName,
+					id: it.id as string,
+				};
+			}
+			return undefined;
+		}).filter((m): m is MetricInfo => Boolean(m));
+
+		const names = cachedMetrics.map((m) => m.name);
+		return names.length > 0 ? names : Array.from(ASSESSMENTS) as AssessmentName[];
+	} catch (err) {
+		// On failure, fall back to full list so user can still proceed.
+		return Array.from(ASSESSMENTS) as AssessmentName[];
+	}
+}
+
+/**
+ * Send the deployment URL and selected metrics to the orchestrator for
+ * evaluation. Looks up the metric IDs from the cached orchestrator response.
+ */
+export async function submitUrlForEvaluation(deploymentUrl: string, selectedAssessments: AssessmentName[]): Promise<any> {
+	// Map selected assessment names to their metric IDs using the cached data.
+	const metrics = selectedAssessments.map((name) => {
+		const cached = cachedMetrics.find((m) => m.name === name);
+		if (cached) {
+			return cached.id;
+		}
+		// Fallback: try to find in ASSESSMENTS and convert to mX format
+		const idx = ASSESSMENTS.indexOf(name as any);
+		if (idx >= 0) {
+			return `m${idx + 1}`;
+		}
+		return name;
+	});
+
+	const payload = { url: deploymentUrl, metrics };
+	return await httpPostJson(`${ORCHESTRATOR_BASE}/eval/evaluate_url_input_test`, payload);
+}
+
+export async function fetchEvaluationResult(wui_id: string): Promise<any> {
+	return await httpGetJson(`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}`);
+}
+
 export async function collectAssessmentRunRequest(ui: QuickPickUi, currentCodeLocation: string | undefined): Promise<AssessmentRunRequest | undefined> {
-	const selectedAssessments = await ui.showQuickPick(ASSESSMENTS, {
+	// Request available assessments from the orchestrator first
+	const available = await fetchAvailableAssessments();
+
+	const selectedAssessments = await ui.showQuickPick(available, {
 		title: 'Which assessments do you want to run?',
 		placeHolder: 'Select one or more assessments',
 		canPickMany: true,
@@ -86,7 +239,7 @@ export async function collectAssessmentRunRequest(ui: QuickPickUi, currentCodeLo
 	}
 
 	if (selectedAssessments.length === 0) {
-		await ui.showErrorMessage('Select at least one assessment to run.');
+		await ui.showErrorMessage('No assessments are available.');
 		return undefined;
 	}
 
@@ -152,15 +305,13 @@ function isValidUrl(value: string): boolean {
 }
 
 function toAssessmentNames(values: readonly string[]): AssessmentName[] {
-	const assessments = values.filter(isAssessmentName);
-
-	if (assessments.length !== values.length) {
-		throw new Error('Unexpected assessment selection.');
-	}
-
-	return assessments;
+	// Accept provided values as assessment names. They may come from the UI
+	// (possibly driven by the orchestrator) or tests — avoid strict runtime
+	// validation here so dynamic names are supported.
+	return Array.from(values) as AssessmentName[];
 }
 
-function isAssessmentName(value: string): value is AssessmentName {
-	return ASSESSMENTS.some((assessment) => assessment === value);
+function isAssessmentName(_value: string): _value is AssessmentName {
+	// Kept for compatibility, but treat any string as a valid AssessmentName.
+	return true;
 }
