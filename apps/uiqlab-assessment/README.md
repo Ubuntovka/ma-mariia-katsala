@@ -1,6 +1,39 @@
-# uiqlab-assessment README
+# UIQLab Assessment VS Code Extension
 
-This is the README for your extension "uiqlab-assessment". After writing up a brief description, we recommend including the following sections.
+This extension supports assessing deployed URLs and now can capture locally running web applications using Playwright and upload screenshots and HTML to the orchestrator.
+
+Installation (development):
+
+- Install dependencies:
+
+  cd apps/uiqlab-assessment
+  npm install
+
+- Install Chromium for Playwright (required when using local capture):
+
+  npx playwright install chromium
+
+Note: The extension depends on playwright-core. The browser binary is not bundled into the VSIX. For releases that include the browser, you must ensure the packaging step includes the browser binary or instruct users to run the above install command. Capture runs wherever the VS Code extension host is running — in Remote SSH/Codespaces/container environments capture executes there and must be able to reach the target localhost endpoint.
+
+How to start a local web application (example):
+
+  # in your project
+  npm run dev
+  # or e.g. create-react-app
+  npm start
+
+The local server should be reachable from the machine running the extension host, for example http://localhost:3000.
+
+How to run the capture-based assessment command:
+
+- Run the command palette: Run Assessment
+- Choose assessments and "Deployment URL"
+- Enter a URL. If the URL is localhost (127.0.0.1/::1/0.0.0.0) the extension will offer to capture it with Playwright.
+- If accepted, the extension opens a headless Chromium, waits for page load, waits until document.readyState === "complete", waits an extra 5s, disables animations, captures a fixed-viewport PNG and rendered HTML, then uploads both to the orchestrator.
+
+VSIX packaging limitation:
+- Playwright/browser binaries are not automatically included in a standard VSIX bundle. During development run `npx playwright install chromium` or ensure the host has Chromium available. For distribution, either include the browser in the package or instruct users to install it following the commands above.
+
 
 ## Features
 Run **Assessment** from the Command Palette to:
