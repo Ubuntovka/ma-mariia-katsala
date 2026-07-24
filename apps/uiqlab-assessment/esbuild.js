@@ -41,7 +41,7 @@ async function main() {
 			/* add to the end of plugins array */
 			esbuildProblemMatcherPlugin,
 		],
-	});
+		external: ['vscode', 'playwright-core', 'form-data'],	});
 	if (watch) {
 		await ctx.watch();
 	} else {

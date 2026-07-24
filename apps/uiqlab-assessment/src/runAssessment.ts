@@ -74,6 +74,9 @@ import * as https from 'https';
 
 const ORCHESTRATOR_BASE = 'http://127.0.0.1:8181';
 
+import FormData = require('form-data');
+
+
 async function httpGetJson<T>(url: string): Promise<T> {
 	const parsed = new URL(url);
 	const lib = parsed.protocol === 'https:' ? https : http;
@@ -164,17 +167,13 @@ export async function fetchAvailableAssessments(): Promise<AssessmentName[]> {
 
 		if (Array.isArray(resp)) {
 			items = resp;
-		} else if (Array.isArray(resp.metrics)) {
-			items = resp.metrics;
-		} else if (Array.isArray(resp.available_metrics)) {
-			items = resp.available_metrics;
-		} else {
-			// Try to coerce the response into an array if possible
-			for (const k of Object.keys(resp)) {
-				if (Array.isArray((resp as any)[k])) {
-					items = (resp as any)[k];
-					break;
-				}
+		} else if (resp && typeof resp === 'object') {
+			// Handle { metrics: { m1: {...}, m2: {...} } } or { metrics: [...] }
+			const metrics = resp.metrics || resp.available_metrics || resp.items || resp;
+			if (Array.isArray(metrics)) {
+				items = metrics;
+			} else if (typeof metrics === 'object' && metrics !== null) {
+				items = Object.values(metrics);
 			}
 		}
 
@@ -204,26 +203,127 @@ export async function fetchAvailableAssessments(): Promise<AssessmentName[]> {
  * evaluation. Looks up the metric IDs from the cached orchestrator response.
  */
 export async function submitUrlForEvaluation(deploymentUrl: string, selectedAssessments: AssessmentName[]): Promise<any> {
-	// Map selected assessment names to their metric IDs using the cached data.
-	const metrics = selectedAssessments.map((name) => {
+	const metrics = toMetricIds(selectedAssessments);
+
+	const payload = { url: deploymentUrl, metrics };
+	return await httpPostJson(`${ORCHESTRATOR_BASE}/eval/evaluate_url_input_test`, payload);
+}
+
+export async function submitFileForEvaluation(
+	fileData: Buffer,
+	fileName: string,
+	contentType: string,
+	selectedAssessments: AssessmentName[]
+): Promise<any> {
+	if (!Buffer.isBuffer(fileData)) {
+		throw new Error('fileData must be a Buffer');
+	}
+
+	const form = new FormData();
+	form.append('file', fileData, {
+		filename: fileName,
+		contentType: contentType,
+	} as any);
+	toMetricIds(selectedAssessments).forEach((m) => {
+		form.append('mm', m);
+	});
+
+	const parsed = new URL(`${ORCHESTRATOR_BASE}/eval/evaluate_with_artifacts`);
+	const lib = parsed.protocol === 'https:' ? (await import('https')) : (await import('http'));
+
+	const headers = form.getHeaders();
+	const opts: any = {
+		host: parsed.hostname,
+		port: parsed.port,
+		path: parsed.pathname + parsed.search,
+		method: 'POST',
+		headers,
+	};
+
+	return new Promise<any>((resolve, reject) => {
+		const req = lib.request(opts, (res: any) => {
+			let data = '';
+			res.on('data', (chunk: any) => { data += chunk; });
+			res.on('end', () => {
+			  try {
+			    if (res.statusCode && res.statusCode >= 400) {
+			      reject(new Error(`HTTP ${res.statusCode} from ${parsed.toString()}`));
+			      return;
+			    }
+			    resolve(JSON.parse(data));
+			  } catch (err) {
+			    reject(err);
+			  }
+			});
+		});
+		req.on('error', reject);
+		(form as any).pipe(req);
+	});
+}
+
+export function toMetricIds(selectedAssessments: AssessmentName[]): string[] {
+	return selectedAssessments.map((name) => {
 		const cached = cachedMetrics.find((m) => m.name === name);
 		if (cached) {
 			return cached.id;
 		}
-		// Fallback: try to find in ASSESSMENTS and convert to mX format
 		const idx = ASSESSMENTS.indexOf(name as any);
 		if (idx >= 0) {
 			return `m${idx + 1}`;
 		}
 		return name;
 	});
-
-	const payload = { url: deploymentUrl, metrics };
-	return await httpPostJson(`${ORCHESTRATOR_BASE}/eval/evaluate_url_input_test`, payload);
 }
 
 export async function fetchEvaluationResult(wui_id: string): Promise<any> {
 	return await httpGetJson(`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}`);
+}
+
+/**
+ * Poll for evaluation results until the expected number of unique metrics is reached
+ * or the maximum number of attempts is exhausted.
+ */
+export async function pollEvaluationResult(
+	wui_id: string,
+	expectedCount: number,
+	options: {
+		maxAttempts?: number;
+		intervalMs?: number;
+		onUpdate?: (results: any[]) => void;
+		isCancelled?: () => boolean;
+	} = {}
+): Promise<any[]> {
+	const {
+		maxAttempts = 150, // 5 minutes default
+		intervalMs = 2000,
+		onUpdate,
+		isCancelled
+	} = options;
+
+	let lastResult: any[] = [];
+	for (let attempt = 0; attempt < maxAttempts; attempt++) {
+		if (isCancelled && isCancelled()) {
+			break;
+		}
+		try {
+			const result = await fetchEvaluationResult(wui_id);
+			if (Array.isArray(result) && result.length > 0) {
+				lastResult = result;
+				if (onUpdate) {
+					onUpdate(result);
+				}
+				// Count unique base metric IDs (e.g., "m1" from "m1_png_file_size")
+				const uniqueMetricIds = new Set(result.map((r: any) => r.metric_id.split('_')[0]));
+				if (uniqueMetricIds.size >= expectedCount) {
+					return result;
+				}
+			}
+		} catch (err) {
+			// ignore and retry
+		}
+		await new Promise((r) => setTimeout(r, intervalMs));
+	}
+	return lastResult;
 }
 
 export async function collectAssessmentRunRequest(ui: QuickPickUi, currentCodeLocation: string | undefined): Promise<AssessmentRunRequest | undefined> {
