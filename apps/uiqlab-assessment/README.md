@@ -3,8 +3,14 @@
 This is the README for your extension "uiqlab-assessment". After writing up a brief description, we recommend including the following sections.
 
 ## Features
+Run **Assessment** from the Command Palette to:
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+* choose one or more of the 14 available assessments
+* choose how to get the page data:
+  * Deployment URL
+  * Take from my current code
+
+The command then summarizes the selections and is ready to plug into the assessment runner.
 
 For example if there is an image subfolder under your extension project workspace:
 
