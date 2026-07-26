@@ -2,14 +2,49 @@ import * as vscode from 'vscode';
 import {
 	collectAssessmentRunRequest,
 	formatAssessmentRunSummary,
-	resolveCurrentCodeLocation,
 	submitUrlForEvaluation,
 	submitFileForEvaluation,
 	fetchEvaluationResult,
 	pollEvaluationResult,
 	toMetricIds,
 	getMetricInfoById,
+	GitInfo,
 } from './runAssessment';
+import { execSync } from 'child_process';
+import * as path from 'path';
+
+function getGitInfo(workspaceRoot: string): GitInfo {
+	let repositoryUrl = '';
+	let branch = '';
+	let commitHash = '';
+	let gitDirty = false;
+	const projectName = path.basename(workspaceRoot);
+
+	try {
+		repositoryUrl = execSync('git remote get-url origin', { cwd: workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+	} catch { }
+
+	try {
+		branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+	} catch { }
+
+	try {
+		commitHash = execSync('git rev-parse HEAD', { cwd: workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+	} catch { }
+
+	try {
+		gitDirty = execSync('git status --porcelain', { cwd: workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().length > 0;
+	} catch { }
+
+	return {
+		repositoryUrl: repositoryUrl || 'local',
+		projectName,
+		source: 'ide',
+		branch: branch || undefined,
+		commitHash: commitHash || undefined,
+		gitDirty,
+	};
+}
 
 function createResultsWebview(
 	panel: vscode.WebviewPanel,
@@ -24,7 +59,9 @@ function createResultsWebview(
 function generateResultsHtml(results: any[], url: string, isComplete: boolean = true): string {
 	// Filter out results that are completely empty, but keep them if they are the only ones for a metric
 	const filteredResults = results.filter((r, i) => {
-		if (Array.isArray(r.results) && r.results.length > 0) return true;
+		if (Array.isArray(r.results) && r.results.length > 0) {
+			return true;
+		}
 		// If it's empty, check if there's any other non-empty result for the same metric_id
 		const hasNonEmpty = results.some((other, j) => 
 			i !== j && 
@@ -174,8 +211,7 @@ function generateResultsHtml(results: any[], url: string, isComplete: boolean = 
 
 export function activate(context: vscode.ExtensionContext) {
 	const disposable = vscode.commands.registerCommand('uiqlab-assessment.runAssessment', async () => {
-		const currentCodeLocation = resolveCurrentCodeLocation(vscode.window, vscode.workspace);
-		const request = await collectAssessmentRunRequest(vscode.window, currentCodeLocation);
+		const request = await collectAssessmentRunRequest(vscode.window);
 
 		if (!request) {
 			return;
@@ -192,73 +228,13 @@ export function activate(context: vscode.ExtensionContext) {
 				context.workspaceState.update('uiqlab.lastUrl', deploymentUrl);
 			} catch { }
 
-			// If it's a localhost URL, perform capture via Playwright before upload
-			let isLocal = false;
-			try {
-				const u = new URL(deploymentUrl);
-				isLocal = ['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(u.hostname);
-			} catch { }
-
-			if (isLocal) {
-				const share = await vscode.window.showQuickPick(['Yes', 'No'], { title: 'Local URL detected. Capture rendered page with Playwright and upload artifacts to orchestrator?', placeHolder: 'Capture locally and upload screenshot+HTML?' });
-				if (share === 'Yes') {
-					// perform capture with progress
-					try {
-						await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Capturing local page for assessment', cancellable: true }, async (progress, token) => {
-							progress.report({ message: 'Opening headless browser' });
-							const { capturePage } = await import('./playwrightCapture.js');
-							const p = capturePage(deploymentUrl);
-							// hook cancellation
-							token.onCancellationRequested(() => {
-								// Note: capturePage currently does not accept an AbortSignal; cancellation will just show message
-								vscode.window.showInformationMessage('Capture cancelled by user');
-							});
-							progress.report({ message: 'Waiting for page load and rendering' });
-							const result = await p;
-							progress.report({ message: 'Uploading artifacts to orchestrator' });
-							const resp = await submitFileForEvaluation(result.screenshot, 'capture.png', 'image/png', request.assessments);
-							const wui_id = resp?.result_id;
-							if (!wui_id) {
-								vscode.window.showInformationMessage('Submitted artifacts for evaluation; response did not include an id.');
-								return;
-							}
-							vscode.window.showInformationMessage(`Submitted for evaluation (id: ${wui_id}). Waiting for result...`);
-							
-							// Poll for result
-							const expectedCount = new Set(toMetricIds(request.assessments)).size;
-							let panel: vscode.WebviewPanel | undefined;
-
-							const resultData = await pollEvaluationResult(wui_id, expectedCount, {
-								onUpdate: (currentResults) => {
-									if (!panel) {
-										panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
-									}
-									createResultsWebview(panel, currentResults, deploymentUrl, false);
-								},
-								isCancelled: () => token.isCancellationRequested
-							});
-
-							if (resultData && resultData.length > 0) {
-								if (!panel) {
-									panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
-								}
-								createResultsWebview(panel, resultData, deploymentUrl, true);
-							} else {
-								vscode.window.showInformationMessage('Timed out or cancelled waiting for evaluation result.');
-							}
-						});
-					} catch (err: any) {
-						vscode.window.showErrorMessage(`Capture or upload failed: ${err?.message ?? err}`);
-					}
-					return;
-				}
-			}
-
 			// Fall back to submitting URL only (existing behavior)
 			const share = await vscode.window.showQuickPick(['Yes', 'No'], { title: 'Share deployment URL with orchestrator for evaluation?', placeHolder: 'Send URL and selected metrics to orchestrator?' });
 			if (share === 'Yes') {
 				try {
-					const resp: any = await submitUrlForEvaluation(request.dataSource.deploymentUrl, request.assessments);
+					const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+					const gitInfo = getGitInfo(workspaceRoot);
+					const resp: any = await submitUrlForEvaluation(request.dataSource.deploymentUrl, request.assessments, gitInfo);
 
 					// The orchestrator is expected to return some identifier (wui_id) or similar.
 					const wui_id = resp?.result_id;
@@ -307,46 +283,32 @@ export function activate(context: vscode.ExtensionContext) {
 					vscode.window.showErrorMessage(`Failed to submit URL for evaluation: ${err?.message ?? err}`);
 				}
 			}
-		} else if (request.dataSource.kind === 'current-code') {
-			const location = request.dataSource.location;
-			const fileName = location.split(/[\\/]/).pop() || 'artifact';
-			const ext = fileName.split('.').pop()?.toLowerCase();
-
-			if (ext !== 'html' && ext !== 'zip' && ext !== 'png') {
-				vscode.window.showErrorMessage(`Unsupported file type: .${ext}. Only .html, .zip, and .png are supported.`);
-				return;
-			}
-
-			let contentType = 'application/octet-stream';
-			if (ext === 'html') {
-				contentType = 'text/html';
-			} else if (ext === 'png') {
-				contentType = 'image/png';
-			} else if (ext === 'zip') {
-				contentType = 'application/zip';
-			}
+		} else if (request.dataSource.kind === 'local-url') {
+			const localUrl = request.dataSource.localUrl;
 
 			try {
-				await vscode.window.withProgress({
-					location: vscode.ProgressLocation.Notification,
-					title: `Uploading ${fileName} for assessment`,
-					cancellable: true
-				}, async (progress, token) => {
-					const fileUri = vscode.Uri.file(location);
-					const fileDataRaw = await vscode.workspace.fs.readFile(fileUri);
-					const fileData = Buffer.from(fileDataRaw);
-
-					progress.report({ message: 'Sending to orchestrator' });
-					const resp = await submitFileForEvaluation(fileData, fileName, contentType, request.assessments);
+				await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Capturing local page for assessment', cancellable: true }, async (progress, token) => {
+					progress.report({ message: 'Opening headless browser' });
+					const { capturePage } = await import('./playwrightCapture.js');
+					const p = capturePage(localUrl);
+					// hook cancellation
+					token.onCancellationRequested(() => {
+						// Note: capturePage currently does not accept an AbortSignal; cancellation will just show message
+						vscode.window.showInformationMessage('Capture cancelled by user');
+					});
+					progress.report({ message: 'Waiting for page load and rendering' });
+					const result = await p;
+					progress.report({ message: 'Uploading artifacts to orchestrator' });
+					const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+					const gitInfo = getGitInfo(workspaceRoot);
+					const resp = await submitFileForEvaluation(result.screenshot, 'capture.png', 'image/png', request.assessments, gitInfo, localUrl);
 					const wui_id = resp?.result_id;
-
 					if (!wui_id) {
-						vscode.window.showInformationMessage('Submitted file for evaluation; response did not include an id.');
+						vscode.window.showInformationMessage('Submitted artifacts for evaluation; response did not include an id.');
 						return;
 					}
-
 					vscode.window.showInformationMessage(`Submitted for evaluation (id: ${wui_id}). Waiting for result...`);
-
+					
 					// Poll for result
 					const expectedCount = new Set(toMetricIds(request.assessments)).size;
 					let panel: vscode.WebviewPanel | undefined;
@@ -356,21 +318,22 @@ export function activate(context: vscode.ExtensionContext) {
 							if (!panel) {
 								panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
 							}
-							createResultsWebview(panel, currentResults, fileName, false);
-						}
+							createResultsWebview(panel, currentResults, localUrl, false);
+						},
+						isCancelled: () => token.isCancellationRequested
 					});
 
 					if (resultData && resultData.length > 0) {
 						if (!panel) {
 							panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
 						}
-						createResultsWebview(panel, resultData, fileName, true);
+						createResultsWebview(panel, resultData, localUrl, true);
 					} else {
-						vscode.window.showInformationMessage('Timed out waiting for evaluation result.');
+						vscode.window.showInformationMessage('Timed out or cancelled waiting for evaluation result.');
 					}
 				});
 			} catch (err: any) {
-				vscode.window.showErrorMessage(`Failed to read or upload file: ${err?.message ?? err}`);
+				vscode.window.showErrorMessage(`Capture or upload failed: ${err?.message ?? err}`);
 			}
 		}
 	});

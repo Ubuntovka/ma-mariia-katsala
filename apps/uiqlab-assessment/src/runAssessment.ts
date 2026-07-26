@@ -17,7 +17,7 @@ export const ASSESSMENTS = [
 
 export const DATA_SOURCE_OPTIONS = [
 	'Deployment URL',
-	'Take from my current code',
+	'Local URL',
 ] as const;
 
 export type AssessmentName = string;
@@ -28,14 +28,24 @@ export interface DeploymentUrlDataSource {
 	deploymentUrl: string;
 }
 
-export interface CurrentCodeDataSource {
-	kind: 'current-code';
-	location: string;
+export interface LocalUrlDataSource {
+	kind: 'local-url';
+	localUrl: string;
 }
 
 export interface AssessmentRunRequest {
 	assessments: AssessmentName[];
-	dataSource: DeploymentUrlDataSource | CurrentCodeDataSource;
+	dataSource: DeploymentUrlDataSource | LocalUrlDataSource;
+}
+
+export interface GitInfo {
+	repositoryUrl: string;
+	projectName?: string;
+	source: 'ide' | 'ci/cd';
+	branch?: string;
+	commitHash?: string;
+	gitDirty?: boolean;
+	mergeRequestId?: string;
 }
 
 export interface QuickPickUi {
@@ -55,18 +65,6 @@ export interface QuickPickUi {
 		validateInput?: (value: string) => string | undefined;
 	}): Thenable<string | undefined>;
 	showErrorMessage(message: string): Thenable<void>;
-}
-
-export interface WorkspaceLike {
-	workspaceFolders?: readonly { uri: { fsPath: string } }[];
-}
-
-export interface WindowLike {
-	activeTextEditor?: { document: { uri: { fsPath: string } } } | undefined;
-}
-
-export function resolveCurrentCodeLocation(window: WindowLike, workspace: WorkspaceLike): string | undefined {
-	return window.activeTextEditor?.document.uri.fsPath ?? workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
 
 import * as http from 'http';
@@ -98,6 +96,10 @@ async function httpGetJson<T>(url: string): Promise<T> {
 			});
 		});
 		req.on('error', reject);
+		req.setTimeout(100, () => {
+			req.destroy();
+			reject(new Error(`Timeout fetching ${url}`));
+		});
 		req.end();
 	});
 }
@@ -135,6 +137,10 @@ async function httpPostJson<T>(url: string, body: any): Promise<T> {
 			});
 		});
 		req.on('error', reject);
+		req.setTimeout(5000, () => {
+			req.destroy();
+			reject(new Error(`Timeout posting to ${url}`));
+		});
 		req.write(payload);
 		req.end();
 	});
@@ -202,10 +208,18 @@ export async function fetchAvailableAssessments(): Promise<AssessmentName[]> {
  * Send the deployment URL and selected metrics to the orchestrator for
  * evaluation. Looks up the metric IDs from the cached orchestrator response.
  */
-export async function submitUrlForEvaluation(deploymentUrl: string, selectedAssessments: AssessmentName[]): Promise<any> {
+export async function submitUrlForEvaluation(
+	deploymentUrl: string,
+	selectedAssessments: AssessmentName[],
+	gitInfo: GitInfo
+): Promise<any> {
 	const metrics = toMetricIds(selectedAssessments);
 
-	const payload = { url: deploymentUrl, metrics };
+	const payload = {
+		url: deploymentUrl,
+		metrics,
+		...gitInfo
+	};
 	return await httpPostJson(`${ORCHESTRATOR_BASE}/eval/evaluate_url_input_test`, payload);
 }
 
@@ -213,7 +227,9 @@ export async function submitFileForEvaluation(
 	fileData: Buffer,
 	fileName: string,
 	contentType: string,
-	selectedAssessments: AssessmentName[]
+	selectedAssessments: AssessmentName[],
+	gitInfo: GitInfo,
+	assessedTarget?: string
 ): Promise<any> {
 	if (!Buffer.isBuffer(fileData)) {
 		throw new Error('fileData must be a Buffer');
@@ -227,6 +243,15 @@ export async function submitFileForEvaluation(
 	toMetricIds(selectedAssessments).forEach((m) => {
 		form.append('mm', m);
 	});
+
+	if (gitInfo.repositoryUrl) { form.append('repositoryUrl', gitInfo.repositoryUrl); }
+	if (gitInfo.projectName) { form.append('projectName', gitInfo.projectName); }
+	if (gitInfo.source) { form.append('source', gitInfo.source); }
+	if (gitInfo.branch) { form.append('branch', gitInfo.branch); }
+	if (gitInfo.commitHash) { form.append('commitHash', gitInfo.commitHash); }
+	if (gitInfo.gitDirty !== undefined) { form.append('gitDirty', String(gitInfo.gitDirty)); }
+	if (gitInfo.mergeRequestId) { form.append('mergeRequestId', gitInfo.mergeRequestId); }
+	if (assessedTarget) { form.append('assessedTarget', assessedTarget); }
 
 	const parsed = new URL(`${ORCHESTRATOR_BASE}/eval/evaluate_with_artifacts`);
 	const lib = parsed.protocol === 'https:' ? (await import('https')) : (await import('http'));
@@ -326,7 +351,7 @@ export async function pollEvaluationResult(
 	return lastResult;
 }
 
-export async function collectAssessmentRunRequest(ui: QuickPickUi, currentCodeLocation: string | undefined): Promise<AssessmentRunRequest | undefined> {
+export async function collectAssessmentRunRequest(ui: QuickPickUi): Promise<AssessmentRunRequest | undefined> {
 	// Request available assessments from the orchestrator first
 	const available = await fetchAvailableAssessments();
 
@@ -381,24 +406,35 @@ export async function collectAssessmentRunRequest(ui: QuickPickUi, currentCodeLo
 		};
 	}
 
-	if (!currentCodeLocation) {
-		await ui.showErrorMessage('Open a workspace or file before choosing "Take from my current code".');
-		return undefined;
+	if (dataSource === 'Local URL') {
+		const localUrl = await ui.showInputBox({
+			title: 'Local URL',
+			prompt: 'Enter the local URL to assess (e.g., http://localhost:3000)',
+			placeHolder: 'http://localhost:3000',
+			ignoreFocusOut: true,
+			validateInput: (value) => isValidUrl(value) ? undefined : 'Enter a valid URL.',
+		});
+
+		if (localUrl === undefined) {
+			return undefined;
+		}
+
+		return {
+			assessments: toAssessmentNames(selectedAssessments),
+			dataSource: {
+				kind: 'local-url',
+				localUrl,
+			},
+		};
 	}
 
-	return {
-		assessments: toAssessmentNames(selectedAssessments),
-		dataSource: {
-			kind: 'current-code',
-			location: currentCodeLocation,
-		},
-	};
+	return undefined;
 }
 
 export function formatAssessmentRunSummary(request: AssessmentRunRequest): string {
 	const dataSourceText = request.dataSource.kind === 'deployment-url'
 		? `Deployment URL: ${request.dataSource.deploymentUrl}`
-		: `Current code: ${request.dataSource.location}`;
+		: `Local URL: ${request.dataSource.localUrl}`;
 
 	return `Selected assessments: ${request.assessments.join(', ')}. ${dataSourceText}.`;
 }

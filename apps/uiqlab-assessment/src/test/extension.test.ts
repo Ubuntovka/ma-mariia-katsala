@@ -4,27 +4,26 @@ import {
 	DATA_SOURCE_OPTIONS,
 	collectAssessmentRunRequest,
 	formatAssessmentRunSummary,
-	resolveCurrentCodeLocation,
 	type QuickPickUi,
 } from '../runAssessment';
 
 suite('Run Assessment flow', () => {
 	test('exposes all assessment names and data source options', () => {
 		assert.strictEqual(ASSESSMENTS.length, 14);
-		assert.deepStrictEqual(DATA_SOURCE_OPTIONS, ['Deployment URL', 'Take from my current code']);
+		assert.deepStrictEqual(DATA_SOURCE_OPTIONS, ['Deployment URL', 'Local URL']);
 	});
 
 	test('collects deployment-url requests', async () => {
 		const ui = createUiMock([
-			['PNG size', 'accessibility'],
+			['PNG file size', 'Accessibility checks'],
 			'Deployment URL',
 			'https://example.com',
 		]);
 
-		const request = await collectAssessmentRunRequest(ui, '/workspace');
+		const request = await collectAssessmentRunRequest(ui);
 
 		assert.deepStrictEqual(request, {
-			assessments: ['PNG size', 'accessibility'],
+			assessments: ['PNG file size', 'Accessibility checks'],
 			dataSource: {
 				kind: 'deployment-url',
 				deploymentUrl: 'https://example.com',
@@ -32,31 +31,22 @@ suite('Run Assessment flow', () => {
 		});
 	});
 
-	test('collects current-code requests', async () => {
+	test('collects local-url requests', async () => {
 		const ui = createUiMock([
-			['whitespace'],
-			'Take from my current code',
+			['White space proportion'],
+			'Local URL',
+			'http://localhost:3000',
 		]);
 
-		const request = await collectAssessmentRunRequest(ui, '/workspace');
+		const request = await collectAssessmentRunRequest(ui);
 
 		assert.deepStrictEqual(request, {
-			assessments: ['whitespace'],
+			assessments: ['White space proportion'],
 			dataSource: {
-				kind: 'current-code',
-				location: '/workspace',
+				kind: 'local-url',
+				localUrl: 'http://localhost:3000',
 			},
 		});
-	});
-
-	test('resolves current code location from the active editor first', () => {
-		assert.strictEqual(
-			resolveCurrentCodeLocation(
-				{ activeTextEditor: { document: { uri: { fsPath: '/file.ts' } } } },
-				{ workspaceFolders: [{ uri: { fsPath: '/workspace' } }] },
-			),
-			'/file.ts',
-		);
 	});
 
 	test('formats a readable summary', () => {
