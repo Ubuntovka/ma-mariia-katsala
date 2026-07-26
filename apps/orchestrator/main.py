@@ -46,9 +46,21 @@ async def init_db():
                 "gitDirty" BOOLEAN,
                 "mergeRequestId" TEXT,
                 "assessedTarget" TEXT,
+                "backendResultId" TEXT,
+                status TEXT DEFAULT 'PENDING',
+                success BOOLEAN,
+                "metricsCount" INTEGER,
                 "createdAt" TIMESTAMPTZ DEFAULT NOW()
             );
         ''')
+        # Ensure columns exist for existing tables
+        await conn.execute('''
+            ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS "backendResultId" TEXT;
+            ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'PENDING';
+            ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS success BOOLEAN;
+            ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS "metricsCount" INTEGER;
+        ''')
+        await conn.execute('CREATE INDEX IF NOT EXISTS idx_assessment_run_backend_id ON assessment_run("backendResultId");')
     finally:
         await conn.close()
 
@@ -78,6 +90,43 @@ async def get_or_create_project(conn, repository_url: str, project_name: Optiona
         'INSERT INTO project (project_name, "repositoryUrl") VALUES ($1, $2) RETURNING id',
         project_name, normalized_url
     )
+
+
+async def update_assessment_run(run_id: int, backend_id: Optional[str] = None, status: Optional[str] = None, success: Optional[bool] = None):
+    conn = await asyncpg.connect(
+        user=POSTGRES_USER,
+        password=POSTGRES_PASSWORD,
+        database=POSTGRES_DB,
+        host=POSTGRES_HOST
+    )
+    try:
+        if backend_id is not None and status is not None and success is not None:
+            await conn.execute(
+                'UPDATE assessment_run SET "backendResultId" = $1, status = $2, success = $3 WHERE id = $4',
+                backend_id, status, success, run_id
+            )
+        elif backend_id is not None and status is not None:
+            await conn.execute(
+                'UPDATE assessment_run SET "backendResultId" = $1, status = $2 WHERE id = $3',
+                backend_id, status, run_id
+            )
+        elif backend_id is not None:
+            await conn.execute(
+                'UPDATE assessment_run SET "backendResultId" = $1 WHERE id = $2',
+                backend_id, run_id
+            )
+        elif status is not None and success is not None:
+            await conn.execute(
+                'UPDATE assessment_run SET status = $1, success = $2 WHERE id = $3',
+                status, success, run_id
+            )
+        elif status is not None:
+            await conn.execute(
+                'UPDATE assessment_run SET status = $1 WHERE id = $2',
+                status, run_id
+            )
+    finally:
+        await conn.close()
 
 
 @app.get("/")
@@ -119,16 +168,17 @@ async def post_evaluate_url_input_test(payload: EvaluateURLInput):
         database=POSTGRES_DB,
         host=POSTGRES_HOST
     )
+    run_id = None
     try:
         project_id = await get_or_create_project(conn, payload.repositoryUrl, payload.projectName)
-        await conn.execute(
+        run_id = await conn.fetchval(
             '''
             INSERT INTO assessment_run (
-                project_id, source, branch, "commitHash", "gitDirty", "mergeRequestId", "assessedTarget"
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                project_id, source, branch, "commitHash", "gitDirty", "mergeRequestId", "assessedTarget", "metricsCount"
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id
             ''',
             project_id, payload.source, payload.branch, payload.commitHash,
-            payload.gitDirty, payload.mergeRequestId, payload.url
+            payload.gitDirty, payload.mergeRequestId, payload.url, len(payload.metrics)
         )
     finally:
         await conn.close()
@@ -140,16 +190,27 @@ async def post_evaluate_url_input_test(payload: EvaluateURLInput):
         pool=10.0,
     )
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(
-            f"{BACKEND_URL}/eval/evaluate_url_input",
-            json={
-                "url": payload.url,
-                "metrics": payload.metrics
-            },
-        )
-        response.raise_for_status()
-        return response.json()
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{BACKEND_URL}/eval/evaluate_url_input",
+                json={
+                    "url": payload.url,
+                    "metrics": payload.metrics
+                },
+            )
+            response.raise_for_status()
+            resp_json = response.json()
+            backend_id = resp_json.get("result_id")
+            if run_id and backend_id:
+                await update_assessment_run(run_id, backend_id=backend_id)
+            return resp_json
+    except Exception as exc:
+        if run_id:
+            await update_assessment_run(run_id, status='FAILED')
+        if isinstance(exc, httpx.HTTPStatusError):
+            raise HTTPException(status_code=502, detail=f"UIQLab backend returned HTTP {exc.response.status_code}")
+        raise HTTPException(status_code=503, detail=f"Failed to contact UIQLab backend: {exc}")
 
 
 @app.post("/eval/evaluate_with_artifacts")
@@ -174,15 +235,16 @@ async def evaluate_with_artifacts(
         database=POSTGRES_DB,
         host=POSTGRES_HOST
     )
+    run_id = None
     try:
         project_id = await get_or_create_project(conn, repositoryUrl, projectName)
-        await conn.execute(
+        run_id = await conn.fetchval(
             '''
             INSERT INTO assessment_run (
-                project_id, source, branch, "commitHash", "gitDirty", "mergeRequestId", "assessedTarget"
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                project_id, source, branch, "commitHash", "gitDirty", "mergeRequestId", "assessedTarget", "metricsCount"
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id
             ''',
-            project_id, source, branch, commitHash, gitDirty, mergeRequestId, assessedTarget or file.filename
+            project_id, source, branch, commitHash, gitDirty, mergeRequestId, assessedTarget or file.filename, len(mm)
         )
     finally:
         await conn.close()
@@ -214,11 +276,17 @@ async def evaluate_with_artifacts(
         try:
             resp = await client.post(f"{BACKEND_URL}/eval/evaluate_file_input", files=files, data=data)
             resp.raise_for_status()
-            return resp.json()
-        except httpx.RequestError as exc:
+            resp_json = resp.json()
+            backend_id = resp_json.get("result_id")
+            if run_id and backend_id:
+                await update_assessment_run(run_id, backend_id=backend_id)
+            return resp_json
+        except Exception as exc:
+            if run_id:
+                await update_assessment_run(run_id, status='FAILED')
+            if isinstance(exc, httpx.HTTPStatusError):
+                raise HTTPException(status_code=502, detail=f"UIQLab backend returned HTTP {exc.response.status_code}")
             raise HTTPException(status_code=503, detail=f"Failed to contact UIQLab backend: {exc}")
-        except httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=502, detail=f"UIQLab backend returned HTTP {exc.response.status_code}")
 
 @app.get("/eval/result/{wui_id}")
 async def get_eval_result(wui_id: str):
@@ -226,5 +294,31 @@ async def get_eval_result(wui_id: str):
     async with httpx.AsyncClient() as client:
         response = await client.get(f"{BACKEND_URL}/eval/result/{wui_id}")
         response.raise_for_status()
-        return response.json()
+        results = response.json()
+
+        # Update database with status/success if finished
+        conn = await asyncpg.connect(
+            user=POSTGRES_USER,
+            password=POSTGRES_PASSWORD,
+            database=POSTGRES_DB,
+            host=POSTGRES_HOST
+        )
+        try:
+            run = await conn.fetchrow(
+                'SELECT id, "metricsCount", status FROM assessment_run WHERE "backendResultId" = $1',
+                wui_id
+            )
+            if run and run['status'] == 'PENDING':
+                # results is a list of {metric_id, results: []}
+                if len(results) >= run['metricsCount']:
+                    # All metrics evaluated (some might have failed with empty results)
+                    all_success = all(isinstance(r.get('results'), list) and len(r['results']) > 0 for r in results)
+                    await conn.execute(
+                        'UPDATE assessment_run SET status = $1, success = $2 WHERE id = $3',
+                        'COMPLETED', all_success, run['id']
+                    )
+        finally:
+            await conn.close()
+
+        return results
 
