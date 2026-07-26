@@ -1,0 +1,94 @@
+services:
+  orchestrator:
+    build:
+      context: ./apps/orchestrator
+      dockerfile: Dockerfile
+    container_name: orchestrator
+    ports:
+      - "${ORCHESTRATOR_PORT:-8181}:8181"
+    environment:
+      - BACKEND_URL=${BACKEND_URL}
+    depends_on:
+      - orchestrator-postgres
+    networks:
+      - orchestrator-network
+      - thesis-network
+
+  orchestrator-postgres:
+    image: postgres:15
+    container_name: orchestrator-postgresql
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5433:5432"
+    volumes:
+      - orchestrator_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    networks:
+      - orchestrator-network
+
+networks:
+  orchestrator-network:
+    driver: bridge
+
+  thesis-network:
+    external: true
+    name: thesis-network
+
+volumes:
+  orchestrator_postgres_data:
+
+
+#services:
+#  orchestrator:
+#    build:
+#      context: ./apps/orchestrator
+#      dockerfile: Dockerfile
+#    container_name: orchestrator
+#    ports:
+#      - "${ORCHESTRATOR_PORT:-8181}:8181"
+#    environment:
+#      - BACKEND_URL=${BACKEND_URL}
+#    depends_on:
+#      - orchestrator-postgres
+#    networks:
+#      - orchestrator-network
+#
+#  orchestrator-postgres:
+#    image: postgres:15
+#    container_name: orchestrator-postgresql
+#    restart: always
+#    environment:
+#      POSTGRES_USER: ${POSTGRES_USER}
+#      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+#      POSTGRES_DB: ${POSTGRES_DB}
+#    ports:
+#      - "5433:5432"
+#    volumes:
+#      - orchestrator_postgres_data:/var/lib/postgresql/data
+#      - ./ma-rui-feng-thesis-rui-feng/database/init.sql:/docker-entrypoint-initdb.d/init.sql
+#    healthcheck:
+#      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+#      interval: 3s
+#      timeout: 3s
+#      retries: 10
+#    networks:
+#      - orchestrator-network
+#
+#networks:
+#  orchestrator-network:
+#    driver: bridge
+#
+#volumes:
+#  orchestrator_postgres_data:
