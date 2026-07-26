@@ -8,7 +8,43 @@ import {
 	pollEvaluationResult,
 	toMetricIds,
 	getMetricInfoById,
+	GitInfo,
 } from './runAssessment';
+import { execSync } from 'child_process';
+import * as path from 'path';
+
+function getGitInfo(workspaceRoot: string): GitInfo {
+	let repositoryUrl = '';
+	let branch = '';
+	let commitHash = '';
+	let gitDirty = false;
+	const projectName = path.basename(workspaceRoot);
+
+	try {
+		repositoryUrl = execSync('git remote get-url origin', { cwd: workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+	} catch { }
+
+	try {
+		branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+	} catch { }
+
+	try {
+		commitHash = execSync('git rev-parse HEAD', { cwd: workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+	} catch { }
+
+	try {
+		gitDirty = execSync('git status --porcelain', { cwd: workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().length > 0;
+	} catch { }
+
+	return {
+		repositoryUrl: repositoryUrl || 'local',
+		projectName,
+		source: 'ide',
+		branch: branch || undefined,
+		commitHash: commitHash || undefined,
+		gitDirty,
+	};
+}
 
 function createResultsWebview(
 	panel: vscode.WebviewPanel,
@@ -196,7 +232,9 @@ export function activate(context: vscode.ExtensionContext) {
 			const share = await vscode.window.showQuickPick(['Yes', 'No'], { title: 'Share deployment URL with orchestrator for evaluation?', placeHolder: 'Send URL and selected metrics to orchestrator?' });
 			if (share === 'Yes') {
 				try {
-					const resp: any = await submitUrlForEvaluation(request.dataSource.deploymentUrl, request.assessments);
+					const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+					const gitInfo = getGitInfo(workspaceRoot);
+					const resp: any = await submitUrlForEvaluation(request.dataSource.deploymentUrl, request.assessments, gitInfo);
 
 					// The orchestrator is expected to return some identifier (wui_id) or similar.
 					const wui_id = resp?.result_id;
@@ -261,7 +299,9 @@ export function activate(context: vscode.ExtensionContext) {
 					progress.report({ message: 'Waiting for page load and rendering' });
 					const result = await p;
 					progress.report({ message: 'Uploading artifacts to orchestrator' });
-					const resp = await submitFileForEvaluation(result.screenshot, 'capture.png', 'image/png', request.assessments);
+					const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+					const gitInfo = getGitInfo(workspaceRoot);
+					const resp = await submitFileForEvaluation(result.screenshot, 'capture.png', 'image/png', request.assessments, gitInfo, localUrl);
 					const wui_id = resp?.result_id;
 					if (!wui_id) {
 						vscode.window.showInformationMessage('Submitted artifacts for evaluation; response did not include an id.');

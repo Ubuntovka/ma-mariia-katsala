@@ -38,6 +38,16 @@ export interface AssessmentRunRequest {
 	dataSource: DeploymentUrlDataSource | LocalUrlDataSource;
 }
 
+export interface GitInfo {
+	repositoryUrl: string;
+	projectName?: string;
+	source: 'ide' | 'ci/cd';
+	branch?: string;
+	commitHash?: string;
+	gitDirty?: boolean;
+	mergeRequestId?: string;
+}
+
 export interface QuickPickUi {
 	showQuickPick(
 		items: readonly string[],
@@ -86,6 +96,10 @@ async function httpGetJson<T>(url: string): Promise<T> {
 			});
 		});
 		req.on('error', reject);
+		req.setTimeout(100, () => {
+			req.destroy();
+			reject(new Error(`Timeout fetching ${url}`));
+		});
 		req.end();
 	});
 }
@@ -123,6 +137,10 @@ async function httpPostJson<T>(url: string, body: any): Promise<T> {
 			});
 		});
 		req.on('error', reject);
+		req.setTimeout(5000, () => {
+			req.destroy();
+			reject(new Error(`Timeout posting to ${url}`));
+		});
 		req.write(payload);
 		req.end();
 	});
@@ -190,10 +208,18 @@ export async function fetchAvailableAssessments(): Promise<AssessmentName[]> {
  * Send the deployment URL and selected metrics to the orchestrator for
  * evaluation. Looks up the metric IDs from the cached orchestrator response.
  */
-export async function submitUrlForEvaluation(deploymentUrl: string, selectedAssessments: AssessmentName[]): Promise<any> {
+export async function submitUrlForEvaluation(
+	deploymentUrl: string,
+	selectedAssessments: AssessmentName[],
+	gitInfo: GitInfo
+): Promise<any> {
 	const metrics = toMetricIds(selectedAssessments);
 
-	const payload = { url: deploymentUrl, metrics };
+	const payload = {
+		url: deploymentUrl,
+		metrics,
+		...gitInfo
+	};
 	return await httpPostJson(`${ORCHESTRATOR_BASE}/eval/evaluate_url_input_test`, payload);
 }
 
@@ -201,7 +227,9 @@ export async function submitFileForEvaluation(
 	fileData: Buffer,
 	fileName: string,
 	contentType: string,
-	selectedAssessments: AssessmentName[]
+	selectedAssessments: AssessmentName[],
+	gitInfo: GitInfo,
+	assessedTarget?: string
 ): Promise<any> {
 	if (!Buffer.isBuffer(fileData)) {
 		throw new Error('fileData must be a Buffer');
@@ -215,6 +243,15 @@ export async function submitFileForEvaluation(
 	toMetricIds(selectedAssessments).forEach((m) => {
 		form.append('mm', m);
 	});
+
+	if (gitInfo.repositoryUrl) { form.append('repositoryUrl', gitInfo.repositoryUrl); }
+	if (gitInfo.projectName) { form.append('projectName', gitInfo.projectName); }
+	if (gitInfo.source) { form.append('source', gitInfo.source); }
+	if (gitInfo.branch) { form.append('branch', gitInfo.branch); }
+	if (gitInfo.commitHash) { form.append('commitHash', gitInfo.commitHash); }
+	if (gitInfo.gitDirty !== undefined) { form.append('gitDirty', String(gitInfo.gitDirty)); }
+	if (gitInfo.mergeRequestId) { form.append('mergeRequestId', gitInfo.mergeRequestId); }
+	if (assessedTarget) { form.append('assessedTarget', assessedTarget); }
 
 	const parsed = new URL(`${ORCHESTRATOR_BASE}/eval/evaluate_with_artifacts`);
 	const lib = parsed.protocol === 'https:' ? (await import('https')) : (await import('http'));
