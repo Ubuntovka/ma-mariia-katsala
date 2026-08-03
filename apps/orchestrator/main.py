@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
+from uuid import UUID
 import httpx
 import json
 import os
@@ -32,10 +33,19 @@ async def init_db():
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS project (
                 id SERIAL PRIMARY KEY,
+                project_key UUID NOT NULL,
                 project_name TEXT,
-                "repositoryUrl" TEXT UNIQUE NOT NULL
+                "repositoryUrl" TEXT NOT NULL
             );
         ''')
+        # Migrate databases created before project keys were introduced.
+        await conn.execute('''
+            ALTER TABLE project ADD COLUMN IF NOT EXISTS project_key UUID;
+            UPDATE project SET project_key = gen_random_uuid() WHERE project_key IS NULL;
+            ALTER TABLE project ALTER COLUMN project_key SET NOT NULL;
+            ALTER TABLE project DROP CONSTRAINT IF EXISTS "project_repositoryUrl_key";
+        ''')
+        await conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_project_project_key ON project(project_key);')
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS assessment_run (
                 id SERIAL PRIMARY KEY,
@@ -77,18 +87,23 @@ def normalize_repo_url(url: str) -> str:
     return normalized.lower().strip('/')
 
 
-async def get_or_create_project(conn, repository_url: str, project_name: Optional[str]):
+async def get_or_create_project(
+    conn,
+    project_key: UUID,
+    repository_url: str,
+    project_name: Optional[str]
+):
     normalized_url = normalize_repo_url(repository_url)
-    project = await conn.fetchrow(
-        'SELECT id FROM project WHERE "repositoryUrl" = $1',
-        normalized_url
-    )
-    if project:
-        return project['id']
-
     return await conn.fetchval(
-        'INSERT INTO project (project_name, "repositoryUrl") VALUES ($1, $2) RETURNING id',
-        project_name, normalized_url
+        '''
+        INSERT INTO project (project_key, project_name, "repositoryUrl")
+        VALUES ($1, $2, $3)
+        ON CONFLICT (project_key) DO UPDATE SET
+            project_name = COALESCE(EXCLUDED.project_name, project.project_name),
+            "repositoryUrl" = EXCLUDED."repositoryUrl"
+        RETURNING id
+        ''',
+        project_key, project_name, normalized_url
     )
 
 
@@ -146,6 +161,7 @@ async def get_eval_mm():
 class EvaluateURLInput(BaseModel):
     url: str
     metrics: List[str]
+    projectKey: UUID
     projectName: Optional[str] = None
     repositoryUrl: str
     source: str
@@ -170,7 +186,9 @@ async def post_evaluate_url_input_test(payload: EvaluateURLInput):
     )
     run_id = None
     try:
-        project_id = await get_or_create_project(conn, payload.repositoryUrl, payload.projectName)
+        project_id = await get_or_create_project(
+            conn, payload.projectKey, payload.repositoryUrl, payload.projectName
+        )
         run_id = await conn.fetchval(
             '''
             INSERT INTO assessment_run (
@@ -217,6 +235,7 @@ async def post_evaluate_url_input_test(payload: EvaluateURLInput):
 async def evaluate_with_artifacts(
     file: UploadFile = File(...),
     mm: List[str] = Form(...),
+    projectKey: UUID = Form(...),
     projectName: Optional[str] = Form(None),
     repositoryUrl: str = Form(...),
     source: str = Form(...),
@@ -237,7 +256,7 @@ async def evaluate_with_artifacts(
     )
     run_id = None
     try:
-        project_id = await get_or_create_project(conn, repositoryUrl, projectName)
+        project_id = await get_or_create_project(conn, projectKey, repositoryUrl, projectName)
         run_id = await conn.fetchval(
             '''
             INSERT INTO assessment_run (
@@ -321,4 +340,3 @@ async def get_eval_result(wui_id: str):
             await conn.close()
 
         return results
-
