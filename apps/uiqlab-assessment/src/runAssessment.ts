@@ -39,6 +39,7 @@ export interface AssessmentRunRequest {
 }
 
 export interface GitInfo {
+	projectKey: string;
 	repositoryUrl: string;
 	projectName?: string;
 	source: 'ide' | 'ci/cd';
@@ -244,6 +245,7 @@ export async function submitFileForEvaluation(
 		form.append('mm', m);
 	});
 
+	form.append('projectKey', gitInfo.projectKey);
 	if (gitInfo.repositoryUrl) { form.append('repositoryUrl', gitInfo.repositoryUrl); }
 	if (gitInfo.projectName) { form.append('projectName', gitInfo.projectName); }
 	if (gitInfo.source) { form.append('source', gitInfo.source); }

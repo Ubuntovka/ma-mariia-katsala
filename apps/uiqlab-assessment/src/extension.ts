@@ -11,14 +11,13 @@ import {
 	GitInfo,
 } from './runAssessment';
 import { execSync } from 'child_process';
-import * as path from 'path';
+import { getOrCreateProjectConfig, ProjectConfig } from './projectConfig';
 
-function getGitInfo(workspaceRoot: string): GitInfo {
+function getGitInfo(workspaceRoot: string, projectConfig: ProjectConfig): GitInfo {
 	let repositoryUrl = '';
 	let branch = '';
 	let commitHash = '';
 	let gitDirty = false;
-	const projectName = path.basename(workspaceRoot);
 
 	try {
 		repositoryUrl = execSync('git remote get-url origin', { cwd: workspaceRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
@@ -37,8 +36,9 @@ function getGitInfo(workspaceRoot: string): GitInfo {
 	} catch { }
 
 	return {
+		projectKey: projectConfig.projectKey,
 		repositoryUrl: repositoryUrl || 'local',
-		projectName,
+		projectName: projectConfig.name,
 		source: 'ide',
 		branch: branch || undefined,
 		commitHash: commitHash || undefined,
@@ -217,6 +217,15 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+		let projectConfig: ProjectConfig;
+		try {
+			projectConfig = await getOrCreateProjectConfig(workspaceRoot);
+		} catch (err: any) {
+			vscode.window.showErrorMessage(`Could not load the UIQLab project configuration: ${err?.message ?? err}`);
+			return;
+		}
+
 		void vscode.window.showInformationMessage(formatAssessmentRunSummary(request));
 
 		// If user selected a deployment URL data source, offer to share it with the orchestrator
@@ -232,8 +241,7 @@ export function activate(context: vscode.ExtensionContext) {
 			const share = await vscode.window.showQuickPick(['Yes', 'No'], { title: 'Share deployment URL with orchestrator for evaluation?', placeHolder: 'Send URL and selected metrics to orchestrator?' });
 			if (share === 'Yes') {
 				try {
-					const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
-					const gitInfo = getGitInfo(workspaceRoot);
+					const gitInfo = getGitInfo(workspaceRoot, projectConfig);
 					const resp: any = await submitUrlForEvaluation(request.dataSource.deploymentUrl, request.assessments, gitInfo);
 
 					// The orchestrator is expected to return some identifier (wui_id) or similar.
@@ -299,8 +307,7 @@ export function activate(context: vscode.ExtensionContext) {
 					progress.report({ message: 'Waiting for page load and rendering' });
 					const result = await p;
 					progress.report({ message: 'Uploading artifacts to orchestrator' });
-					const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
-					const gitInfo = getGitInfo(workspaceRoot);
+					const gitInfo = getGitInfo(workspaceRoot, projectConfig);
 					const resp = await submitFileForEvaluation(result.screenshot, 'capture.png', 'image/png', request.assessments, gitInfo, localUrl);
 					const wui_id = resp?.result_id;
 					if (!wui_id) {
