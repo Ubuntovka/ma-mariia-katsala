@@ -138,7 +138,7 @@ async function httpPostJson<T>(url: string, body: any): Promise<T> {
 			});
 		});
 		req.on('error', reject);
-		req.setTimeout(5000, () => {
+		req.setTimeout(130_000, () => {
 			req.destroy();
 			reject(new Error(`Timeout posting to ${url}`));
 		});
