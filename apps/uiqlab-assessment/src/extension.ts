@@ -1,17 +1,17 @@
 import * as vscode from 'vscode';
 import {
-	collectAssessmentRunRequest,
 	formatAssessmentRunSummary,
 	submitUrlForEvaluation,
 	submitFileForEvaluation,
-	fetchEvaluationResult,
 	pollEvaluationResult,
 	toMetricIds,
 	getMetricInfoById,
 	GitInfo,
+	AssessmentRunRequest,
 } from './runAssessment';
 import { execSync } from 'child_process';
 import { getOrCreateProjectConfig, ProjectConfig } from './projectConfig';
+import { AssessmentSidebarProvider } from './assessmentSidebar';
 
 function getGitInfo(workspaceRoot: string, projectConfig: ProjectConfig): GitInfo {
 	let repositoryUrl = '';
@@ -210,13 +210,7 @@ function generateResultsHtml(results: any[], url: string, isComplete: boolean = 
 }
 
 export function activate(context: vscode.ExtensionContext) {
-	const disposable = vscode.commands.registerCommand('uiqlab-assessment.runAssessment', async () => {
-		const request = await collectAssessmentRunRequest(vscode.window);
-
-		if (!request) {
-			return;
-		}
-
+	const runConfiguredAssessment = async (request: AssessmentRunRequest, shareDeployment: boolean): Promise<void> => {
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 		let projectConfig: ProjectConfig;
 		try {
@@ -228,7 +222,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 		void vscode.window.showInformationMessage(formatAssessmentRunSummary(request));
 
-		// If user selected a deployment URL data source, offer to share it with the orchestrator
+		// Deployment consent is collected in the persistent sidebar form.
 		if (request.dataSource.kind === 'deployment-url') {
 			const deploymentUrl = request.dataSource.deploymentUrl;
 
@@ -237,9 +231,7 @@ export function activate(context: vscode.ExtensionContext) {
 				context.workspaceState.update('uiqlab.lastUrl', deploymentUrl);
 			} catch { }
 
-			// Fall back to submitting URL only (existing behavior)
-			const share = await vscode.window.showQuickPick(['Yes', 'No'], { title: 'Share deployment URL with orchestrator for evaluation?', placeHolder: 'Send URL and selected metrics to orchestrator?' });
-			if (share === 'Yes') {
+			if (shareDeployment) {
 				try {
 					const gitInfo = getGitInfo(workspaceRoot, projectConfig);
 					const resp: any = await submitUrlForEvaluation(request.dataSource.deploymentUrl, request.assessments, gitInfo);
@@ -343,9 +335,16 @@ export function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage(`Capture or upload failed: ${err?.message ?? err}`);
 			}
 		}
-	});
+	};
 
-	context.subscriptions.push(disposable);
+	const sidebarProvider = new AssessmentSidebarProvider(context, runConfiguredAssessment);
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(AssessmentSidebarProvider.viewType, sidebarProvider),
+		vscode.commands.registerCommand('uiqlab-assessment.runAssessment', async () => {
+			await vscode.commands.executeCommand('workbench.view.extension.uiqlab-assessment');
+			sidebarProvider.reveal();
+		}),
+	);
 }
 
 export function deactivate() { }

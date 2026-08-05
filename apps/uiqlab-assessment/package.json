@@ -10,10 +10,29 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:uiqlab-assessment.runAssessment"
+    "onCommand:uiqlab-assessment.runAssessment",
+    "onView:uiqlab-assessment.sidebar"
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "uiqlab-assessment",
+          "title": "UIQLab Assessment",
+          "icon": "media/uiqlab.svg"
+        }
+      ]
+    },
+    "views": {
+      "uiqlab-assessment": [
+        {
+          "id": "uiqlab-assessment.sidebar",
+          "name": "Configure Assessment",
+          "type": "webview"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "uiqlab-assessment.runAssessment",
