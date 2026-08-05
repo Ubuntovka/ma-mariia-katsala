@@ -72,6 +72,7 @@ import * as http from 'http';
 import * as https from 'https';
 
 const ORCHESTRATOR_BASE = 'http://127.0.0.1:8181';
+const MAX_MULTIPART_BODY_BYTES = 1024 * 1024;
 
 import FormData = require('form-data');
 
@@ -259,6 +260,13 @@ export async function submitFileForEvaluation(
 	const lib = parsed.protocol === 'https:' ? (await import('https')) : (await import('http'));
 
 	const headers = form.getHeaders();
+	const bodyLength = form.getLengthSync();
+	if (bodyLength > MAX_MULTIPART_BODY_BYTES) {
+		throw new Error(
+			`Captured page upload is ${bodyLength} bytes, exceeding the 1 MiB backend limit.`,
+		);
+	}
+	headers['content-length'] = String(bodyLength);
 	const opts: any = {
 		host: parsed.hostname,
 		port: parsed.port,
