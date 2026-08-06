@@ -19,6 +19,8 @@ import {
 	calculateM10Comparison,
 	calculateM11Comparison,
 	calculateM12Comparison,
+	calculateM13Comparison,
+	summarizeM13Comparison,
 	normalizeUiedElements,
 	getColorfulnessInterpretation,
 } from '../extension';
@@ -331,6 +333,48 @@ suite('Run Assessment flow', () => {
 		const comparison = calculateM12Comparison([2], [0]);
 		assert.strictEqual(comparison?.absoluteDelta, 2);
 		assert.strictEqual(comparison?.relativeDeltaPercent, undefined);
+	});
+
+	test('compares M13 accessibility issues by rule ID and affected target', () => {
+		const previous = [3, { violations: [
+			{ id: 'color-contrast', impact: 'serious', nodes: [{ target: ['#checkout'] }] },
+			{ id: 'label', impact: 'critical', nodes: [{ target: ['#email'] }] },
+			{ id: 'button-name', impact: 'serious', nodes: [{ target: ['#cancel'] }] },
+		] }];
+		const current = [3, JSON.stringify({ violations: [
+			{ id: 'color-contrast', impact: 'serious', nodes: [{ target: ['#checkout'] }, { target: ['#pay'] }] },
+			{ id: 'button-name', impact: 'critical', nodes: [{ target: ['#cancel'] }] },
+		] })];
+		const comparison = calculateM13Comparison(current, previous);
+		assert.ok(comparison);
+		assert.strictEqual(comparison.currentCount, 3);
+		assert.strictEqual(comparison.previousCount, 3);
+		assert.deepStrictEqual(comparison.newIssues.map((issue) => issue.identity), ['color-contrast\u0000#pay']);
+		assert.deepStrictEqual(comparison.resolvedIssues.map((issue) => issue.identity), ['label\u0000#email']);
+		assert.strictEqual(comparison.persistentIssues.length, 2);
+		assert.deepStrictEqual(
+			comparison.byRule.find((row) => row.key === 'color-contrast'),
+			{ key: 'color-contrast', previous: 1, current: 2, delta: 1 }
+		);
+		assert.deepStrictEqual(
+			comparison.byImpact.find((row) => row.key === 'critical'),
+			{ key: 'critical', previous: 1, current: 1, delta: 0 }
+		);
+	});
+
+	test('summarizes resolved M13 issues and a representative new serious regression', () => {
+		const comparison = calculateM13Comparison(
+			{ violations: [{ id: 'color-contrast', impact: 'serious', nodes: [{ target: ['#checkout-button'] }] }] },
+			{ violations: [
+				{ id: 'label', impact: 'critical', nodes: [{ target: ['#email'] }] },
+				{ id: 'button-name', impact: 'serious', nodes: [{ target: ['#cancel'] }] },
+			] }
+		);
+		assert.ok(comparison);
+		assert.strictEqual(
+			summarizeM13Comparison(comparison),
+			'2 accessibility problems were resolved, but 1 new serious color-contrast violation appeared on #checkout-button.'
+		);
 	});
 
 	test('reads actual dimensions from a PNG header', () => {

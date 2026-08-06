@@ -466,7 +466,7 @@ async def get_eval_result_history(wui_id: str):
         outstanding_metric_ids = {
             metric_id
             for metric_id in metric_result_index(current_results)
-            if metric_id.split('_')[0] in {'m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm9', 'm10', 'm11', 'm12'}
+            if metric_id.split('_')[0] in {'m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm9', 'm10', 'm11', 'm12', 'm13'}
         }
         if not outstanding_metric_ids:
             return {'metrics': {}}

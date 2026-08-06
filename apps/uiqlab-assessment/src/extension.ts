@@ -172,6 +172,31 @@ export interface M12Comparison {
 	relativeDeltaPercent?: number;
 }
 
+export interface AccessibilityIssue {
+	identity: string;
+	ruleId: string;
+	target: string;
+	impact: string;
+	description?: string;
+}
+
+export interface AccessibilityCountComparison {
+	key: string;
+	previous: number;
+	current: number;
+	delta: number;
+}
+
+export interface M13Comparison {
+	previousCount: number;
+	currentCount: number;
+	newIssues: AccessibilityIssue[];
+	resolvedIssues: AccessibilityIssue[];
+	persistentIssues: AccessibilityIssue[];
+	byImpact: AccessibilityCountComparison[];
+	byRule: AccessibilityCountComparison[];
+}
+
 function finiteNumber(value: unknown): number | undefined {
 	if (typeof value === 'number' && Number.isFinite(value)) {
 		return value;
@@ -955,6 +980,152 @@ export function calculateM12Comparison(
 	};
 }
 
+function parseJsonValue(value: unknown): unknown {
+	if (typeof value !== 'string') { return value; }
+	const trimmed = value.trim();
+	if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) { return value; }
+	try { return JSON.parse(trimmed); } catch { return value; }
+}
+
+function normalizeAccessibilityTarget(value: unknown): string | undefined {
+	if (typeof value === 'string') {
+		const normalized = value.trim().replace(/\s+/g, ' ');
+		return normalized || undefined;
+	}
+	if (Array.isArray(value)) {
+		const parts = value.map(normalizeAccessibilityTarget).filter((part): part is string => Boolean(part));
+		return parts.length > 0 ? parts.join(' >>> ') : undefined;
+	}
+	return undefined;
+}
+
+function accessibilityIssueFromNode(rule: Record<string, unknown>, node: Record<string, unknown>): AccessibilityIssue | undefined {
+	const ruleId = String(rule.id ?? rule.ruleId ?? rule.rule_id ?? '').trim();
+	if (!ruleId) { return undefined; }
+	const target = normalizeAccessibilityTarget(
+		node.target ?? node.selector ?? node.element ?? node.html
+	);
+	if (!target) { return undefined; }
+	const impact = String(node.impact ?? rule.impact ?? rule.severity ?? 'unknown').toLowerCase();
+	const descriptionValue = rule.help ?? rule.description ?? node.failureSummary ?? node.message;
+	return {
+		identity: `${ruleId}\u0000${target}`,
+		ruleId,
+		target,
+		impact,
+		description: typeof descriptionValue === 'string' ? descriptionValue : undefined,
+	};
+}
+
+function extractAccessibilityIssues(value: unknown): { recognized: boolean; issues: AccessibilityIssue[] } {
+	const parsed = parseJsonValue(value);
+	if (Array.isArray(parsed)) {
+		const issues: AccessibilityIssue[] = [];
+		let recognized = parsed.length === 0;
+		for (const item of parsed) {
+			const extracted = extractAccessibilityIssues(item);
+			recognized ||= extracted.recognized;
+			issues.push(...extracted.issues);
+		}
+		return { recognized, issues };
+	}
+	if (typeof parsed !== 'object' || parsed === null) {
+		return { recognized: false, issues: [] };
+	}
+
+	const record = parsed as Record<string, unknown>;
+	const ruleId = record.id ?? record.ruleId ?? record.rule_id;
+	if (typeof ruleId === 'string') {
+		const nodes = Array.isArray(record.nodes) ? record.nodes : [record];
+		const issues = nodes.flatMap((node) => {
+			if (typeof node !== 'object' || node === null) { return []; }
+			const issue = accessibilityIssueFromNode(record, node as Record<string, unknown>);
+			return issue ? [issue] : [];
+		});
+		return { recognized: true, issues };
+	}
+
+	for (const key of ['violations', 'issues', 'details', 'result', 'results', 'data', 'accessibility']) {
+		if (key in record) {
+			const extracted = extractAccessibilityIssues(record[key]);
+			if (extracted.recognized) { return extracted; }
+		}
+	}
+	return { recognized: false, issues: [] };
+}
+
+function uniqueAccessibilityIssues(value: unknown): AccessibilityIssue[] | undefined {
+	const extracted = extractAccessibilityIssues(value);
+	if (!extracted.recognized) { return undefined; }
+	const unique = new Map<string, AccessibilityIssue>();
+	for (const issue of extracted.issues) { unique.set(issue.identity, issue); }
+	return Array.from(unique.values()).sort((a, b) => a.identity.localeCompare(b.identity));
+}
+
+function accessibilityBreakdown(
+	current: AccessibilityIssue[],
+	previous: AccessibilityIssue[],
+	field: 'impact' | 'ruleId'
+): AccessibilityCountComparison[] {
+	const currentCounts = new Map<string, number>();
+	const previousCounts = new Map<string, number>();
+	for (const issue of current) { currentCounts.set(issue[field], (currentCounts.get(issue[field]) ?? 0) + 1); }
+	for (const issue of previous) { previousCounts.set(issue[field], (previousCounts.get(issue[field]) ?? 0) + 1); }
+	const keys = new Set([...currentCounts.keys(), ...previousCounts.keys()]);
+	return Array.from(keys, (key) => {
+		const currentCount = currentCounts.get(key) ?? 0;
+		const previousCount = previousCounts.get(key) ?? 0;
+		return { key, previous: previousCount, current: currentCount, delta: currentCount - previousCount };
+	}).sort((a, b) => a.key.localeCompare(b.key));
+}
+
+export function calculateM13Comparison(
+	currentValue: unknown,
+	previousValue: unknown
+): M13Comparison | undefined {
+	const current = uniqueAccessibilityIssues(currentValue);
+	const previous = uniqueAccessibilityIssues(previousValue);
+	if (!current || !previous) { return undefined; }
+	const currentByIdentity = new Map(current.map((issue) => [issue.identity, issue]));
+	const previousByIdentity = new Map(previous.map((issue) => [issue.identity, issue]));
+	return {
+		previousCount: previous.length,
+		currentCount: current.length,
+		newIssues: current.filter((issue) => !previousByIdentity.has(issue.identity)),
+		resolvedIssues: previous.filter((issue) => !currentByIdentity.has(issue.identity)),
+		persistentIssues: current.filter((issue) => previousByIdentity.has(issue.identity)),
+		byImpact: accessibilityBreakdown(current, previous, 'impact'),
+		byRule: accessibilityBreakdown(current, previous, 'ruleId'),
+	};
+}
+
+function countPhrase(count: number, singular: string, plural: string): string {
+	return `${count} ${count === 1 ? singular : plural}`;
+}
+
+export function summarizeM13Comparison(comparison: M13Comparison): string {
+	const newCount = comparison.newIssues.length;
+	const resolvedCount = comparison.resolvedIssues.length;
+	if (newCount === 0 && resolvedCount === 0) {
+		return comparison.persistentIssues.length === 0
+			? 'No accessibility violations were found in either run.'
+			: `${countPhrase(comparison.persistentIssues.length, 'accessibility violation remains', 'accessibility violations remain')} persistent.`;
+	}
+	const resolved = resolvedCount > 0
+		? `${countPhrase(resolvedCount, 'accessibility problem was', 'accessibility problems were')} resolved`
+		: '';
+	const representative = comparison.newIssues.find((issue) => issue.impact === 'critical')
+		?? comparison.newIssues.find((issue) => issue.impact === 'serious')
+		?? comparison.newIssues[0];
+	const introduced = representative
+		? newCount === 1
+			? `1 new ${representative.impact} ${representative.ruleId} violation appeared on ${representative.target}`
+			: `${newCount} new accessibility violations appeared, including a ${representative.impact} ${representative.ruleId} violation on ${representative.target}`
+		: '';
+	if (resolved && introduced) { return `${resolved}, but ${introduced}.`; }
+	return `${resolved || introduced}.`;
+}
+
 function generateResultsHtml(results: any[], url: string, isComplete: boolean = true): string {
 	// Filter out results that are completely empty, but keep them if they are the only ones for a metric
 	const filteredResults = results.filter((r, i) => {
@@ -1275,6 +1446,24 @@ function findM12HistoryComparison(
 	return undefined;
 }
 
+function findM13HistoryComparison(
+	currentResults: any[],
+	history: AssessmentHistory
+): { comparison: M13Comparison; previousCreatedAt: string } | undefined {
+	for (const currentResult of currentResults) {
+		if (typeof currentResult?.metric_id !== 'string' || currentResult.metric_id.split('_')[0] !== 'm13') {
+			continue;
+		}
+		const historicalResult = history.metrics[currentResult.metric_id];
+		if (!historicalResult) { continue; }
+		const comparison = calculateM13Comparison(currentResult.results, historicalResult.results);
+		if (comparison) {
+			return { comparison, previousCreatedAt: historicalResult.createdAt };
+		}
+	}
+	return undefined;
+}
+
 function readM7ImageUrls(value: unknown): { heatmap: string; overlay?: string } | undefined {
 	if (Array.isArray(value)) {
 		const urls = value.filter((item): item is string =>
@@ -1476,6 +1665,16 @@ function structuralAction(count: number, action: string, types: string[]): strin
 	return `${count} components ${action}${breakdown}`;
 }
 
+function accessibilityBreakdownRows(rows: AccessibilityCountComparison[]): string {
+	return rows.map((row) => `<tr><th scope="row">${escapeHtml(row.key)}</th><td>${row.previous}</td><td>${row.current}</td><td>${signedNumber(row.delta)}</td></tr>`).join('');
+}
+
+function accessibilityIssueList(issues: AccessibilityIssue[]): string {
+	if (issues.length === 0) { return '<p>None</p>'; }
+	return `<ul class="issue-list">${issues.map((issue) => `
+		<li><strong>${escapeHtml(issue.ruleId)}</strong> · ${escapeHtml(issue.impact)}<br><code>${escapeHtml(issue.target)}</code>${issue.description ? `<br><span>${escapeHtml(issue.description)}</span>` : ''}</li>`).join('')}</ul>`;
+}
+
 async function showHistoryComparison(
 	currentResults: any[],
 	history: AssessmentHistory,
@@ -1492,10 +1691,11 @@ async function showHistoryComparison(
 		: undefined;
 	const m11Match = findM11HistoryComparison(currentResults, history);
 	const m12Match = findM12HistoryComparison(currentResults, history);
+	const m13Match = findM13HistoryComparison(currentResults, history);
 	const m7Match = await findM7HistoryComparison(currentResults, history);
 	const m9Match = await findM9HistoryComparison(currentResults, history);
 	const m10Match = await findM10HistoryComparison(currentResults, history);
-	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match && !m6Match && !m7Match && !m9Match && !m10Match && !m11Match && !m12Match) || !dimensions) {
+	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match && !m6Match && !m7Match && !m9Match && !m10Match && !m11Match && !m12Match && !m13Match) || !dimensions) {
 		return;
 	}
 
@@ -1746,6 +1946,28 @@ async function showHistoryComparison(
 			<div class="explanation"><p>Shannon information entropy quantifies the information and detail in the grayscale interface image. The absolute delta is current minus previous entropy, and the relative delta expresses that change against the previous value. Higher entropy can reflect more detail, information, or noise, but it is not automatically worse: research also connects entropy with aesthetics and orderliness.</p></div>
 		</section>` : '';
 
+	const m13Section = m13Match ? `
+		<section class="metric-section">
+			<h2>M13 · Accessibility checks</h2>
+			<p class="previous-run">Compared with the completed run from ${new Date(m13Match.previousCreatedAt).toLocaleString()}</p>
+			<div class="grid">
+				<div class="card"><span class="label">Previous issues</span><span class="value">${m13Match.comparison.previousCount}</span></div>
+				<div class="card"><span class="label">Current issues</span><span class="value">${m13Match.comparison.currentCount}</span></div>
+				<div class="card regression-card"><span class="label">New · regressions</span><span class="value">${m13Match.comparison.newIssues.length}</span></div>
+				<div class="card improvement-card"><span class="label">Resolved · improvements</span><span class="value">${m13Match.comparison.resolvedIssues.length}</span></div>
+				<div class="card"><span class="label">Persistent</span><span class="value">${m13Match.comparison.persistentIssues.length}</span></div>
+			</div>
+			<p class="structural-summary">${escapeHtml(summarizeM13Comparison(m13Match.comparison))}</p>
+			<h3>Counts by impact / severity</h3>
+			<div class="table-wrap"><table><thead><tr><th>Impact</th><th>Previous</th><th>Current</th><th>Delta</th></tr></thead><tbody>${accessibilityBreakdownRows(m13Match.comparison.byImpact)}</tbody></table></div>
+			<h3>Counts by rule</h3>
+			<div class="table-wrap"><table><thead><tr><th>Rule</th><th>Previous</th><th>Current</th><th>Delta</th></tr></thead><tbody>${accessibilityBreakdownRows(m13Match.comparison.byRule)}</tbody></table></div>
+			<details><summary>New violations · regressions (${m13Match.comparison.newIssues.length})</summary>${accessibilityIssueList(m13Match.comparison.newIssues)}</details>
+			<details><summary>Resolved violations · improvements (${m13Match.comparison.resolvedIssues.length})</summary>${accessibilityIssueList(m13Match.comparison.resolvedIssues)}</details>
+			<details><summary>Persistent violations (${m13Match.comparison.persistentIssues.length})</summary>${accessibilityIssueList(m13Match.comparison.persistentIssues)}</details>
+			<div class="explanation"><p>Each issue is identified by its accessibility rule ID and affected element target. Current issues absent from the previous run are new regressions; previous issues absent from the current run are resolved improvements; their intersection is persistent. Totals are also grouped independently by impact level and rule, so a stable overall count cannot hide one resolved issue being replaced by a different new issue.</p></div>
+		</section>` : '';
+
 	const panel = vscode.window.createWebviewPanel(
 		'historyComparison',
 		'Assessment History Comparison',
@@ -1772,6 +1994,8 @@ async function showHistoryComparison(
 		.previous-run { margin: 0 0 16px; color: var(--vscode-descriptionForeground); }
 		.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 18px; }
 		.card { padding: 18px; border: 1px solid var(--vscode-widget-border); border-radius: 8px; background: var(--vscode-sideBar-background); }
+		.regression-card { border-color: var(--vscode-testing-iconFailed); }
+		.improvement-card { border-color: var(--vscode-testing-iconPassed); }
 		.label { display: block; margin-bottom: 8px; color: var(--vscode-descriptionForeground); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 		.value { font-size: 22px; font-weight: 650; }
 		.text-value { font-size: 18px; }
@@ -1789,6 +2013,9 @@ async function showHistoryComparison(
 		.type-details { display: grid; grid-template-columns: max-content 1fr; gap: 7px 14px; margin: 14px 0 0; }
 		.type-details dt { color: var(--vscode-descriptionForeground); }
 		.type-details dd { margin: 0; }
+		.issue-list { margin: 12px 0 0; padding-left: 22px; }
+		.issue-list li { margin-bottom: 12px; line-height: 1.45; }
+		.issue-list code { color: var(--vscode-textPreformat-foreground); word-break: break-all; }
 		.heatmap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 18px; }
 		figure { margin: 0; }
 		figure img { display: block; width: 100%; max-height: 280px; object-fit: contain; border: 1px solid var(--vscode-widget-border); border-radius: 6px; }
@@ -1812,6 +2039,7 @@ async function showHistoryComparison(
 		${m10Section}
 		${m11Section}
 		${m12Section}
+		${m13Section}
 	</main>
 </body>
 </html>`;
@@ -1947,7 +2175,7 @@ export function activate(context: vscode.ExtensionContext) {
 						let history: AssessmentHistory | undefined;
 						const hasComparableResult = resultData.some(
 							(result: any) => typeof result?.metric_id === 'string'
-								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm9', 'm10', 'm11', 'm12'].includes(result.metric_id.split('_')[0])
+								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm9', 'm10', 'm11', 'm12', 'm13'].includes(result.metric_id.split('_')[0])
 						);
 						if (hasComparableResult) {
 							try {
