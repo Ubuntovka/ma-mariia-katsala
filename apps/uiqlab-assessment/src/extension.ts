@@ -105,6 +105,26 @@ export interface M5Comparison {
 	percentagePointDelta: number;
 }
 
+export interface NormalizedUiedElement {
+	type: string;
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
+export interface M6Comparison {
+	added: number;
+	removed: number;
+	moved: number;
+	resized: number;
+	matched: number;
+	addedTypes: string[];
+	removedTypes: string[];
+	movedTypes: string[];
+	resizedTypes: string[];
+}
+
 function finiteNumber(value: unknown): number | undefined {
 	if (typeof value === 'number' && Number.isFinite(value)) {
 		return value;
@@ -363,6 +383,199 @@ export function calculateM5Comparison(
 		currentProportion,
 		previousProportion,
 		percentagePointDelta: (currentProportion - previousProportion) * 100,
+	};
+}
+
+function findUiedPayload(value: unknown): { segments: unknown[] } | undefined {
+	if (typeof value === 'string') {
+		try { return findUiedPayload(JSON.parse(value)); } catch { return undefined; }
+	}
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			const payload = findUiedPayload(item);
+			if (payload) { return payload; }
+		}
+		return undefined;
+	}
+	if (typeof value !== 'object' || value === null) {
+		return undefined;
+	}
+	const candidate = value as Record<string, unknown>;
+	if (Array.isArray(candidate.segments)) {
+		return { segments: candidate.segments };
+	}
+	return undefined;
+}
+
+function normalizedComponentType(component: Record<string, unknown>): string {
+	const rawType = [component.subclass, component.type, component.class, component.category]
+		.find((candidate) => candidate !== undefined && candidate !== null
+			&& String(candidate).trim() !== '' && !['none', 'null'].includes(String(candidate).toLowerCase()))
+		?? 'component';
+	const type = String(rawType).trim().toLowerCase().replace(/[_-]+/g, ' ');
+	return type || 'component';
+}
+
+export function normalizeUiedElements(
+	value: unknown,
+	dimensions: { width: number; height: number }
+): NormalizedUiedElement[] {
+	const payload = findUiedPayload(value);
+	if (!payload || dimensions.width <= 0 || dimensions.height <= 0) {
+		return [];
+	}
+	return payload.segments.flatMap((item): NormalizedUiedElement[] => {
+		if (typeof item !== 'object' || item === null) { return []; }
+		const component = item as Record<string, unknown>;
+		const positionValue = component.position ?? component.bbox ?? component.bounds ?? component;
+		if (typeof positionValue !== 'object' || positionValue === null) { return []; }
+		const position = positionValue as Record<string, unknown>;
+		const rawX = finiteNumber(position.x) ?? finiteNumber(position.column_min) ?? finiteNumber(position.left);
+		const rawY = finiteNumber(position.y) ?? finiteNumber(position.row_min) ?? finiteNumber(position.top);
+		const rawRight = finiteNumber(position.column_max) ?? finiteNumber(position.right);
+		const rawBottom = finiteNumber(position.row_max) ?? finiteNumber(position.bottom);
+		const rawWidth = finiteNumber(position.width) ?? finiteNumber(component.width)
+			?? (rawX !== undefined && rawRight !== undefined ? rawRight - rawX : undefined);
+		const rawHeight = finiteNumber(position.height) ?? finiteNumber(component.height)
+			?? (rawY !== undefined && rawBottom !== undefined ? rawBottom - rawY : undefined);
+		if (rawX === undefined || rawY === undefined || rawWidth === undefined || rawHeight === undefined
+			|| rawWidth <= 0 || rawHeight <= 0) {
+			return [];
+		}
+		const alreadyNormalized = rawX >= 0 && rawY >= 0 && rawWidth <= 1 && rawHeight <= 1
+			&& rawX + rawWidth <= 1 && rawY + rawHeight <= 1;
+		return [{
+			type: normalizedComponentType(component),
+			x: alreadyNormalized ? rawX : rawX / dimensions.width,
+			y: alreadyNormalized ? rawY : rawY / dimensions.height,
+			width: alreadyNormalized ? rawWidth : rawWidth / dimensions.width,
+			height: alreadyNormalized ? rawHeight : rawHeight / dimensions.height,
+		}];
+	});
+}
+
+function componentFamily(type: string): string {
+	if (/text|label|paragraph|heading/.test(type)) { return 'text'; }
+	if (/image|icon|picture/.test(type)) { return 'image'; }
+	if (/button|input|select|checkbox|radio|control/.test(type)) { return 'control'; }
+	if (/block|container|section|header|footer|nav/.test(type)) { return 'container'; }
+	return type;
+}
+
+function compatibleComponentTypes(previous: string, current: string): boolean {
+	return previous === current || componentFamily(previous) === componentFamily(current);
+}
+
+export function boundingBoxIou(a: NormalizedUiedElement, b: NormalizedUiedElement): number {
+	const intersectionWidth = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+	const intersectionHeight = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+	const intersection = intersectionWidth * intersectionHeight;
+	const union = a.width * a.height + b.width * b.height - intersection;
+	return union > 0 ? intersection / union : 0;
+}
+
+function bestElementAssignment(weights: number[][]): Array<[number, number]> {
+	if (weights.length === 0 || weights[0]?.length === 0) { return []; }
+	const size = Math.max(weights.length, weights[0].length);
+	const costs = Array.from({ length: size }, (_, row) =>
+		Array.from({ length: size }, (_, column) => 1 - (weights[row]?.[column] ?? 0))
+	);
+	const u = Array(size + 1).fill(0);
+	const v = Array(size + 1).fill(0);
+	const matchedRow = Array(size + 1).fill(0);
+	const path = Array(size + 1).fill(0);
+	for (let row = 1; row <= size; row++) {
+		matchedRow[0] = row;
+		let column0 = 0;
+		const minimum = Array(size + 1).fill(Number.POSITIVE_INFINITY);
+		const used = Array(size + 1).fill(false);
+		do {
+			used[column0] = true;
+			const row0 = matchedRow[column0];
+			let delta = Number.POSITIVE_INFINITY;
+			let column1 = 0;
+			for (let column = 1; column <= size; column++) {
+				if (used[column]) { continue; }
+				const current = costs[row0 - 1][column - 1] - u[row0] - v[column];
+				if (current < minimum[column]) {
+					minimum[column] = current;
+					path[column] = column0;
+				}
+				if (minimum[column] < delta) {
+					delta = minimum[column];
+					column1 = column;
+				}
+			}
+			for (let column = 0; column <= size; column++) {
+				if (used[column]) {
+					u[matchedRow[column]] += delta;
+					v[column] -= delta;
+				} else {
+					minimum[column] -= delta;
+				}
+			}
+			column0 = column1;
+		} while (matchedRow[column0] !== 0);
+		do {
+			const column1 = path[column0];
+			matchedRow[column0] = matchedRow[column1];
+			column0 = column1;
+		} while (column0 !== 0);
+	}
+	const assignment: Array<[number, number]> = [];
+	for (let column = 1; column <= size; column++) {
+		const row = matchedRow[column] - 1;
+		if (row >= 0 && row < weights.length && column - 1 < weights[0].length) {
+			assignment.push([row, column - 1]);
+		}
+	}
+	return assignment;
+}
+
+export function compareM6Segmentation(
+	currentValue: unknown,
+	previousValue: unknown,
+	dimensions: { width: number; height: number }
+): M6Comparison | undefined {
+	const current = normalizeUiedElements(currentValue, dimensions);
+	const previous = normalizeUiedElements(previousValue, dimensions);
+	if (current.length === 0 && previous.length === 0) { return undefined; }
+	const weights = previous.map((oldElement) => current.map((newElement) =>
+		compatibleComponentTypes(oldElement.type, newElement.type)
+			? boundingBoxIou(oldElement, newElement)
+			: 0
+	));
+	const matches = bestElementAssignment(weights).filter(([oldIndex, newIndex]) =>
+		weights[oldIndex][newIndex] >= 0.1
+	);
+	const matchedPrevious = new Set(matches.map(([oldIndex]) => oldIndex));
+	const matchedCurrent = new Set(matches.map(([, newIndex]) => newIndex));
+	const movedTypes: string[] = [];
+	const resizedTypes: string[] = [];
+	for (const [oldIndex, newIndex] of matches) {
+		const oldElement = previous[oldIndex];
+		const newElement = current[newIndex];
+		const positionDistance = Math.hypot(
+			oldElement.x - newElement.x,
+			oldElement.y - newElement.y
+		);
+		if (positionDistance > 0.01) { movedTypes.push(newElement.type); }
+		const widthChange = Math.abs(newElement.width - oldElement.width);
+		const heightChange = Math.abs(newElement.height - oldElement.height);
+		if (widthChange > 0.01 || heightChange > 0.01) { resizedTypes.push(newElement.type); }
+	}
+	const addedTypes = current.filter((_, index) => !matchedCurrent.has(index)).map((item) => item.type);
+	const removedTypes = previous.filter((_, index) => !matchedPrevious.has(index)).map((item) => item.type);
+	return {
+		added: addedTypes.length,
+		removed: removedTypes.length,
+		moved: movedTypes.length,
+		resized: resizedTypes.length,
+		matched: matches.length,
+		addedTypes,
+		removedTypes,
+		movedTypes,
+		resizedTypes,
 	};
 }
 
@@ -625,6 +838,31 @@ function findM5HistoryComparison(
 	return undefined;
 }
 
+function findM6HistoryComparison(
+	currentResults: any[],
+	history: AssessmentHistory,
+	dimensions: { width: number; height: number }
+): { comparison: M6Comparison; previousCreatedAt: string } | undefined {
+	for (const currentResult of currentResults) {
+		if (typeof currentResult?.metric_id !== 'string' || currentResult.metric_id.split('_')[0] !== 'm6') {
+			continue;
+		}
+		const historicalResult = history.metrics[currentResult.metric_id];
+		if (!historicalResult) {
+			continue;
+		}
+		const comparison = compareM6Segmentation(
+			currentResult.results,
+			historicalResult.results,
+			dimensions
+		);
+		if (comparison) {
+			return { comparison, previousCreatedAt: historicalResult.createdAt };
+		}
+	}
+	return undefined;
+}
+
 function signedNumber(value: number, maximumFractionDigits: number = 0): string {
 	if (value === 0 || Object.is(value, -0)) {
 		return '0';
@@ -653,6 +891,20 @@ function variationDirection(change: NumericChange): string {
 	return change.delta > 0 ? 'increased' : change.delta < 0 ? 'decreased' : 'unchanged';
 }
 
+function typeBreakdown(types: string[]): string {
+	const counts = new Map<string, number>();
+	for (const type of types) { counts.set(type, (counts.get(type) ?? 0) + 1); }
+	return Array.from(counts, ([type, count]) => `${escapeHtml(type)} (${count})`).join(', ') || 'none';
+}
+
+function structuralAction(count: number, action: string, types: string[]): string {
+	if (count === 1 && types.length === 1) {
+		return `1 ${escapeHtml(types[0])} element ${action}`;
+	}
+	const breakdown = count > 0 ? ` (${typeBreakdown(types)})` : '';
+	return `${count} components ${action}${breakdown}`;
+}
+
 function showHistoryComparison(
 	currentResults: any[],
 	history: AssessmentHistory,
@@ -664,7 +916,10 @@ function showHistoryComparison(
 	const m4Match = findM4HistoryComparison(currentResults, history);
 	const m5Match = findM5HistoryComparison(currentResults, history);
 	const dimensions = history.screenshotDimensions;
-	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match) || !dimensions) {
+	const m6Match = dimensions
+		? findM6HistoryComparison(currentResults, history, dimensions)
+		: undefined;
+	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match && !m6Match) || !dimensions) {
 		return;
 	}
 
@@ -760,6 +1015,35 @@ function showHistoryComparison(
 			<div class="explanation"><p>M5 is the proportion of the screenshot classified as white space. The difference is shown in percentage points: for example, 0.32 to 0.38 is +6 pp. The source associates higher values with poorly distributed content, but white space may also be an intentional layout choice. A change is therefore highlighted as a potential layout change, not an automatic regression.</p></div>
 		</section>` : '';
 
+	const m6HasChanges = m6Match
+		? m6Match.comparison.added + m6Match.comparison.removed
+			+ m6Match.comparison.moved + m6Match.comparison.resized > 0
+		: false;
+	const m6Summary = m6Match
+		? m6HasChanges
+			? `${structuralAction(m6Match.comparison.added, 'added', m6Match.comparison.addedTypes)}, ${structuralAction(m6Match.comparison.removed, 'removed', m6Match.comparison.removedTypes)}, ${structuralAction(m6Match.comparison.moved, 'moved', m6Match.comparison.movedTypes)}, and ${structuralAction(m6Match.comparison.resized, 'resized', m6Match.comparison.resizedTypes)}.`
+			: 'No structural changes detected.'
+		: '';
+	const m6Section = m6Match ? `
+		<section class="metric-section">
+			<h2>M6 · UIED structural changes</h2>
+			<p class="previous-run">Compared with the completed run from ${new Date(m6Match.previousCreatedAt).toLocaleString()}</p>
+			<div class="grid">
+				<div class="card"><span class="label">Added</span><span class="value">${m6Match.comparison.added}</span></div>
+				<div class="card"><span class="label">Removed</span><span class="value">${m6Match.comparison.removed}</span></div>
+				<div class="card"><span class="label">Moved</span><span class="value">${m6Match.comparison.moved}</span></div>
+				<div class="card"><span class="label">Resized</span><span class="value">${m6Match.comparison.resized}</span></div>
+			</div>
+			<p class="structural-summary">${m6Summary}</p>
+			<details><summary>Component-type details</summary><dl class="type-details">
+				<dt>Added</dt><dd>${typeBreakdown(m6Match.comparison.addedTypes)}</dd>
+				<dt>Removed</dt><dd>${typeBreakdown(m6Match.comparison.removedTypes)}</dd>
+				<dt>Moved</dt><dd>${typeBreakdown(m6Match.comparison.movedTypes)}</dd>
+				<dt>Resized</dt><dd>${typeBreakdown(m6Match.comparison.resizedTypes)}</dd>
+			</dl></details>
+			<div class="explanation"><p>This is structural change detection. UIED components are converted to normalized screenshot coordinates, paired by compatible component type and the best one-to-one bounding-box IoU assignment, then classified as added, removed, moved, or resized. The segmented preview image is not used for matching.</p></div>
+		</section>` : '';
+
 	const panel = vscode.window.createWebviewPanel(
 		'historyComparison',
 		'Assessment History Comparison',
@@ -797,6 +1081,12 @@ function showHistoryComparison(
 		th:first-child, td:first-child { text-align: left; }
 		thead th { color: var(--vscode-descriptionForeground); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 		.variation-summary { margin: 8px 0 18px; color: var(--vscode-descriptionForeground); }
+		.structural-summary { margin: 2px 0 16px; font-size: 17px; font-weight: 600; }
+		details { margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--vscode-widget-border); border-radius: 6px; }
+		summary { cursor: pointer; font-weight: 600; }
+		.type-details { display: grid; grid-template-columns: max-content 1fr; gap: 7px 14px; margin: 14px 0 0; }
+		.type-details dt { color: var(--vscode-descriptionForeground); }
+		.type-details dd { margin: 0; }
 		.explanation { padding: 18px; border-left: 4px solid var(--vscode-focusBorder); background: var(--vscode-textBlockQuote-background); line-height: 1.55; }
 		.explanation p { margin: 0; }
 	</style>
@@ -810,6 +1100,7 @@ function showHistoryComparison(
 		${m3Section}
 		${m4Section}
 		${m5Section}
+		${m6Section}
 	</main>
 </body>
 </html>`;
@@ -945,7 +1236,7 @@ export function activate(context: vscode.ExtensionContext) {
 						let history: AssessmentHistory | undefined;
 						const hasComparableResult = resultData.some(
 							(result: any) => typeof result?.metric_id === 'string'
-								&& ['m1', 'm2', 'm3', 'm4', 'm5'].includes(result.metric_id.split('_')[0])
+								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6'].includes(result.metric_id.split('_')[0])
 						);
 						if (hasComparableResult) {
 							try {

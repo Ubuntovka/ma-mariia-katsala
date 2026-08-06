@@ -13,6 +13,8 @@ import {
 	calculateM3Comparison,
 	calculateM4Comparison,
 	calculateM5Comparison,
+	compareM6Segmentation,
+	normalizeUiedElements,
 	getColorfulnessInterpretation,
 } from '../extension';
 import { getPngDimensions } from '../playwrightCapture';
@@ -187,6 +189,42 @@ suite('Run Assessment flow', () => {
 	test('rejects M5 proportions outside zero to one', () => {
 		assert.strictEqual(calculateM5Comparison([1.1], [0.5]), undefined);
 		assert.strictEqual(calculateM5Comparison([-0.1], [0.5]), undefined);
+	});
+
+	test('normalizes UIED component boxes using screenshot dimensions', () => {
+		const elements = normalizeUiedElements({ segments: [{
+			class: 'Text',
+			position: { column_min: 120, row_min: 80, column_max: 540, row_max: 130 },
+		}] }, { width: 1000, height: 500 });
+		assert.deepStrictEqual(elements, [{
+			type: 'text',
+			x: 0.12,
+			y: 0.16,
+			width: 0.42,
+			height: 0.1,
+		}]);
+	});
+
+	test('detects added, removed, moved, and resized UIED elements', () => {
+		const previous = { segments: [
+			{ type: 'header', position: { column_min: 0, row_min: 0, column_max: 1000, row_max: 100 } },
+			{ class: 'Text', position: { column_min: 100, row_min: 200, column_max: 500, row_max: 250 } },
+			{ type: 'button', position: { column_min: 100, row_min: 300, column_max: 200, row_max: 340 } },
+		] };
+		const current = { segments: [
+			{ type: 'header', position: { column_min: 0, row_min: 20, column_max: 1000, row_max: 140 } },
+			{ class: 'Text', position: { column_min: 120, row_min: 200, column_max: 520, row_max: 250 } },
+			{ type: 'image', position: { column_min: 700, row_min: 300, column_max: 900, row_max: 500 } },
+		] };
+		const comparison = compareM6Segmentation(current, previous, { width: 1000, height: 1000 });
+		assert.ok(comparison);
+		assert.deepStrictEqual({
+			added: comparison.added,
+			removed: comparison.removed,
+			moved: comparison.moved,
+			resized: comparison.resized,
+		}, { added: 1, removed: 1, moved: 2, resized: 1 });
+		assert.deepStrictEqual(comparison.movedTypes.sort(), ['header', 'text']);
 	});
 
 	test('reads actual dimensions from a PNG header', () => {
