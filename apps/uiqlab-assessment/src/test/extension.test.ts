@@ -7,7 +7,8 @@ import {
 	type QuickPickUi,
 } from '../runAssessment';
 import { getMetricDefinition, METRIC_DEFINITIONS } from '../metricCatalog';
-import { calculateNumericDifference, formatNumericDifference } from '../extension';
+import { calculateM1SizeComparison } from '../extension';
+import { getPngDimensions } from '../playwrightCapture';
 
 suite('Run Assessment flow', () => {
 	test('exposes all assessment names and data source options', () => {
@@ -74,17 +75,32 @@ suite('Run Assessment flow', () => {
 		);
 	});
 
-	test('calculates differences only for numerical results', () => {
-		assert.strictEqual(calculateNumericDifference(12.5, 10), 2.5);
-		assert.strictEqual(calculateNumericDifference('8', '10.5'), -2.5);
-		assert.strictEqual(calculateNumericDifference('not numeric', 10), undefined);
-		assert.strictEqual(calculateNumericDifference({ score: 8 }, { score: 7 }), undefined);
+	test('calculates absolute and relative M1 PNG size deltas', () => {
+		assert.deepStrictEqual(calculateM1SizeComparison(1250, 1000), {
+			currentBytes: 1250,
+			previousBytes: 1000,
+			absoluteDelta: 250,
+			relativeDeltaPercent: 25,
+		});
 	});
 
-	test('formats numerical differences with a sign', () => {
-		assert.strictEqual(formatNumericDifference(2.12345678), '+2.12346');
-		assert.strictEqual(formatNumericDifference(-1.5), '-1.5');
-		assert.strictEqual(formatNumericDifference(0), '0');
+	test('does not calculate an M1 comparison for non-numeric values', () => {
+		assert.strictEqual(calculateM1SizeComparison('not numeric', 1000), undefined);
+		assert.strictEqual(calculateM1SizeComparison(1000, { bytes: 900 }), undefined);
+	});
+
+	test('handles decreases and a zero-byte previous result', () => {
+		assert.strictEqual(calculateM1SizeComparison(750, 1000)?.absoluteDelta, -250);
+		assert.strictEqual(calculateM1SizeComparison(750, 1000)?.relativeDeltaPercent, -25);
+		assert.strictEqual(calculateM1SizeComparison(100, 0)?.relativeDeltaPercent, undefined);
+	});
+
+	test('reads actual dimensions from a PNG header', () => {
+		const pngHeader = Buffer.alloc(24);
+		Buffer.from('89504e470d0a1a0a', 'hex').copy(pngHeader);
+		pngHeader.writeUInt32BE(1440, 16);
+		pngHeader.writeUInt32BE(900, 20);
+		assert.deepStrictEqual(getPngDimensions(pngHeader), { width: 1440, height: 900 });
 	});
 });
 

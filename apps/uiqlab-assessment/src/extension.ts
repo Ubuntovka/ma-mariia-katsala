@@ -52,45 +52,51 @@ function createResultsWebview(
 	panel: vscode.WebviewPanel,
 	results: any[],
 	url: string,
-	isComplete: boolean = true,
-	history?: AssessmentHistory
+	isComplete: boolean = true
 ): void {
-	const html = generateResultsHtml(results, url, isComplete, history);
+	const html = generateResultsHtml(results, url, isComplete);
 	panel.webview.html = html;
 }
 
-export function calculateNumericDifference(current: unknown, previous: unknown): number | undefined {
-	const currentNumber = typeof current === 'number'
-		? current
-		: typeof current === 'string' && current.trim() !== ''
-			? Number(current)
-			: Number.NaN;
-	const previousNumber = typeof previous === 'number'
-		? previous
-		: typeof previous === 'string' && previous.trim() !== ''
-			? Number(previous)
-			: Number.NaN;
+export interface M1SizeComparison {
+	currentBytes: number;
+	previousBytes: number;
+	absoluteDelta: number;
+	relativeDeltaPercent?: number;
+}
 
-	if (!Number.isFinite(currentNumber) || !Number.isFinite(previousNumber)) {
+function finiteNumber(value: unknown): number | undefined {
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return value;
+	}
+	if (typeof value === 'string' && value.trim() !== '') {
+		const parsed = Number(value);
+		return Number.isFinite(parsed) ? parsed : undefined;
+	}
+	return undefined;
+}
+
+export function calculateM1SizeComparison(
+	currentValue: unknown,
+	previousValue: unknown
+): M1SizeComparison | undefined {
+	const currentBytes = finiteNumber(currentValue);
+	const previousBytes = finiteNumber(previousValue);
+	if (currentBytes === undefined || previousBytes === undefined) {
 		return undefined;
 	}
-	return currentNumber - previousNumber;
+	const absoluteDelta = currentBytes - previousBytes;
+	return {
+		currentBytes,
+		previousBytes,
+		absoluteDelta,
+		relativeDeltaPercent: previousBytes === 0
+			? undefined
+			: (absoluteDelta / previousBytes) * 100,
+	};
 }
 
-export function formatNumericDifference(difference: number): string {
-	const rounded = Number(difference.toPrecision(6));
-	if (Object.is(rounded, -0) || rounded === 0) {
-		return '0';
-	}
-	return `${rounded > 0 ? '+' : ''}${rounded}`;
-}
-
-function generateResultsHtml(
-	results: any[],
-	url: string,
-	isComplete: boolean = true,
-	history?: AssessmentHistory
-): string {
+function generateResultsHtml(results: any[], url: string, isComplete: boolean = true): string {
 	// Filter out results that are completely empty, but keep them if they are the only ones for a metric
 	const filteredResults = results.filter((r, i) => {
 		if (Array.isArray(r.results) && r.results.length > 0) {
@@ -110,12 +116,6 @@ function generateResultsHtml(
 		const metric = getMetricInfoById(r.metric_id);
 		const metricName = metric?.name || r.metric_id;
 		const resultValues = Array.isArray(r.results) ? r.results : [r.results];
-		const historicalResult = history?.metrics?.[r.metric_id];
-		const previousValues = Array.isArray(historicalResult?.results)
-			? historicalResult.results
-			: historicalResult
-				? [historicalResult.results]
-				: [];
 
 		return `
 		<div class="metric-result">
@@ -130,11 +130,7 @@ function generateResultsHtml(
 					} else {
 						displayVal = val;
 					}
-					const difference = calculateNumericDifference(val, previousValues[i]);
-					const comparison = difference === undefined
-						? ''
-						: `<span class="comparison">${formatNumericDifference(difference)} vs previous run</span>`;
-					return `<div class="result-item"><strong>Result ${i + 1}:</strong> ${displayVal}${comparison}</div>`;
+					return `<div class="result-item"><strong>Result ${i + 1}:</strong> ${displayVal}</div>`;
 				}).join('')}
 			</div>
 		</div>
@@ -227,16 +223,6 @@ function generateResultsHtml(
 			color: #764ba2;
 			margin-right: 8px;
 		}
-		.comparison {
-			display: inline-block;
-			margin-left: 10px;
-			padding: 2px 7px;
-			border-radius: 10px;
-			background: rgba(102, 126, 234, 0.12);
-			color: #4c5fc7;
-			font-size: 12px;
-			font-weight: 600;
-		}
 		.empty-state {
 			text-align: center;
 			padding: 40px 20px;
@@ -259,6 +245,112 @@ function generateResultsHtml(
 			${resultItems.length > 0 ? resultItems : '<div class="empty-state"><p>No results available yet. Please try again.</p></div>'}
 		</div>
 	</div>
+</body>
+</html>`;
+}
+
+function findM1HistoryComparison(
+	currentResults: any[],
+	history: AssessmentHistory
+): { comparison: M1SizeComparison; previousCreatedAt: string } | undefined {
+	for (const currentResult of currentResults) {
+		if (typeof currentResult?.metric_id !== 'string' || currentResult.metric_id.split('_')[0] !== 'm1') {
+			continue;
+		}
+		const historicalResult = history.metrics[currentResult.metric_id];
+		if (!historicalResult) {
+			continue;
+		}
+		const currentValues = Array.isArray(currentResult.results)
+			? currentResult.results
+			: [currentResult.results];
+		const previousValues = Array.isArray(historicalResult.results)
+			? historicalResult.results
+			: [historicalResult.results];
+		const comparison = calculateM1SizeComparison(currentValues[0], previousValues[0]);
+		if (comparison) {
+			return { comparison, previousCreatedAt: historicalResult.createdAt };
+		}
+	}
+	return undefined;
+}
+
+function signedNumber(value: number, maximumFractionDigits: number = 0): string {
+	if (value === 0 || Object.is(value, -0)) {
+		return '0';
+	}
+	return `${value > 0 ? '+' : ''}${value.toLocaleString(undefined, { maximumFractionDigits })}`;
+}
+
+function escapeHtml(value: string): string {
+	return value
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&#39;');
+}
+
+function showM1HistoryComparison(
+	currentResults: any[],
+	history: AssessmentHistory,
+	url: string
+): void {
+	const match = findM1HistoryComparison(currentResults, history);
+	const dimensions = history.screenshotDimensions;
+	if (!match || !dimensions) {
+		return;
+	}
+
+	const { comparison, previousCreatedAt } = match;
+	const relativeDelta = comparison.relativeDeltaPercent === undefined
+		? 'Not available'
+		: `${signedNumber(comparison.relativeDeltaPercent, 2)}%`;
+	const previousDate = new Date(previousCreatedAt).toLocaleString();
+	const panel = vscode.window.createWebviewPanel(
+		'm1HistoryComparison',
+		'M1 PNG Size Comparison',
+		vscode.ViewColumn.Beside,
+		{}
+	);
+
+	panel.webview.html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>M1 PNG Size Comparison</title>
+	<style>
+		* { box-sizing: border-box; }
+		body { margin: 0; padding: 28px; color: var(--vscode-foreground); background: var(--vscode-editor-background); font-family: var(--vscode-font-family); }
+		main { max-width: 860px; margin: 0 auto; }
+		h1 { margin: 0 0 8px; font-size: 26px; }
+		.context { margin: 0 0 24px; color: var(--vscode-descriptionForeground); line-height: 1.5; }
+		.path { font-family: var(--vscode-editor-font-family); word-break: break-all; }
+		.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 24px; }
+		.card { padding: 18px; border: 1px solid var(--vscode-widget-border); border-radius: 8px; background: var(--vscode-sideBar-background); }
+		.label { display: block; margin-bottom: 8px; color: var(--vscode-descriptionForeground); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+		.value { font-size: 22px; font-weight: 650; }
+		.explanation { padding: 18px; border-left: 4px solid var(--vscode-focusBorder); background: var(--vscode-textBlockQuote-background); line-height: 1.55; }
+		.explanation h2 { margin: 0 0 8px; font-size: 16px; }
+		.explanation p { margin: 0; }
+	</style>
+</head>
+<body>
+	<main>
+		<h1>M1 · PNG file size change</h1>
+		<p class="context"><span class="path">${escapeHtml(url)}</span><br>${dimensions.width} × ${dimensions.height} px · compared with the completed run from ${previousDate}</p>
+		<section class="grid" aria-label="PNG size comparison">
+			<div class="card"><span class="label">Previous size</span><span class="value">${comparison.previousBytes.toLocaleString()} bytes</span></div>
+			<div class="card"><span class="label">Current size</span><span class="value">${comparison.currentBytes.toLocaleString()} bytes</span></div>
+			<div class="card"><span class="label">Absolute delta</span><span class="value">${signedNumber(comparison.absoluteDelta)} bytes</span></div>
+			<div class="card"><span class="label">Relative delta</span><span class="value">${relativeDelta}</span></div>
+		</section>
+		<section class="explanation">
+			<h2>How to read this comparison</h2>
+			<p>M1 reports the PNG screenshot size in bytes. The absolute delta is current size minus previous size; the relative delta expresses that change as a percentage of the previous size and is unavailable when the previous size is zero. Only screenshots with identical pixel dimensions are compared. PNG size has no universal “better” direction, so this page reports the change without labeling it as an improvement or regression.</p>
+		</section>
+	</main>
 </body>
 </html>`;
 }
@@ -322,11 +414,7 @@ export function activate(context: vscode.ExtensionContext) {
 							if (!panel) {
 								panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
 							}
-							let history: AssessmentHistory | undefined;
-							try {
-								history = await fetchAssessmentHistory(wui_id);
-							} catch { }
-							createResultsWebview(panel, results, deploymentUrl, true, history);
+							createResultsWebview(panel, results, deploymentUrl, true);
 						}
 
 						return results;
@@ -358,7 +446,15 @@ export function activate(context: vscode.ExtensionContext) {
 					const result = await p;
 					progress.report({ message: 'Step 2 of 4: Uploading the captured page' });
 					const gitInfo = getGitInfo(workspaceRoot, projectConfig);
-					const resp = await submitFileForEvaluation(result.screenshot, 'capture.png', 'image/png', request.assessments, gitInfo, localUrl);
+					const resp = await submitFileForEvaluation(
+						result.screenshot,
+						'capture.png',
+						'image/png',
+						request.assessments,
+						gitInfo,
+						localUrl,
+						result.screenshotDimensions
+					);
 					const wui_id = resp?.result_id;
 					if (!wui_id) {
 						throw new Error('The evaluation service did not return the tracking information needed to retrieve results.');
@@ -387,10 +483,18 @@ export function activate(context: vscode.ExtensionContext) {
 							panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
 						}
 						let history: AssessmentHistory | undefined;
-						try {
-							history = await fetchAssessmentHistory(wui_id);
-						} catch { }
-						createResultsWebview(panel, resultData, localUrl, true, history);
+						const hasM1Result = resultData.some(
+							(result: any) => typeof result?.metric_id === 'string' && result.metric_id.split('_')[0] === 'm1'
+						);
+						if (hasM1Result) {
+							try {
+								history = await fetchAssessmentHistory(wui_id);
+							} catch { }
+						}
+						createResultsWebview(panel, resultData, localUrl, true);
+						if (history) {
+							showM1HistoryComparison(resultData, history, localUrl);
+						}
 						vscode.window.showInformationMessage('UIQLab assessment complete. Results are ready.');
 					} else {
 						vscode.window.showInformationMessage('Timed out or cancelled waiting for evaluation result.');

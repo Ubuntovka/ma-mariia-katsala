@@ -56,6 +56,7 @@ export interface HistoricalMetricResult {
 
 export interface AssessmentHistory {
 	metrics: Record<string, HistoricalMetricResult>;
+	screenshotDimensions?: { width: number; height: number };
 }
 
 export interface QuickPickUi {
@@ -240,7 +241,8 @@ export async function submitFileForEvaluation(
 	contentType: string,
 	selectedAssessments: AssessmentName[],
 	gitInfo: GitInfo,
-	assessedTarget?: string
+	assessedTarget?: string,
+	screenshotDimensions?: { width: number; height: number }
 ): Promise<any> {
 	if (!Buffer.isBuffer(fileData)) {
 		throw new Error('fileData must be a Buffer');
@@ -264,6 +266,10 @@ export async function submitFileForEvaluation(
 	if (gitInfo.gitDirty !== undefined) { form.append('gitDirty', String(gitInfo.gitDirty)); }
 	if (gitInfo.mergeRequestId) { form.append('mergeRequestId', gitInfo.mergeRequestId); }
 	if (assessedTarget) { form.append('assessedTarget', assessedTarget); }
+	if (screenshotDimensions) {
+		form.append('screenshotWidth', String(screenshotDimensions.width));
+		form.append('screenshotHeight', String(screenshotDimensions.height));
+	}
 
 	const parsed = new URL(`${ORCHESTRATOR_BASE}/eval/evaluate_with_artifacts`);
 	const lib = parsed.protocol === 'https:' ? (await import('https')) : (await import('http'));

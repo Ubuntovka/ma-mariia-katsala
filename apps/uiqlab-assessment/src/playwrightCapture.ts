@@ -10,8 +10,20 @@ export interface CaptureResult {
   requestedUrl: string;
   finalUrl: string;
   viewport: { width: number; height: number };
+  screenshotDimensions: { width: number; height: number };
   deviceScaleFactor: number;
   timestamp: string;
+}
+
+export function getPngDimensions(png: Buffer): { width: number; height: number } {
+  const pngSignature = '89504e470d0a1a0a';
+  if (png.length < 24 || png.subarray(0, 8).toString('hex') !== pngSignature) {
+    throw new Error('Could not read dimensions from the captured PNG');
+  }
+  return {
+    width: png.readUInt32BE(16),
+    height: png.readUInt32BE(20),
+  };
 }
 
 function isHttpUrl(value: string): boolean {
@@ -154,6 +166,7 @@ export async function capturePage(url: string, timeoutMs = 30000): Promise<Captu
     }
 
     const finalUrl = page.url();
+    const screenshotDimensions = getPngDimensions(screenshot);
 
     return {
       screenshot,
@@ -161,6 +174,7 @@ export async function capturePage(url: string, timeoutMs = 30000): Promise<Captu
       requestedUrl: url,
       finalUrl,
       viewport,
+      screenshotDimensions,
       deviceScaleFactor,
       timestamp,
     };

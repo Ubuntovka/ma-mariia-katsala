@@ -61,6 +61,8 @@ async def init_db():
                 status TEXT DEFAULT 'PENDING',
                 success BOOLEAN,
                 "metricsCount" INTEGER,
+                "screenshotWidth" INTEGER,
+                "screenshotHeight" INTEGER,
                 "createdAt" TIMESTAMPTZ DEFAULT NOW()
             );
         ''')
@@ -70,12 +72,21 @@ async def init_db():
             ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'PENDING';
             ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS success BOOLEAN;
             ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS "metricsCount" INTEGER;
+            ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS "screenshotWidth" INTEGER;
+            ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS "screenshotHeight" INTEGER;
             ALTER TABLE assessment_run DROP COLUMN IF EXISTS results;
         ''')
         await conn.execute('CREATE INDEX IF NOT EXISTS idx_assessment_run_backend_id ON assessment_run("backendResultId");')
         await conn.execute('''
             CREATE INDEX IF NOT EXISTS idx_assessment_run_history
             ON assessment_run(project_id, "assessedTarget", status, "createdAt" DESC);
+        ''')
+        await conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_assessment_run_m1_history
+            ON assessment_run(
+                project_id, "assessedTarget", "screenshotWidth", "screenshotHeight",
+                status, "createdAt" DESC
+            );
         ''')
 
         # Keep existing runs comparable with newly normalized page paths.
@@ -276,9 +287,15 @@ async def evaluate_with_artifacts(
     gitDirty: Optional[bool] = Form(None),
     mergeRequestId: Optional[str] = Form(None),
     assessedTarget: Optional[str] = Form(None),
+    screenshotWidth: Optional[int] = Form(None),
+    screenshotHeight: Optional[int] = Form(None),
 ):
     if not mm:
         raise HTTPException(status_code=400, detail="mm must be a non-empty metrics array")
+    if (screenshotWidth is None) != (screenshotHeight is None):
+        raise HTTPException(status_code=400, detail="Both screenshot dimensions must be provided together")
+    if screenshotWidth is not None and (screenshotWidth <= 0 or screenshotHeight <= 0):
+        raise HTTPException(status_code=400, detail="Screenshot dimensions must be positive integers")
 
     conn = await asyncpg.connect(
         user=POSTGRES_USER,
@@ -292,12 +309,13 @@ async def evaluate_with_artifacts(
         run_id = await conn.fetchval(
             '''
             INSERT INTO assessment_run (
-                project_id, source, branch, "commitHash", "gitDirty", "mergeRequestId", "assessedTarget", "metricsCount"
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id
+                project_id, source, branch, "commitHash", "gitDirty", "mergeRequestId", "assessedTarget",
+                "metricsCount", "screenshotWidth", "screenshotHeight"
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id
             ''',
             project_id, source, branch, commitHash, gitDirty, mergeRequestId,
             normalize_assessed_target(assessedTarget) if assessedTarget else file.filename,
-            len(mm)
+            len(mm), screenshotWidth, screenshotHeight
         )
     finally:
         await conn.close()
@@ -419,13 +437,19 @@ async def get_eval_result_history(wui_id: str):
     try:
         current = await conn.fetchrow(
             '''
-            SELECT id, project_id, "assessedTarget", "backendResultId", status
+            SELECT id, project_id, "assessedTarget", "backendResultId", status,
+                   "screenshotWidth", "screenshotHeight"
             FROM assessment_run
             WHERE "backendResultId" = $1
             ''',
             wui_id
         )
-        if not current or current['status'] != 'COMPLETED':
+        if (
+            not current
+            or current['status'] != 'COMPLETED'
+            or current['screenshotWidth'] is None
+            or current['screenshotHeight'] is None
+        ):
             return {'metrics': {}}
 
         async with httpx.AsyncClient() as client:
@@ -438,7 +462,11 @@ async def get_eval_result_history(wui_id: str):
             except (httpx.HTTPError, ValueError):
                 return {'metrics': {}}
 
-        outstanding_metric_ids = set(metric_result_index(current_results))
+        outstanding_metric_ids = {
+            metric_id
+            for metric_id in metric_result_index(current_results)
+            if metric_id.split('_')[0] == 'm1'
+        }
         if not outstanding_metric_ids:
             return {'metrics': {}}
 
@@ -449,6 +477,8 @@ async def get_eval_result_history(wui_id: str):
             WHERE project_id = $1
               AND "assessedTarget" = $2
               AND status = 'COMPLETED'
+              AND "screenshotWidth" = $4
+              AND "screenshotHeight" = $5
               AND id <> $3
               AND ("createdAt", id) < (
                   SELECT "createdAt", id FROM assessment_run WHERE id = $3
@@ -456,7 +486,8 @@ async def get_eval_result_history(wui_id: str):
             ORDER BY "createdAt" DESC, id DESC
             LIMIT 50
             ''',
-            current['project_id'], current['assessedTarget'], current['id']
+            current['project_id'], current['assessedTarget'], current['id'],
+            current['screenshotWidth'], current['screenshotHeight']
         )
 
         history = {}
@@ -485,6 +516,12 @@ async def get_eval_result_history(wui_id: str):
                 if not outstanding_metric_ids:
                     break
 
-        return {'metrics': history}
+        return {
+            'metrics': history,
+            'screenshotDimensions': {
+                'width': current['screenshotWidth'],
+                'height': current['screenshotHeight']
+            }
+        }
     finally:
         await conn.close()
