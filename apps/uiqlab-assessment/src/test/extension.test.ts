@@ -12,6 +12,7 @@ import {
 	calculateM2Comparison,
 	calculateM3Comparison,
 	calculateM4Comparison,
+	calculateM5Comparison,
 	getColorfulnessInterpretation,
 } from '../extension';
 import { getPngDimensions } from '../playwrightCapture';
@@ -173,6 +174,19 @@ suite('Run Assessment flow', () => {
 		);
 		assert.strictEqual(comparison?.means.l.delta, 2);
 		assert.strictEqual(comparison?.standardDeviations.b.delta, -1);
+	});
+
+	test('calculates M5 white-space change in percentage points', () => {
+		const comparison = calculateM5Comparison([0.38], [0.32]);
+		assert.ok(comparison);
+		assert.strictEqual(comparison.previousProportion, 0.32);
+		assert.strictEqual(comparison.currentProportion, 0.38);
+		assert.ok(Math.abs(comparison.percentagePointDelta - 6) < 1e-10);
+	});
+
+	test('rejects M5 proportions outside zero to one', () => {
+		assert.strictEqual(calculateM5Comparison([1.1], [0.5]), undefined);
+		assert.strictEqual(calculateM5Comparison([-0.1], [0.5]), undefined);
 	});
 
 	test('reads actual dimensions from a PNG header', () => {

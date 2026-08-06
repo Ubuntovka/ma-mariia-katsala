@@ -99,6 +99,12 @@ export interface M4Comparison {
 	deltaE: number;
 }
 
+export interface M5Comparison {
+	currentProportion: number;
+	previousProportion: number;
+	percentagePointDelta: number;
+}
+
 function finiteNumber(value: unknown): number | undefined {
 	if (typeof value === 'number' && Number.isFinite(value)) {
 		return value;
@@ -323,6 +329,40 @@ export function calculateM4Comparison(
 			+ means.a.delta ** 2
 			+ means.b.delta ** 2
 		),
+	};
+}
+
+function readM5Proportion(value: unknown): number | undefined {
+	let proportion = finiteNumber(value);
+	if (proportion === undefined && Array.isArray(value)) {
+		proportion = readM5Proportion(value[0]);
+	}
+	if (proportion === undefined && typeof value === 'object' && value !== null) {
+		const entry = Object.entries(value).find(([key]) =>
+			['whitespace', 'whitespaceproportion', 'proportion', 'score', 'value'].includes(
+				key.toLowerCase().replace(/[^a-z0-9]/g, '')
+			)
+		);
+		proportion = entry ? finiteNumber(entry[1]) : undefined;
+	}
+	return proportion !== undefined && proportion >= 0 && proportion <= 1
+		? proportion
+		: undefined;
+}
+
+export function calculateM5Comparison(
+	currentValue: unknown,
+	previousValue: unknown
+): M5Comparison | undefined {
+	const currentProportion = readM5Proportion(currentValue);
+	const previousProportion = readM5Proportion(previousValue);
+	if (currentProportion === undefined || previousProportion === undefined) {
+		return undefined;
+	}
+	return {
+		currentProportion,
+		previousProportion,
+		percentagePointDelta: (currentProportion - previousProportion) * 100,
 	};
 }
 
@@ -565,6 +605,26 @@ function findM4HistoryComparison(
 	return undefined;
 }
 
+function findM5HistoryComparison(
+	currentResults: any[],
+	history: AssessmentHistory
+): { comparison: M5Comparison; previousCreatedAt: string } | undefined {
+	for (const currentResult of currentResults) {
+		if (typeof currentResult?.metric_id !== 'string' || currentResult.metric_id.split('_')[0] !== 'm5') {
+			continue;
+		}
+		const historicalResult = history.metrics[currentResult.metric_id];
+		if (!historicalResult) {
+			continue;
+		}
+		const comparison = calculateM5Comparison(currentResult.results, historicalResult.results);
+		if (comparison) {
+			return { comparison, previousCreatedAt: historicalResult.createdAt };
+		}
+	}
+	return undefined;
+}
+
 function signedNumber(value: number, maximumFractionDigits: number = 0): string {
 	if (value === 0 || Object.is(value, -0)) {
 		return '0';
@@ -602,8 +662,9 @@ function showHistoryComparison(
 	const m2Match = findM2HistoryComparison(currentResults, history);
 	const m3Match = findM3HistoryComparison(currentResults, history);
 	const m4Match = findM4HistoryComparison(currentResults, history);
+	const m5Match = findM5HistoryComparison(currentResults, history);
 	const dimensions = history.screenshotDimensions;
-	if ((!m1Match && !m2Match && !m3Match && !m4Match) || !dimensions) {
+	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match) || !dimensions) {
 		return;
 	}
 
@@ -683,6 +744,22 @@ function showHistoryComparison(
 			<div class="explanation"><p>The L* mean describes average brightness, while a* and b* locate the average palette on the green–red and blue–yellow axes. ΔE is the Euclidean distance between the previous and current mean Lab colors. Standard-deviation changes describe shifts in color distribution and variation within each channel. These changes have no universal better direction.</p></div>
 		</section>` : '';
 
+	const m5Assessment = m5Match?.comparison.percentagePointDelta === 0
+		? 'No measured change'
+		: 'Potential layout change';
+	const m5Section = m5Match ? `
+		<section class="metric-section">
+			<h2>M5 · White-space proportion</h2>
+			<p class="previous-run">Compared with the completed run from ${new Date(m5Match.previousCreatedAt).toLocaleString()}</p>
+			<div class="grid">
+				<div class="card"><span class="label">Previous proportion</span><span class="value">${m5Match.comparison.previousProportion.toLocaleString(undefined, { maximumFractionDigits: 3 })}</span></div>
+				<div class="card"><span class="label">Current proportion</span><span class="value">${m5Match.comparison.currentProportion.toLocaleString(undefined, { maximumFractionDigits: 3 })}</span></div>
+				<div class="card"><span class="label">Absolute difference</span><span class="value">${signedNumber(m5Match.comparison.percentagePointDelta, 2)} pp</span></div>
+				<div class="card"><span class="label">Assessment</span><span class="value text-value">${m5Assessment}</span></div>
+			</div>
+			<div class="explanation"><p>M5 is the proportion of the screenshot classified as white space. The difference is shown in percentage points: for example, 0.32 to 0.38 is +6 pp. The source associates higher values with poorly distributed content, but white space may also be an intentional layout choice. A change is therefore highlighted as a potential layout change, not an automatic regression.</p></div>
+		</section>` : '';
+
 	const panel = vscode.window.createWebviewPanel(
 		'historyComparison',
 		'Assessment History Comparison',
@@ -732,6 +809,7 @@ function showHistoryComparison(
 		${m2Section}
 		${m3Section}
 		${m4Section}
+		${m5Section}
 	</main>
 </body>
 </html>`;
@@ -867,7 +945,7 @@ export function activate(context: vscode.ExtensionContext) {
 						let history: AssessmentHistory | undefined;
 						const hasComparableResult = resultData.some(
 							(result: any) => typeof result?.metric_id === 'string'
-								&& ['m1', 'm2', 'm3', 'm4'].includes(result.metric_id.split('_')[0])
+								&& ['m1', 'm2', 'm3', 'm4', 'm5'].includes(result.metric_id.split('_')[0])
 						);
 						if (hasComparableResult) {
 							try {
