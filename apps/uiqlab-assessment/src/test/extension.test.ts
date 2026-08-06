@@ -18,6 +18,7 @@ import {
 	calculateM9Comparison,
 	calculateM10Comparison,
 	calculateM11Comparison,
+	calculateM12Comparison,
 	normalizeUiedElements,
 	getColorfulnessInterpretation,
 } from '../extension';
@@ -313,6 +314,21 @@ suite('Run Assessment flow', () => {
 
 	test('omits the M11 relative delta when the previous entropy is zero', () => {
 		const comparison = calculateM11Comparison({ subband_entropy: 2 }, { entropy: 0 });
+		assert.strictEqual(comparison?.absoluteDelta, 2);
+		assert.strictEqual(comparison?.relativeDeltaPercent, undefined);
+	});
+
+	test('compares M12 Shannon entropy using absolute and relative deltas', () => {
+		const comparison = calculateM12Comparison({ shannon_entropy: 7.5 }, { entropy: 6 });
+		assert.ok(comparison);
+		assert.strictEqual(comparison.currentEntropy, 7.5);
+		assert.strictEqual(comparison.previousEntropy, 6);
+		assert.strictEqual(comparison.absoluteDelta, 1.5);
+		assert.strictEqual(comparison.relativeDeltaPercent, 25);
+	});
+
+	test('omits the M12 relative delta when the previous entropy is zero', () => {
+		const comparison = calculateM12Comparison([2], [0]);
 		assert.strictEqual(comparison?.absoluteDelta, 2);
 		assert.strictEqual(comparison?.relativeDeltaPercent, undefined);
 	});

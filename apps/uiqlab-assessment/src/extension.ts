@@ -165,6 +165,13 @@ export interface M11Comparison {
 	relativeDeltaPercent?: number;
 }
 
+export interface M12Comparison {
+	currentEntropy: number;
+	previousEntropy: number;
+	absoluteDelta: number;
+	relativeDeltaPercent?: number;
+}
+
 function finiteNumber(value: unknown): number | undefined {
 	if (typeof value === 'number' && Number.isFinite(value)) {
 		return value;
@@ -916,6 +923,38 @@ export function calculateM11Comparison(
 	};
 }
 
+function readM12Scalar(value: unknown): number | undefined {
+	const direct = finiteNumber(value);
+	if (direct !== undefined) { return direct; }
+	if (Array.isArray(value)) { return readM12Scalar(value[0]); }
+	if (typeof value !== 'object' || value === null) { return undefined; }
+	const fields = new Map(Object.entries(value).map(([key, fieldValue]) => [
+		key.toLowerCase().replace(/[^a-z0-9]/g, ''), fieldValue,
+	]));
+	return finiteNumber(
+		fields.get('shannoninformationentropy') ?? fields.get('shannonentropy')
+			?? fields.get('entropy') ?? fields.get('score') ?? fields.get('value')
+	);
+}
+
+export function calculateM12Comparison(
+	currentValue: unknown,
+	previousValue: unknown
+): M12Comparison | undefined {
+	const currentEntropy = readM12Scalar(currentValue);
+	const previousEntropy = readM12Scalar(previousValue);
+	if (currentEntropy === undefined || previousEntropy === undefined) { return undefined; }
+	const absoluteDelta = currentEntropy - previousEntropy;
+	return {
+		currentEntropy,
+		previousEntropy,
+		absoluteDelta,
+		relativeDeltaPercent: previousEntropy === 0
+			? undefined
+			: (absoluteDelta / previousEntropy) * 100,
+	};
+}
+
 function generateResultsHtml(results: any[], url: string, isComplete: boolean = true): string {
 	// Filter out results that are completely empty, but keep them if they are the only ones for a metric
 	const filteredResults = results.filter((r, i) => {
@@ -1218,6 +1257,24 @@ function findM11HistoryComparison(
 	return undefined;
 }
 
+function findM12HistoryComparison(
+	currentResults: any[],
+	history: AssessmentHistory
+): { comparison: M12Comparison; previousCreatedAt: string } | undefined {
+	for (const currentResult of currentResults) {
+		if (typeof currentResult?.metric_id !== 'string' || currentResult.metric_id.split('_')[0] !== 'm12') {
+			continue;
+		}
+		const historicalResult = history.metrics[currentResult.metric_id];
+		if (!historicalResult) { continue; }
+		const comparison = calculateM12Comparison(currentResult.results, historicalResult.results);
+		if (comparison) {
+			return { comparison, previousCreatedAt: historicalResult.createdAt };
+		}
+	}
+	return undefined;
+}
+
 function readM7ImageUrls(value: unknown): { heatmap: string; overlay?: string } | undefined {
 	if (Array.isArray(value)) {
 		const urls = value.filter((item): item is string =>
@@ -1434,10 +1491,11 @@ async function showHistoryComparison(
 		? findM6HistoryComparison(currentResults, history, dimensions)
 		: undefined;
 	const m11Match = findM11HistoryComparison(currentResults, history);
+	const m12Match = findM12HistoryComparison(currentResults, history);
 	const m7Match = await findM7HistoryComparison(currentResults, history);
 	const m9Match = await findM9HistoryComparison(currentResults, history);
 	const m10Match = await findM10HistoryComparison(currentResults, history);
-	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match && !m6Match && !m7Match && !m9Match && !m10Match && !m11Match) || !dimensions) {
+	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match && !m6Match && !m7Match && !m9Match && !m10Match && !m11Match && !m12Match) || !dimensions) {
 		return;
 	}
 
@@ -1667,6 +1725,27 @@ async function showHistoryComparison(
 			<div class="explanation"><p>Subband entropy estimates visual clutter through the information carried across image subbands. The absolute delta is current minus previous entropy, and the relative delta expresses that change against the previous value. Higher entropy indicates more visual clutter according to the metric definition.</p></div>
 		</section>` : '';
 
+	const m12Direction = m12Match
+		? m12Match.comparison.absoluteDelta > 0
+			? 'Shannon entropy increased, indicating more detail, information, or noise.'
+			: m12Match.comparison.absoluteDelta < 0
+				? 'Shannon entropy decreased, indicating less detail, information, or noise.'
+				: 'Shannon entropy did not change.'
+		: '';
+	const m12Section = m12Match ? `
+		<section class="metric-section">
+			<h2>M12 · Shannon information entropy</h2>
+			<p class="previous-run">Compared with the completed run from ${new Date(m12Match.previousCreatedAt).toLocaleString()}</p>
+			<div class="grid">
+				<div class="card"><span class="label">Previous entropy</span><span class="value">${m12Match.comparison.previousEntropy.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span></div>
+				<div class="card"><span class="label">Current entropy</span><span class="value">${m12Match.comparison.currentEntropy.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span></div>
+				<div class="card"><span class="label">Absolute delta</span><span class="value">${signedNumber(m12Match.comparison.absoluteDelta, 4)}</span></div>
+				<div class="card"><span class="label">Relative delta</span><span class="value">${relativeChange(m12Match.comparison.relativeDeltaPercent)}</span></div>
+			</div>
+			<p class="structural-summary">${m12Direction}</p>
+			<div class="explanation"><p>Shannon information entropy quantifies the information and detail in the grayscale interface image. The absolute delta is current minus previous entropy, and the relative delta expresses that change against the previous value. Higher entropy can reflect more detail, information, or noise, but it is not automatically worse: research also connects entropy with aesthetics and orderliness.</p></div>
+		</section>` : '';
+
 	const panel = vscode.window.createWebviewPanel(
 		'historyComparison',
 		'Assessment History Comparison',
@@ -1732,6 +1811,7 @@ async function showHistoryComparison(
 		${m9Section}
 		${m10Section}
 		${m11Section}
+		${m12Section}
 	</main>
 </body>
 </html>`;
@@ -1867,7 +1947,7 @@ export function activate(context: vscode.ExtensionContext) {
 						let history: AssessmentHistory | undefined;
 						const hasComparableResult = resultData.some(
 							(result: any) => typeof result?.metric_id === 'string'
-								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm9', 'm10', 'm11'].includes(result.metric_id.split('_')[0])
+								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm9', 'm10', 'm11', 'm12'].includes(result.metric_id.split('_')[0])
 						);
 						if (hasComparableResult) {
 							try {
