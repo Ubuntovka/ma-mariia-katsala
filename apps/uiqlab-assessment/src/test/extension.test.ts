@@ -17,6 +17,7 @@ import {
 	compareSaliencyHeatmaps,
 	calculateM9Comparison,
 	calculateM10Comparison,
+	calculateM11Comparison,
 	normalizeUiedElements,
 	getColorfulnessInterpretation,
 } from '../extension';
@@ -299,6 +300,21 @@ suite('Run Assessment flow', () => {
 		assert.strictEqual(comparison?.scalarDelta, 0);
 		assert.strictEqual(comparison?.mapMeanAbsoluteDifference, 0);
 		assert.strictEqual(comparison?.highCongestionOverlap, 1);
+	});
+
+	test('compares M11 subband entropy using absolute and relative deltas', () => {
+		const comparison = calculateM11Comparison([3.6], [3]);
+		assert.ok(comparison);
+		assert.strictEqual(comparison.currentEntropy, 3.6);
+		assert.strictEqual(comparison.previousEntropy, 3);
+		assert.ok(Math.abs(comparison.absoluteDelta - 0.6) < 1e-10);
+		assert.ok(Math.abs((comparison.relativeDeltaPercent ?? 0) - 20) < 1e-10);
+	});
+
+	test('omits the M11 relative delta when the previous entropy is zero', () => {
+		const comparison = calculateM11Comparison({ subband_entropy: 2 }, { entropy: 0 });
+		assert.strictEqual(comparison?.absoluteDelta, 2);
+		assert.strictEqual(comparison?.relativeDeltaPercent, undefined);
 	});
 
 	test('reads actual dimensions from a PNG header', () => {
