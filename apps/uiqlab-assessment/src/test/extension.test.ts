@@ -15,6 +15,7 @@ import {
 	calculateM5Comparison,
 	compareM6Segmentation,
 	compareSaliencyHeatmaps,
+	calculateM9Comparison,
 	normalizeUiedElements,
 	getColorfulnessInterpretation,
 } from '../extension';
@@ -253,6 +254,29 @@ suite('Run Assessment flow', () => {
 		assert.strictEqual(comparison?.centerMovement, 0);
 	});
 
+	test('uses the M9 scalar as the primary percentage-point comparison', () => {
+		const comparison = calculateM9Comparison(['0.20'], ['0.15']);
+		assert.ok(comparison);
+		assert.strictEqual(comparison.currentDensity, 0.2);
+		assert.strictEqual(comparison.previousDensity, 0.15);
+		assert.ok(Math.abs(comparison.percentagePointDelta - 5) < 1e-10);
+		assert.strictEqual(comparison.edgeMapIou, undefined);
+	});
+
+	test('optionally compares M9 binary edge maps with IoU and F1', () => {
+		const previousEdges = createBinaryEdgeMap([0, 1]);
+		const currentEdges = createBinaryEdgeMap([1, 2]);
+		const comparison = calculateM9Comparison(
+			['0.20'],
+			['0.15'],
+			currentEdges,
+			previousEdges
+		);
+		assert.ok(comparison);
+		assert.ok(Math.abs((comparison.edgeMapIou ?? 0) - 1 / 3) < 1e-10);
+		assert.strictEqual(comparison.edgeMapF1, 0.5);
+	});
+
 	test('reads actual dimensions from a PNG header', () => {
 		const pngHeader = Buffer.alloc(24);
 		Buffer.from('89504e470d0a1a0a', 'hex').copy(pngHeader);
@@ -273,6 +297,19 @@ function createSyntheticHeatmap(salientRow: number): Buffer {
 			png.data[offset + 2] = value;
 			png.data[offset + 3] = 255;
 		}
+	}
+	return PNG.sync.write(png);
+}
+
+function createBinaryEdgeMap(edgePixels: number[]): Buffer {
+	const png = new PNG({ width: 4, height: 1 });
+	for (let x = 0; x < png.width; x++) {
+		const offset = x * 4;
+		const value = edgePixels.includes(x) ? 255 : 0;
+		png.data[offset] = value;
+		png.data[offset + 1] = value;
+		png.data[offset + 2] = value;
+		png.data[offset + 3] = 255;
 	}
 	return PNG.sync.write(png);
 }
