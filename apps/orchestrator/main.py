@@ -426,18 +426,10 @@ async def get_eval_result(wui_id: str):
     finally:
         await conn.close()
 
-    backend_ids = decode_backend_result_ids(run['backendResultIds']) if run else []
-    if not backend_ids:
-        backend_ids = [wui_id]
+    backend_ids = backend_result_ids_for_run(run, wui_id)
 
     async with httpx.AsyncClient() as client:
-        responses = await asyncio.gather(*[
-            client.get(f"{BACKEND_URL}/eval/result/{backend_id}")
-            for backend_id in backend_ids
-        ])
-        for response in responses:
-            response.raise_for_status()
-        results = merge_metric_results(*[response.json() for response in responses])
+        results = await fetch_merged_backend_results(client, backend_ids)
 
         # Update database with status/success if finished
         conn = await asyncpg.connect(
@@ -509,6 +501,31 @@ def decode_backend_result_ids(value) -> List[str]:
     return [backend_id for backend_id in value if isinstance(backend_id, str)]
 
 
+def backend_result_ids_for_run(run, fallback_id: Optional[str] = None) -> List[str]:
+    """Return all backend jobs for a run, with legacy single-ID fallback."""
+    backend_ids = decode_backend_result_ids(run['backendResultIds']) if run else []
+    if backend_ids:
+        return backend_ids
+    try:
+        primary_id = run['backendResultId'] if run else None
+    except KeyError:
+        primary_id = None
+    if primary_id:
+        return [primary_id]
+    return [fallback_id] if fallback_id else []
+
+
+async def fetch_merged_backend_results(client, backend_ids: List[str]):
+    """Fetch transient UIQLab results for every job and merge them by metric ID."""
+    responses = await asyncio.gather(*[
+        client.get(f"{BACKEND_URL}/eval/result/{backend_id}")
+        for backend_id in backend_ids
+    ])
+    for response in responses:
+        response.raise_for_status()
+    return merge_metric_results(*[response.json() for response in responses])
+
+
 def split_file_metrics(metrics: List[str]):
     """Keep screenshot metrics on PNG and route DOM-only metrics to HTML."""
     png_metrics = []
@@ -551,7 +568,7 @@ async def get_eval_result_history(wui_id: str):
     try:
         current = await conn.fetchrow(
             '''
-            SELECT id, project_id, "assessedTarget", "backendResultId", status,
+            SELECT id, project_id, "assessedTarget", "backendResultId", "backendResultIds", status,
                    "screenshotWidth", "screenshotHeight"
             FROM assessment_run
             WHERE "backendResultId" = $1
@@ -568,25 +585,24 @@ async def get_eval_result_history(wui_id: str):
 
         async with httpx.AsyncClient() as client:
             try:
-                current_response = await client.get(
-                    f"{BACKEND_URL}/eval/result/{current['backendResultId']}"
+                current_results = await fetch_merged_backend_results(
+                    client,
+                    backend_result_ids_for_run(current)
                 )
-                current_response.raise_for_status()
-                current_results = current_response.json()
             except (httpx.HTTPError, ValueError):
                 return {'metrics': {}}
 
         outstanding_metric_ids = {
             metric_id
             for metric_id in metric_result_index(current_results)
-            if metric_id.split('_')[0] in {'m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14'}
+            if metric_id.split('_')[0] in {'m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14'}
         }
         if not outstanding_metric_ids:
             return {'metrics': {}}
 
         previous_runs = await conn.fetch(
             '''
-            SELECT id, "backendResultId", "createdAt"
+            SELECT id, "backendResultId", "backendResultIds", "createdAt"
             FROM assessment_run
             WHERE project_id = $1
               AND "assessedTarget" = $2
@@ -607,14 +623,14 @@ async def get_eval_result_history(wui_id: str):
         history = {}
         async with httpx.AsyncClient() as client:
             for previous_run in previous_runs:
-                if not previous_run['backendResultId']:
+                previous_backend_ids = backend_result_ids_for_run(previous_run)
+                if not previous_backend_ids:
                     continue
                 try:
-                    response = await client.get(
-                        f"{BACKEND_URL}/eval/result/{previous_run['backendResultId']}"
+                    previous_results = await fetch_merged_backend_results(
+                        client,
+                        previous_backend_ids
                     )
-                    response.raise_for_status()
-                    previous_results = response.json()
                 except (httpx.HTTPError, ValueError):
                     continue
 

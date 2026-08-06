@@ -142,6 +142,13 @@ export interface M7Comparison {
 	interpretation: string;
 }
 
+export interface M8Comparison {
+	currentWordCount: number;
+	previousWordCount: number;
+	absoluteDelta: number;
+	relativeDeltaPercent?: number;
+}
+
 export interface M9Comparison {
 	currentDensity: number;
 	previousDensity: number;
@@ -1178,6 +1185,41 @@ export function calculateM14Comparison(
 	};
 }
 
+function readM8WordCount(value: unknown): number | undefined {
+	const parsed = parseJsonValue(value);
+	const direct = finiteNumber(parsed);
+	if (direct !== undefined) {
+		return Number.isInteger(direct) && direct >= 0 ? direct : undefined;
+	}
+	if (Array.isArray(parsed)) { return readM8WordCount(parsed[0]); }
+	if (typeof parsed !== 'object' || parsed === null) { return undefined; }
+	const fields = new Map(Object.entries(parsed).map(([key, fieldValue]) => [
+		key.toLowerCase().replace(/[^a-z0-9]/g, ''), fieldValue,
+	]));
+	return readM8WordCount(
+		fields.get('wordcount') ?? fields.get('visiblewordcount') ?? fields.get('words')
+			?? fields.get('count') ?? fields.get('value')
+	);
+}
+
+export function calculateM8Comparison(
+	currentValue: unknown,
+	previousValue: unknown
+): M8Comparison | undefined {
+	const currentWordCount = readM8WordCount(currentValue);
+	const previousWordCount = readM8WordCount(previousValue);
+	if (currentWordCount === undefined || previousWordCount === undefined) { return undefined; }
+	const absoluteDelta = currentWordCount - previousWordCount;
+	return {
+		currentWordCount,
+		previousWordCount,
+		absoluteDelta,
+		relativeDeltaPercent: previousWordCount === 0
+			? undefined
+			: (absoluteDelta / previousWordCount) * 100,
+	};
+}
+
 function generateResultsHtml(results: any[], url: string, isComplete: boolean = true): string {
 	// Filter out results that are completely empty, but keep them if they are the only ones for a metric
 	const filteredResults = results.filter((r, i) => {
@@ -1601,6 +1643,24 @@ async function findM7HistoryComparison(
 	return undefined;
 }
 
+function findM8HistoryComparison(
+	currentResults: any[],
+	history: AssessmentHistory
+): { comparison: M8Comparison; previousCreatedAt: string } | undefined {
+	for (const currentResult of currentResults) {
+		if (typeof currentResult?.metric_id !== 'string' || currentResult.metric_id.split('_')[0] !== 'm8') {
+			continue;
+		}
+		const historicalResult = history.metrics[currentResult.metric_id];
+		if (!historicalResult) { continue; }
+		const comparison = calculateM8Comparison(currentResult.results, historicalResult.results);
+		if (comparison) {
+			return { comparison, previousCreatedAt: historicalResult.createdAt };
+		}
+	}
+	return undefined;
+}
+
 async function findM9HistoryComparison(
 	currentResults: any[],
 	history: AssessmentHistory
@@ -1764,9 +1824,10 @@ async function showHistoryComparison(
 	const m13Match = findM13HistoryComparison(currentResults, history);
 	const m14Match = findM14HistoryComparison(currentResults, history);
 	const m7Match = await findM7HistoryComparison(currentResults, history);
+	const m8Match = findM8HistoryComparison(currentResults, history);
 	const m9Match = await findM9HistoryComparison(currentResults, history);
 	const m10Match = await findM10HistoryComparison(currentResults, history);
-	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match && !m6Match && !m7Match && !m9Match && !m10Match && !m11Match && !m12Match && !m13Match && !m14Match) || !dimensions) {
+	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match && !m6Match && !m7Match && !m8Match && !m9Match && !m10Match && !m11Match && !m12Match && !m13Match && !m14Match) || !dimensions) {
 		return;
 	}
 
@@ -1907,6 +1968,27 @@ async function showHistoryComparison(
 			</div>
 			<p class="structural-summary">${m7Match.comparison.interpretation}</p>
 			<div class="explanation"><p>The current and previous saliency heatmaps are converted to intensity maps and normalized so every map sums to one. Jensen–Shannon divergence measures the overall distribution change, overlap compares the most salient 10% of locations, and centre movement tracks the probability-weighted attention centre. The overlay images are visual aids and are not used in the calculation. A shift in predicted attention has no universal better direction without a design goal.</p></div>
+		</section>` : '';
+
+	const m8Direction = m8Match
+		? m8Match.comparison.absoluteDelta > 0
+			? `${m8Match.comparison.absoluteDelta.toLocaleString()} ${m8Match.comparison.absoluteDelta === 1 ? 'word was' : 'words were'} added to the visible content.`
+			: m8Match.comparison.absoluteDelta < 0
+				? `${Math.abs(m8Match.comparison.absoluteDelta).toLocaleString()} ${m8Match.comparison.absoluteDelta === -1 ? 'word was' : 'words were'} removed from the visible content.`
+				: 'The visible word count did not change.'
+		: '';
+	const m8Section = m8Match ? `
+		<section class="metric-section">
+			<h2>M8 · Word count</h2>
+			<p class="previous-run">Compared with the completed run from ${new Date(m8Match.previousCreatedAt).toLocaleString()}</p>
+			<div class="grid">
+				<div class="card"><span class="label">Previous count</span><span class="value">${m8Match.comparison.previousWordCount.toLocaleString()} words</span></div>
+				<div class="card"><span class="label">Current count</span><span class="value">${m8Match.comparison.currentWordCount.toLocaleString()} words</span></div>
+				<div class="card"><span class="label">Absolute delta</span><span class="value">${signedNumber(m8Match.comparison.absoluteDelta)} words</span></div>
+				<div class="card"><span class="label">Relative delta</span><span class="value">${relativeChange(m8Match.comparison.relativeDeltaPercent)}</span></div>
+			</div>
+			<p class="structural-summary">${m8Direction}</p>
+			<div class="explanation"><p>M8 counts words in the visible page content. The absolute delta is current minus previous word count, and the relative delta expresses the change against the previous count. Added or removed content is reported without labeling either more or fewer words as inherently better.</p></div>
 		</section>` : '';
 
 	const m9Direction = m9Match
@@ -2133,6 +2215,7 @@ async function showHistoryComparison(
 		${m5Section}
 		${m6Section}
 		${m7Section}
+		${m8Section}
 		${m9Section}
 		${m10Section}
 		${m11Section}
@@ -2275,7 +2358,7 @@ export function activate(context: vscode.ExtensionContext) {
 						let history: AssessmentHistory | undefined;
 						const hasComparableResult = resultData.some(
 							(result: any) => typeof result?.metric_id === 'string'
-								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14'].includes(result.metric_id.split('_')[0])
+								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14'].includes(result.metric_id.split('_')[0])
 						);
 						if (hasComparableResult) {
 							try {

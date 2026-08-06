@@ -1,7 +1,9 @@
 import unittest
 
 from main import (
+    backend_result_ids_for_run,
     decode_backend_result_ids,
+    fetch_merged_backend_results,
     merge_metric_results,
     metric_result_index,
     normalize_assessed_target,
@@ -43,6 +45,24 @@ class FileMetricRoutingTests(unittest.TestCase):
             ['png-id', 'html-id']
         )
 
+    def test_history_uses_every_backend_job_for_split_artifacts(self):
+        self.assertEqual(
+            backend_result_ids_for_run({
+                'backendResultId': 'png-id',
+                'backendResultIds': '["png-id", "html-id"]',
+            }),
+            ['png-id', 'html-id']
+        )
+
+    def test_history_falls_back_to_legacy_single_backend_job(self):
+        self.assertEqual(
+            backend_result_ids_for_run({
+                'backendResultId': 'legacy-id',
+                'backendResultIds': None,
+            }),
+            ['legacy-id']
+        )
+
     def test_routes_word_count_to_html_and_keeps_visual_metrics_on_png(self):
         png_metrics, html_metrics = split_file_metrics([
             'm1', 'm8', 'm9_edge_density'
@@ -56,6 +76,35 @@ class FileMetricRoutingTests(unittest.TestCase):
             [{'metric_id': 'm1_png_file_size', 'results': [123]}],
             [{'metric_id': 'm8_word_count', 'results': [17]}],
         )
+
+        self.assertEqual(merged, [
+            {'metric_id': 'm1_png_file_size', 'results': [123]},
+            {'metric_id': 'm8_word_count', 'results': [17]},
+        ])
+
+
+class HistoryBackendResultTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fetches_and_merges_png_and_html_history_results(self):
+        result_sets = {
+            'png-id': [{'metric_id': 'm1_png_file_size', 'results': [123]}],
+            'html-id': [{'metric_id': 'm8_word_count', 'results': [17]}],
+        }
+
+        class Response:
+            def __init__(self, results):
+                self.results = results
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.results
+
+        class Client:
+            async def get(self, url):
+                return Response(result_sets[url.rsplit('/', 1)[-1]])
+
+        merged = await fetch_merged_backend_results(Client(), ['png-id', 'html-id'])
 
         self.assertEqual(merged, [
             {'metric_id': 'm1_png_file_size', 'results': [123]},

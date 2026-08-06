@@ -15,6 +15,7 @@ import {
 	calculateM5Comparison,
 	compareM6Segmentation,
 	compareSaliencyHeatmaps,
+	calculateM8Comparison,
 	calculateM9Comparison,
 	calculateM10Comparison,
 	calculateM11Comparison,
@@ -258,6 +259,24 @@ suite('Run Assessment flow', () => {
 		assert.strictEqual(comparison?.jensenShannonDivergence, 0);
 		assert.strictEqual(comparison?.salientRegionOverlap, 1);
 		assert.strictEqual(comparison?.centerMovement, 0);
+	});
+
+	test('compares M8 word count using absolute and relative deltas', () => {
+		const comparison = calculateM8Comparison({ visible_word_count: 150 }, ['120']);
+		assert.ok(comparison);
+		assert.strictEqual(comparison.previousWordCount, 120);
+		assert.strictEqual(comparison.currentWordCount, 150);
+		assert.strictEqual(comparison.absoluteDelta, 30);
+		assert.strictEqual(comparison.relativeDeltaPercent, 25);
+	});
+
+	test('reports removed M8 content and omits relative change for a zero baseline', () => {
+		const removed = calculateM8Comparison([80], [100]);
+		assert.strictEqual(removed?.absoluteDelta, -20);
+		assert.strictEqual(removed?.relativeDeltaPercent, -20);
+		const zeroBaseline = calculateM8Comparison({ count: 12 }, { words: 0 });
+		assert.strictEqual(zeroBaseline?.absoluteDelta, 12);
+		assert.strictEqual(zeroBaseline?.relativeDeltaPercent, undefined);
 	});
 
 	test('uses the M9 scalar as the primary percentage-point comparison', () => {
