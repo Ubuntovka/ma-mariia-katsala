@@ -197,6 +197,11 @@ export interface M13Comparison {
 	byRule: AccessibilityCountComparison[];
 }
 
+export interface M14Comparison {
+	mean: NumericChange;
+	standardDeviation: NumericChange;
+}
+
 function finiteNumber(value: unknown): number | undefined {
 	if (typeof value === 'number' && Number.isFinite(value)) {
 		return value;
@@ -1126,6 +1131,53 @@ export function summarizeM13Comparison(comparison: M13Comparison): string {
 	return `${resolved || introduced}.`;
 }
 
+function readM14Values(value: unknown): { mean: number; standardDeviation: number } | undefined {
+	const parsed = parseJsonValue(value);
+	if (Array.isArray(parsed)) {
+		if (parsed.length === 1) { return readM14Values(parsed[0]); }
+		const mean = finiteNumber(parsed[0]);
+		const standardDeviation = finiteNumber(parsed[1]);
+		return mean === undefined || standardDeviation === undefined
+			? undefined
+			: { mean, standardDeviation };
+	}
+	if (typeof parsed !== 'object' || parsed === null) { return undefined; }
+	const fields = new Map(Object.entries(parsed).map(([key, fieldValue]) => [
+		key.toLowerCase().replace(/[^a-z0-9]/g, ''), fieldValue,
+	]));
+	const mean = finiteNumber(
+		fields.get('mean') ?? fields.get('meanscore') ?? fields.get('nimascore') ?? fields.get('score')
+	);
+	const standardDeviation = finiteNumber(
+		fields.get('standarddeviation') ?? fields.get('stddeviation') ?? fields.get('stddev')
+			?? fields.get('stdev') ?? fields.get('std') ?? fields.get('sd')
+	);
+	return mean === undefined || standardDeviation === undefined
+		? undefined
+		: { mean, standardDeviation };
+}
+
+export function calculateM14Comparison(
+	currentValue: unknown,
+	previousValue: unknown
+): M14Comparison | undefined {
+	const current = readM14Values(currentValue);
+	const previous = readM14Values(previousValue);
+	if (!current || !previous) { return undefined; }
+	return {
+		mean: {
+			current: current.mean,
+			previous: previous.mean,
+			delta: current.mean - previous.mean,
+		},
+		standardDeviation: {
+			current: current.standardDeviation,
+			previous: previous.standardDeviation,
+			delta: current.standardDeviation - previous.standardDeviation,
+		},
+	};
+}
+
 function generateResultsHtml(results: any[], url: string, isComplete: boolean = true): string {
 	// Filter out results that are completely empty, but keep them if they are the only ones for a metric
 	const filteredResults = results.filter((r, i) => {
@@ -1464,6 +1516,24 @@ function findM13HistoryComparison(
 	return undefined;
 }
 
+function findM14HistoryComparison(
+	currentResults: any[],
+	history: AssessmentHistory
+): { comparison: M14Comparison; previousCreatedAt: string } | undefined {
+	for (const currentResult of currentResults) {
+		if (typeof currentResult?.metric_id !== 'string' || currentResult.metric_id.split('_')[0] !== 'm14') {
+			continue;
+		}
+		const historicalResult = history.metrics[currentResult.metric_id];
+		if (!historicalResult) { continue; }
+		const comparison = calculateM14Comparison(currentResult.results, historicalResult.results);
+		if (comparison) {
+			return { comparison, previousCreatedAt: historicalResult.createdAt };
+		}
+	}
+	return undefined;
+}
+
 function readM7ImageUrls(value: unknown): { heatmap: string; overlay?: string } | undefined {
 	if (Array.isArray(value)) {
 		const urls = value.filter((item): item is string =>
@@ -1692,10 +1762,11 @@ async function showHistoryComparison(
 	const m11Match = findM11HistoryComparison(currentResults, history);
 	const m12Match = findM12HistoryComparison(currentResults, history);
 	const m13Match = findM13HistoryComparison(currentResults, history);
+	const m14Match = findM14HistoryComparison(currentResults, history);
 	const m7Match = await findM7HistoryComparison(currentResults, history);
 	const m9Match = await findM9HistoryComparison(currentResults, history);
 	const m10Match = await findM10HistoryComparison(currentResults, history);
-	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match && !m6Match && !m7Match && !m9Match && !m10Match && !m11Match && !m12Match && !m13Match) || !dimensions) {
+	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match && !m6Match && !m7Match && !m9Match && !m10Match && !m11Match && !m12Match && !m13Match && !m14Match) || !dimensions) {
 		return;
 	}
 
@@ -1968,6 +2039,33 @@ async function showHistoryComparison(
 			<div class="explanation"><p>Each issue is identified by its accessibility rule ID and affected element target. Current issues absent from the previous run are new regressions; previous issues absent from the current run are resolved improvements; their intersection is persistent. Totals are also grouped independently by impact level and rule, so a stable overall count cannot hide one resolved issue being replaced by a different new issue.</p></div>
 		</section>` : '';
 
+	const m14MeanDirection = m14Match
+		? m14Match.comparison.mean.delta > 0
+			? 'The mean score increased, normally indicating better predicted image quality or aesthetics.'
+			: m14Match.comparison.mean.delta < 0
+				? 'The mean score decreased, normally indicating lower predicted image quality or aesthetics.'
+				: 'The mean predicted image-quality score did not change.'
+		: '';
+	const m14SpreadDirection = m14Match
+		? m14Match.comparison.standardDeviation.delta > 0
+			? 'Predicted ratings became more spread out, indicating greater disagreement.'
+			: m14Match.comparison.standardDeviation.delta < 0
+				? 'Predicted ratings became less spread out, indicating greater agreement.'
+				: 'The spread of predicted ratings did not change.'
+		: '';
+	const m14Section = m14Match ? `
+		<section class="metric-section">
+			<h2>M14 · NIMA</h2>
+			<p class="previous-run">Compared with the completed run from ${new Date(m14Match.previousCreatedAt).toLocaleString()}</p>
+			<div class="table-wrap"><table><thead><tr><th>Output</th><th>Previous</th><th>Current</th><th>Delta</th></tr></thead><tbody>
+				${labComparisonRow('Mean score', m14Match.comparison.mean)}
+				${labComparisonRow('Standard deviation', m14Match.comparison.standardDeviation)}
+			</tbody></table></div>
+			<p class="structural-summary">${m14MeanDirection}</p>
+			<p class="variation-summary">${m14SpreadDirection}</p>
+			<div class="explanation"><p>NIMA predicts a distribution of aesthetic image ratings. The mean and standard deviation are compared independently. A higher mean normally indicates better predicted image quality or aesthetics. Standard deviation measures disagreement or spread among predicted ratings and is not itself a quality score.</p></div>
+		</section>` : '';
+
 	const panel = vscode.window.createWebviewPanel(
 		'historyComparison',
 		'Assessment History Comparison',
@@ -2040,6 +2138,7 @@ async function showHistoryComparison(
 		${m11Section}
 		${m12Section}
 		${m13Section}
+		${m14Section}
 	</main>
 </body>
 </html>`;
@@ -2175,7 +2274,7 @@ export function activate(context: vscode.ExtensionContext) {
 						let history: AssessmentHistory | undefined;
 						const hasComparableResult = resultData.some(
 							(result: any) => typeof result?.metric_id === 'string'
-								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm9', 'm10', 'm11', 'm12', 'm13'].includes(result.metric_id.split('_')[0])
+								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14'].includes(result.metric_id.split('_')[0])
 						);
 						if (hasComparableResult) {
 							try {

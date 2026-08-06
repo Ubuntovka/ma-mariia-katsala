@@ -21,6 +21,7 @@ import {
 	calculateM12Comparison,
 	calculateM13Comparison,
 	summarizeM13Comparison,
+	calculateM14Comparison,
 	normalizeUiedElements,
 	getColorfulnessInterpretation,
 } from '../extension';
@@ -375,6 +376,27 @@ suite('Run Assessment flow', () => {
 			summarizeM13Comparison(comparison),
 			'2 accessibility problems were resolved, but 1 new serious color-contrast violation appeared on #checkout-button.'
 		);
+	});
+
+	test('compares the M14 NIMA mean and standard deviation independently', () => {
+		const comparison = calculateM14Comparison([6.8, 1.2], [6.2, 1.5]);
+		assert.ok(comparison);
+		assert.strictEqual(comparison.mean.previous, 6.2);
+		assert.strictEqual(comparison.mean.current, 6.8);
+		assert.ok(Math.abs(comparison.mean.delta - 0.6) < 1e-10);
+		assert.strictEqual(comparison.standardDeviation.previous, 1.5);
+		assert.strictEqual(comparison.standardDeviation.current, 1.2);
+		assert.ok(Math.abs(comparison.standardDeviation.delta + 0.3) < 1e-10);
+	});
+
+	test('reads named M14 NIMA fields from JSON results', () => {
+		const comparison = calculateM14Comparison(
+			JSON.stringify({ mean_score: 7.1, standard_deviation: 0.9 }),
+			{ score: 6.9, std: 1.1 }
+		);
+		assert.ok(comparison);
+		assert.ok(Math.abs(comparison.mean.delta - 0.2) < 1e-10);
+		assert.ok(Math.abs(comparison.standardDeviation.delta + 0.2) < 1e-10);
 	});
 
 	test('reads actual dimensions from a PNG header', () => {
