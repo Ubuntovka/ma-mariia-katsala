@@ -2242,7 +2242,8 @@ export function activate(context: vscode.ExtensionContext) {
 						request.assessments,
 						gitInfo,
 						localUrl,
-						result.screenshotDimensions
+						result.screenshotDimensions,
+						result.html
 					);
 					const wui_id = resp?.result_id;
 					if (!wui_id) {

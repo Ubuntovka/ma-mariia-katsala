@@ -1,6 +1,12 @@
 import unittest
 
-from main import metric_result_index, normalize_assessed_target
+from main import (
+    decode_backend_result_ids,
+    merge_metric_results,
+    metric_result_index,
+    normalize_assessed_target,
+    split_file_metrics,
+)
 
 
 class AssessedTargetTests(unittest.TestCase):
@@ -28,6 +34,33 @@ class MetricResultIndexTests(unittest.TestCase):
             {'metric_id': 'm1_png_file_size', 'results': [42]},
         ])
         self.assertEqual(indexed['m1_png_file_size']['results'], [42])
+
+
+class FileMetricRoutingTests(unittest.TestCase):
+    def test_decodes_jsonb_backend_ids_returned_by_asyncpg(self):
+        self.assertEqual(
+            decode_backend_result_ids('["png-id", "html-id"]'),
+            ['png-id', 'html-id']
+        )
+
+    def test_routes_word_count_to_html_and_keeps_visual_metrics_on_png(self):
+        png_metrics, html_metrics = split_file_metrics([
+            'm1', 'm8', 'm9_edge_density'
+        ])
+
+        self.assertEqual(png_metrics, ['m1', 'm9_edge_density'])
+        self.assertEqual(html_metrics, ['m8'])
+
+    def test_merges_results_from_png_and_html_evaluations(self):
+        merged = merge_metric_results(
+            [{'metric_id': 'm1_png_file_size', 'results': [123]}],
+            [{'metric_id': 'm8_word_count', 'results': [17]}],
+        )
+
+        self.assertEqual(merged, [
+            {'metric_id': 'm1_png_file_size', 'results': [123]},
+            {'metric_id': 'm8_word_count', 'results': [17]},
+        ])
 
 
 if __name__ == '__main__':

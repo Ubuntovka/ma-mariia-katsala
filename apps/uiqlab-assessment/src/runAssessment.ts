@@ -82,7 +82,9 @@ import * as http from 'http';
 import * as https from 'https';
 
 const ORCHESTRATOR_BASE = 'http://127.0.0.1:8181';
-const MAX_MULTIPART_BODY_BYTES = 1024 * 1024;
+// The orchestrator receives both the screenshot and rendered HTML when a DOM
+// metric is selected. It forwards them to the evaluator as separate requests.
+const MAX_MULTIPART_BODY_BYTES = 10 * 1024 * 1024;
 
 import FormData = require('form-data');
 
@@ -242,18 +244,31 @@ export async function submitFileForEvaluation(
 	selectedAssessments: AssessmentName[],
 	gitInfo: GitInfo,
 	assessedTarget?: string,
-	screenshotDimensions?: { width: number; height: number }
+	screenshotDimensions?: { width: number; height: number },
+	htmlContent?: string
 ): Promise<any> {
 	if (!Buffer.isBuffer(fileData)) {
 		throw new Error('fileData must be a Buffer');
 	}
 
 	const form = new FormData();
+	const metricIds = toMetricIds(selectedAssessments);
+	const needsHtml = metricIds.some((metricId) => metricId.split('_')[0] === 'm8');
+	if (needsHtml && htmlContent === undefined) {
+		throw new Error('Word count requires the captured HTML artifact');
+	}
+
 	form.append('file', fileData, {
 		filename: fileName,
 		contentType: contentType,
 	} as any);
-	toMetricIds(selectedAssessments).forEach((m) => {
+	if (needsHtml && htmlContent !== undefined) {
+		form.append('html', Buffer.from(htmlContent, 'utf8'), {
+			filename: 'capture.html',
+			contentType: 'text/html',
+		} as any);
+	}
+	metricIds.forEach((m) => {
 		form.append('mm', m);
 	});
 
@@ -278,7 +293,7 @@ export async function submitFileForEvaluation(
 	const bodyLength = form.getLengthSync();
 	if (bodyLength > MAX_MULTIPART_BODY_BYTES) {
 		throw new Error(
-			`Captured page upload is ${bodyLength} bytes, exceeding the 1 MiB backend limit.`,
+			`Captured page upload is ${bodyLength} bytes, exceeding the 10 MiB orchestrator limit.`,
 		);
 	}
 	headers['content-length'] = String(bodyLength);
