@@ -12,6 +12,7 @@ import {
 	AssessmentHistory,
 } from './runAssessment';
 import { execSync } from 'child_process';
+import { PNG } from 'pngjs';
 import { getOrCreateProjectConfig, ProjectConfig } from './projectConfig';
 import { AssessmentSidebarProvider } from './assessmentSidebar';
 
@@ -123,6 +124,22 @@ export interface M6Comparison {
 	removedTypes: string[];
 	movedTypes: string[];
 	resizedTypes: string[];
+}
+
+export interface SaliencyCenter {
+	x: number;
+	y: number;
+}
+
+export interface M7Comparison {
+	jensenShannonDivergence: number;
+	salientRegionOverlap: number;
+	previousCenter: SaliencyCenter;
+	currentCenter: SaliencyCenter;
+	centerMovement: number;
+	previousRegion: string;
+	currentRegion: string;
+	interpretation: string;
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -579,6 +596,114 @@ export function compareM6Segmentation(
 	};
 }
 
+function sampledSaliencyMap(png: PNG, step: number): { intensities: number[]; points: SaliencyCenter[] } {
+	const intensities: number[] = [];
+	const points: SaliencyCenter[] = [];
+	for (let y = 0; y < png.height; y += step) {
+		for (let x = 0; x < png.width; x += step) {
+			const offset = (y * png.width + x) * 4;
+			const intensity = 0.2126 * png.data[offset]
+				+ 0.7152 * png.data[offset + 1]
+				+ 0.0722 * png.data[offset + 2];
+			intensities.push(intensity);
+			points.push({ x: (x + 0.5) / png.width, y: (y + 0.5) / png.height });
+		}
+	}
+	return { intensities, points };
+}
+
+function probabilityMap(intensities: number[]): number[] {
+	const minimum = intensities.reduce((result, value) => Math.min(result, value), Number.POSITIVE_INFINITY);
+	const adjusted = intensities.map((value) => Math.max(0, value - minimum));
+	const total = adjusted.reduce((sum, value) => sum + value, 0);
+	return total > 0
+		? adjusted.map((value) => value / total)
+		: adjusted.map(() => 1 / adjusted.length);
+}
+
+function saliencyCenter(probabilities: number[], points: SaliencyCenter[]): SaliencyCenter {
+	return probabilities.reduce((center, probability, index) => ({
+		x: center.x + probability * points[index].x,
+		y: center.y + probability * points[index].y,
+	}), { x: 0, y: 0 });
+}
+
+function mostSalientLocations(intensities: number[]): Set<number> {
+	const count = Math.max(1, Math.ceil(intensities.length * 0.1));
+	const indices = intensities.map((_, index) => index);
+	indices.sort((left, right) => intensities[right] - intensities[left] || left - right);
+	return new Set(indices.slice(0, count));
+}
+
+function attentionRegion(center: SaliencyCenter): string {
+	if (center.y < 0.25) { return 'header'; }
+	if (center.y > 0.75) { return 'footer'; }
+	if (center.x < 0.25) { return 'left sidebar'; }
+	if (center.x > 0.75) { return 'right sidebar'; }
+	return 'main content';
+}
+
+export function compareSaliencyHeatmaps(currentPng: Buffer, previousPng: Buffer): M7Comparison | undefined {
+	let current: PNG;
+	let previous: PNG;
+	try {
+		current = PNG.sync.read(currentPng);
+		previous = PNG.sync.read(previousPng);
+	} catch {
+		return undefined;
+	}
+	if (current.width !== previous.width || current.height !== previous.height
+		|| current.width === 0 || current.height === 0) {
+		return undefined;
+	}
+	const step = Math.max(1, Math.ceil(Math.sqrt((current.width * current.height) / 76800)));
+	const currentSample = sampledSaliencyMap(current, step);
+	const previousSample = sampledSaliencyMap(previous, step);
+	const currentProbability = probabilityMap(currentSample.intensities);
+	const previousProbability = probabilityMap(previousSample.intensities);
+	let divergence = 0;
+	for (let index = 0; index < currentProbability.length; index++) {
+		const currentValue = currentProbability[index];
+		const previousValue = previousProbability[index];
+		const midpoint = (currentValue + previousValue) / 2;
+		if (currentValue > 0) { divergence += 0.5 * currentValue * Math.log2(currentValue / midpoint); }
+		if (previousValue > 0) { divergence += 0.5 * previousValue * Math.log2(previousValue / midpoint); }
+	}
+	const currentSalientLocations = mostSalientLocations(currentSample.intensities);
+	const previousSalientLocations = mostSalientLocations(previousSample.intensities);
+	let intersection = 0;
+	let union = 0;
+	for (let index = 0; index < currentSample.intensities.length; index++) {
+		const currentSalient = currentSalientLocations.has(index);
+		const previousSalient = previousSalientLocations.has(index);
+		if (currentSalient && previousSalient) { intersection++; }
+		if (currentSalient || previousSalient) { union++; }
+	}
+	const currentCenter = saliencyCenter(currentProbability, currentSample.points);
+	const previousCenter = saliencyCenter(previousProbability, previousSample.points);
+	const centerMovement = Math.hypot(
+		currentCenter.x - previousCenter.x,
+		currentCenter.y - previousCenter.y
+	);
+	const currentRegion = attentionRegion(currentCenter);
+	const previousRegion = attentionRegion(previousCenter);
+	const interpretation = currentRegion !== previousRegion
+		? `User attention is predicted to shift from the ${previousRegion} to the ${currentRegion}.`
+		: centerMovement < 0.03
+			? `Predicted user attention remains concentrated in the ${currentRegion}.`
+			: `Predicted user attention moves within the ${currentRegion}.`;
+	return {
+		jensenShannonDivergence: divergence,
+		salientRegionOverlap: union > 0 ? intersection / union : 1,
+		previousCenter,
+		currentCenter,
+		centerMovement,
+		previousRegion,
+		currentRegion,
+		interpretation,
+	};
+}
+
 function generateResultsHtml(results: any[], url: string, isComplete: boolean = true): string {
 	// Filter out results that are completely empty, but keep them if they are the only ones for a metric
 	const filteredResults = results.filter((r, i) => {
@@ -863,6 +988,73 @@ function findM6HistoryComparison(
 	return undefined;
 }
 
+function readM7ImageUrls(value: unknown): { heatmap: string; overlay?: string } | undefined {
+	if (Array.isArray(value)) {
+		const urls = value.filter((item): item is string =>
+			typeof item === 'string' && /^https?:\/\//.test(item)
+		);
+		if (urls.length > 0) { return { heatmap: urls[0], overlay: urls[1] }; }
+	}
+	if (typeof value !== 'object' || value === null) { return undefined; }
+	const fields = value as Record<string, unknown>;
+	const heatmap = fields.heatmap ?? fields.saliencyHeatmap ?? fields.saliency_heatmap;
+	const overlay = fields.overlay ?? fields.heatmapOverlay ?? fields.heatmap_overlay;
+	return typeof heatmap === 'string'
+		? { heatmap, overlay: typeof overlay === 'string' ? overlay : undefined }
+		: undefined;
+}
+
+async function fetchImageBuffer(url: string): Promise<Buffer> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 10_000);
+	try {
+		const response = await fetch(url, { signal: controller.signal });
+		if (!response.ok) { throw new Error(`HTTP ${response.status} fetching saliency heatmap`); }
+		const content = Buffer.from(await response.arrayBuffer());
+		if (content.length > 20 * 1024 * 1024) { throw new Error('Saliency heatmap exceeds 20 MiB'); }
+		return content;
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+async function findM7HistoryComparison(
+	currentResults: any[],
+	history: AssessmentHistory
+): Promise<{
+	comparison: M7Comparison;
+	previousCreatedAt: string;
+	currentHeatmapUrl: string;
+	previousHeatmapUrl: string;
+} | undefined> {
+	for (const currentResult of currentResults) {
+		if (typeof currentResult?.metric_id !== 'string' || currentResult.metric_id.split('_')[0] !== 'm7') {
+			continue;
+		}
+		const historicalResult = history.metrics[currentResult.metric_id];
+		if (!historicalResult) { continue; }
+		const currentUrls = readM7ImageUrls(currentResult.results);
+		const previousUrls = readM7ImageUrls(historicalResult.results);
+		if (!currentUrls || !previousUrls) { continue; }
+		try {
+			const [currentImage, previousImage] = await Promise.all([
+				fetchImageBuffer(currentUrls.heatmap),
+				fetchImageBuffer(previousUrls.heatmap),
+			]);
+			const comparison = compareSaliencyHeatmaps(currentImage, previousImage);
+			if (comparison) {
+				return {
+					comparison,
+					previousCreatedAt: historicalResult.createdAt,
+					currentHeatmapUrl: currentUrls.heatmap,
+					previousHeatmapUrl: previousUrls.heatmap,
+				};
+			}
+		} catch { }
+	}
+	return undefined;
+}
+
 function signedNumber(value: number, maximumFractionDigits: number = 0): string {
 	if (value === 0 || Object.is(value, -0)) {
 		return '0';
@@ -905,11 +1097,11 @@ function structuralAction(count: number, action: string, types: string[]): strin
 	return `${count} components ${action}${breakdown}`;
 }
 
-function showHistoryComparison(
+async function showHistoryComparison(
 	currentResults: any[],
 	history: AssessmentHistory,
 	url: string
-): void {
+): Promise<void> {
 	const m1Match = findM1HistoryComparison(currentResults, history);
 	const m2Match = findM2HistoryComparison(currentResults, history);
 	const m3Match = findM3HistoryComparison(currentResults, history);
@@ -919,7 +1111,8 @@ function showHistoryComparison(
 	const m6Match = dimensions
 		? findM6HistoryComparison(currentResults, history, dimensions)
 		: undefined;
-	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match && !m6Match) || !dimensions) {
+	const m7Match = await findM7HistoryComparison(currentResults, history);
+	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match && !m6Match && !m7Match) || !dimensions) {
 		return;
 	}
 
@@ -1044,6 +1237,24 @@ function showHistoryComparison(
 			<div class="explanation"><p>This is structural change detection. UIED components are converted to normalized screenshot coordinates, paired by compatible component type and the best one-to-one bounding-box IoU assignment, then classified as added, removed, moved, or resized. The segmented preview image is not used for matching.</p></div>
 		</section>` : '';
 
+	const m7Section = m7Match ? `
+		<section class="metric-section">
+			<h2>M7 · UMSI saliency shift</h2>
+			<p class="previous-run">Compared with the completed run from ${new Date(m7Match.previousCreatedAt).toLocaleString()}</p>
+			<div class="heatmap-grid">
+				<figure><img src="${escapeHtml(m7Match.previousHeatmapUrl)}" alt="Previous UMSI saliency heatmap"><figcaption>Previous heatmap</figcaption></figure>
+				<figure><img src="${escapeHtml(m7Match.currentHeatmapUrl)}" alt="Current UMSI saliency heatmap"><figcaption>Current heatmap</figcaption></figure>
+			</div>
+			<div class="grid">
+				<div class="card"><span class="label">Jensen–Shannon divergence</span><span class="value">${m7Match.comparison.jensenShannonDivergence.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span></div>
+				<div class="card"><span class="label">Top-10% salient-region overlap</span><span class="value">${(m7Match.comparison.salientRegionOverlap * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%</span></div>
+				<div class="card"><span class="label">Saliency-centre movement</span><span class="value">${(m7Match.comparison.centerMovement * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%</span></div>
+				<div class="card"><span class="label">Attention regions</span><span class="value text-value">${m7Match.comparison.previousRegion} → ${m7Match.comparison.currentRegion}</span></div>
+			</div>
+			<p class="structural-summary">${m7Match.comparison.interpretation}</p>
+			<div class="explanation"><p>The current and previous saliency heatmaps are converted to intensity maps and normalized so every map sums to one. Jensen–Shannon divergence measures the overall distribution change, overlap compares the most salient 10% of locations, and centre movement tracks the probability-weighted attention centre. The overlay images are visual aids and are not used in the calculation. A shift in predicted attention has no universal better direction without a design goal.</p></div>
+		</section>` : '';
+
 	const panel = vscode.window.createWebviewPanel(
 		'historyComparison',
 		'Assessment History Comparison',
@@ -1087,6 +1298,10 @@ function showHistoryComparison(
 		.type-details { display: grid; grid-template-columns: max-content 1fr; gap: 7px 14px; margin: 14px 0 0; }
 		.type-details dt { color: var(--vscode-descriptionForeground); }
 		.type-details dd { margin: 0; }
+		.heatmap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 18px; }
+		figure { margin: 0; }
+		figure img { display: block; width: 100%; max-height: 280px; object-fit: contain; border: 1px solid var(--vscode-widget-border); border-radius: 6px; }
+		figcaption { margin-top: 7px; color: var(--vscode-descriptionForeground); text-align: center; }
 		.explanation { padding: 18px; border-left: 4px solid var(--vscode-focusBorder); background: var(--vscode-textBlockQuote-background); line-height: 1.55; }
 		.explanation p { margin: 0; }
 	</style>
@@ -1101,6 +1316,7 @@ function showHistoryComparison(
 		${m4Section}
 		${m5Section}
 		${m6Section}
+		${m7Section}
 	</main>
 </body>
 </html>`;
@@ -1236,7 +1452,7 @@ export function activate(context: vscode.ExtensionContext) {
 						let history: AssessmentHistory | undefined;
 						const hasComparableResult = resultData.some(
 							(result: any) => typeof result?.metric_id === 'string'
-								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6'].includes(result.metric_id.split('_')[0])
+								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7'].includes(result.metric_id.split('_')[0])
 						);
 						if (hasComparableResult) {
 							try {
@@ -1245,7 +1461,7 @@ export function activate(context: vscode.ExtensionContext) {
 						}
 						createResultsWebview(panel, resultData, localUrl, true);
 						if (history) {
-							showHistoryComparison(resultData, history, localUrl);
+							await showHistoryComparison(resultData, history, localUrl);
 						}
 						vscode.window.showInformationMessage('UIQLab assessment complete. Results are ready.');
 					} else {

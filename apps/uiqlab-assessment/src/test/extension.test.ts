@@ -14,10 +14,12 @@ import {
 	calculateM4Comparison,
 	calculateM5Comparison,
 	compareM6Segmentation,
+	compareSaliencyHeatmaps,
 	normalizeUiedElements,
 	getColorfulnessInterpretation,
 } from '../extension';
 import { getPngDimensions } from '../playwrightCapture';
+import { PNG } from 'pngjs';
 
 suite('Run Assessment flow', () => {
 	test('exposes all assessment names and data source options', () => {
@@ -227,6 +229,30 @@ suite('Run Assessment flow', () => {
 		assert.deepStrictEqual(comparison.movedTypes.sort(), ['header', 'text']);
 	});
 
+	test('compares normalized M7 saliency maps and detects attention movement', () => {
+		const previous = createSyntheticHeatmap(1);
+		const current = createSyntheticHeatmap(4);
+		const comparison = compareSaliencyHeatmaps(current, previous);
+		assert.ok(comparison);
+		assert.ok(Math.abs(comparison.jensenShannonDivergence - 1) < 1e-10);
+		assert.strictEqual(comparison.salientRegionOverlap, 0);
+		assert.strictEqual(comparison.previousRegion, 'header');
+		assert.strictEqual(comparison.currentRegion, 'main content');
+		assert.ok(Math.abs(comparison.centerMovement - 0.3) < 1e-10);
+		assert.strictEqual(
+			comparison.interpretation,
+			'User attention is predicted to shift from the header to the main content.'
+		);
+	});
+
+	test('reports identical M7 heatmaps as fully overlapping', () => {
+		const heatmap = createSyntheticHeatmap(2);
+		const comparison = compareSaliencyHeatmaps(heatmap, heatmap);
+		assert.strictEqual(comparison?.jensenShannonDivergence, 0);
+		assert.strictEqual(comparison?.salientRegionOverlap, 1);
+		assert.strictEqual(comparison?.centerMovement, 0);
+	});
+
 	test('reads actual dimensions from a PNG header', () => {
 		const pngHeader = Buffer.alloc(24);
 		Buffer.from('89504e470d0a1a0a', 'hex').copy(pngHeader);
@@ -235,6 +261,21 @@ suite('Run Assessment flow', () => {
 		assert.deepStrictEqual(getPngDimensions(pngHeader), { width: 1440, height: 900 });
 	});
 });
+
+function createSyntheticHeatmap(salientRow: number): Buffer {
+	const png = new PNG({ width: 10, height: 10 });
+	for (let y = 0; y < png.height; y++) {
+		for (let x = 0; x < png.width; x++) {
+			const offset = (y * png.width + x) * 4;
+			const value = y === salientRow ? 255 : 0;
+			png.data[offset] = value;
+			png.data[offset + 1] = value;
+			png.data[offset + 2] = value;
+			png.data[offset + 3] = 255;
+		}
+	}
+	return PNG.sync.write(png);
+}
 
 function createUiMock(answers: Array<string | string[] | undefined>): QuickPickUi {
 	return {
