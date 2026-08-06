@@ -4,10 +4,12 @@ import {
 	submitUrlForEvaluation,
 	submitFileForEvaluation,
 	pollEvaluationResult,
+	fetchAssessmentHistory,
 	toMetricIds,
 	getMetricInfoById,
 	GitInfo,
 	AssessmentRunRequest,
+	AssessmentHistory,
 } from './runAssessment';
 import { execSync } from 'child_process';
 import { getOrCreateProjectConfig, ProjectConfig } from './projectConfig';
@@ -50,13 +52,45 @@ function createResultsWebview(
 	panel: vscode.WebviewPanel,
 	results: any[],
 	url: string,
-	isComplete: boolean = true
+	isComplete: boolean = true,
+	history?: AssessmentHistory
 ): void {
-	const html = generateResultsHtml(results, url, isComplete);
+	const html = generateResultsHtml(results, url, isComplete, history);
 	panel.webview.html = html;
 }
 
-function generateResultsHtml(results: any[], url: string, isComplete: boolean = true): string {
+export function calculateNumericDifference(current: unknown, previous: unknown): number | undefined {
+	const currentNumber = typeof current === 'number'
+		? current
+		: typeof current === 'string' && current.trim() !== ''
+			? Number(current)
+			: Number.NaN;
+	const previousNumber = typeof previous === 'number'
+		? previous
+		: typeof previous === 'string' && previous.trim() !== ''
+			? Number(previous)
+			: Number.NaN;
+
+	if (!Number.isFinite(currentNumber) || !Number.isFinite(previousNumber)) {
+		return undefined;
+	}
+	return currentNumber - previousNumber;
+}
+
+export function formatNumericDifference(difference: number): string {
+	const rounded = Number(difference.toPrecision(6));
+	if (Object.is(rounded, -0) || rounded === 0) {
+		return '0';
+	}
+	return `${rounded > 0 ? '+' : ''}${rounded}`;
+}
+
+function generateResultsHtml(
+	results: any[],
+	url: string,
+	isComplete: boolean = true,
+	history?: AssessmentHistory
+): string {
 	// Filter out results that are completely empty, but keep them if they are the only ones for a metric
 	const filteredResults = results.filter((r, i) => {
 		if (Array.isArray(r.results) && r.results.length > 0) {
@@ -76,6 +110,12 @@ function generateResultsHtml(results: any[], url: string, isComplete: boolean = 
 		const metric = getMetricInfoById(r.metric_id);
 		const metricName = metric?.name || r.metric_id;
 		const resultValues = Array.isArray(r.results) ? r.results : [r.results];
+		const historicalResult = history?.metrics?.[r.metric_id];
+		const previousValues = Array.isArray(historicalResult?.results)
+			? historicalResult.results
+			: historicalResult
+				? [historicalResult.results]
+				: [];
 
 		return `
 		<div class="metric-result">
@@ -90,7 +130,11 @@ function generateResultsHtml(results: any[], url: string, isComplete: boolean = 
 					} else {
 						displayVal = val;
 					}
-					return `<div class="result-item"><strong>Result ${i + 1}:</strong> ${displayVal}</div>`;
+					const difference = calculateNumericDifference(val, previousValues[i]);
+					const comparison = difference === undefined
+						? ''
+						: `<span class="comparison">${formatNumericDifference(difference)} vs previous run</span>`;
+					return `<div class="result-item"><strong>Result ${i + 1}:</strong> ${displayVal}${comparison}</div>`;
 				}).join('')}
 			</div>
 		</div>
@@ -183,6 +227,16 @@ function generateResultsHtml(results: any[], url: string, isComplete: boolean = 
 			color: #764ba2;
 			margin-right: 8px;
 		}
+		.comparison {
+			display: inline-block;
+			margin-left: 10px;
+			padding: 2px 7px;
+			border-radius: 10px;
+			background: rgba(102, 126, 234, 0.12);
+			color: #4c5fc7;
+			font-size: 12px;
+			font-weight: 600;
+		}
 		.empty-state {
 			text-align: center;
 			padding: 40px 20px;
@@ -268,7 +322,11 @@ export function activate(context: vscode.ExtensionContext) {
 							if (!panel) {
 								panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
 							}
-							createResultsWebview(panel, results, deploymentUrl, true);
+							let history: AssessmentHistory | undefined;
+							try {
+								history = await fetchAssessmentHistory(wui_id);
+							} catch { }
+							createResultsWebview(panel, results, deploymentUrl, true, history);
 						}
 
 						return results;
@@ -328,7 +386,11 @@ export function activate(context: vscode.ExtensionContext) {
 						if (!panel) {
 							panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
 						}
-						createResultsWebview(panel, resultData, localUrl, true);
+						let history: AssessmentHistory | undefined;
+						try {
+							history = await fetchAssessmentHistory(wui_id);
+						} catch { }
+						createResultsWebview(panel, resultData, localUrl, true, history);
 						vscode.window.showInformationMessage('UIQLab assessment complete. Results are ready.');
 					} else {
 						vscode.window.showInformationMessage('Timed out or cancelled waiting for evaluation result.');

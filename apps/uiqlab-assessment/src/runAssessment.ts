@@ -49,6 +49,15 @@ export interface GitInfo {
 	mergeRequestId?: string;
 }
 
+export interface HistoricalMetricResult {
+	results: any;
+	createdAt: string;
+}
+
+export interface AssessmentHistory {
+	metrics: Record<string, HistoricalMetricResult>;
+}
+
 export interface QuickPickUi {
 	showQuickPick(
 		items: readonly string[],
@@ -77,7 +86,7 @@ const MAX_MULTIPART_BODY_BYTES = 1024 * 1024;
 import FormData = require('form-data');
 
 
-async function httpGetJson<T>(url: string): Promise<T> {
+async function httpGetJson<T>(url: string, timeoutMs: number = 100): Promise<T> {
 	const parsed = new URL(url);
 	const lib = parsed.protocol === 'https:' ? https : http;
 
@@ -98,7 +107,7 @@ async function httpGetJson<T>(url: string): Promise<T> {
 			});
 		});
 		req.on('error', reject);
-		req.setTimeout(100, () => {
+		req.setTimeout(timeoutMs, () => {
 			req.destroy();
 			reject(new Error(`Timeout fetching ${url}`));
 		});
@@ -312,6 +321,13 @@ export function toMetricIds(selectedAssessments: AssessmentName[]): string[] {
 
 export async function fetchEvaluationResult(wui_id: string): Promise<any> {
 	return await httpGetJson(`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}`);
+}
+
+export async function fetchAssessmentHistory(wui_id: string): Promise<AssessmentHistory> {
+	return await httpGetJson(
+		`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}/history`,
+		10_000
+	);
 }
 
 /**

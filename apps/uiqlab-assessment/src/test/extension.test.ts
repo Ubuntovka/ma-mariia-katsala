@@ -7,6 +7,7 @@ import {
 	type QuickPickUi,
 } from '../runAssessment';
 import { getMetricDefinition, METRIC_DEFINITIONS } from '../metricCatalog';
+import { calculateNumericDifference, formatNumericDifference } from '../extension';
 
 suite('Run Assessment flow', () => {
 	test('exposes all assessment names and data source options', () => {
@@ -71,6 +72,19 @@ suite('Run Assessment flow', () => {
 			}),
 			'Selected assessments: NIMA, accessibility. Deployment URL: https://example.com.',
 		);
+	});
+
+	test('calculates differences only for numerical results', () => {
+		assert.strictEqual(calculateNumericDifference(12.5, 10), 2.5);
+		assert.strictEqual(calculateNumericDifference('8', '10.5'), -2.5);
+		assert.strictEqual(calculateNumericDifference('not numeric', 10), undefined);
+		assert.strictEqual(calculateNumericDifference({ score: 8 }, { score: 7 }), undefined);
+	});
+
+	test('formats numerical differences with a sign', () => {
+		assert.strictEqual(formatNumericDifference(2.12345678), '+2.12346');
+		assert.strictEqual(formatNumericDifference(-1.5), '-1.5');
+		assert.strictEqual(formatNumericDifference(0), '0');
 	});
 });
 

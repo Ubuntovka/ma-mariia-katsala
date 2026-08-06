@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
+from urllib.parse import urlsplit
 from uuid import UUID
 import httpx
 import json
@@ -69,8 +70,29 @@ async def init_db():
             ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'PENDING';
             ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS success BOOLEAN;
             ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS "metricsCount" INTEGER;
+            ALTER TABLE assessment_run DROP COLUMN IF EXISTS results;
         ''')
         await conn.execute('CREATE INDEX IF NOT EXISTS idx_assessment_run_backend_id ON assessment_run("backendResultId");')
+        await conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_assessment_run_history
+            ON assessment_run(project_id, "assessedTarget", status, "createdAt" DESC);
+        ''')
+
+        # Keep existing runs comparable with newly normalized page paths.
+        legacy_targets = await conn.fetch(
+            '''
+            SELECT id, "assessedTarget"
+            FROM assessment_run
+            WHERE "assessedTarget" ~ '^[A-Za-z][A-Za-z0-9+.-]*://'
+            '''
+        )
+        for run in legacy_targets:
+            normalized_target = normalize_assessed_target(run['assessedTarget'])
+            if normalized_target != run['assessedTarget']:
+                await conn.execute(
+                    'UPDATE assessment_run SET "assessedTarget" = $1 WHERE id = $2',
+                    normalized_target, run['id']
+                )
     finally:
         await conn.close()
 
@@ -85,6 +107,16 @@ def normalize_repo_url(url: str) -> str:
         normalized = normalized[:-4]
     # Remove trailing slashes and lowercase
     return normalized.lower().strip('/')
+
+
+def normalize_assessed_target(target: str) -> str:
+    """Return a stable page path for URLs while leaving non-URL artifacts intact."""
+    value = target.strip()
+    parsed = urlsplit(value)
+    if (parsed.scheme and parsed.netloc) or value.startswith('/'):
+        path = parsed.path or '/'
+        return path if path == '/' else path.rstrip('/')
+    return value
 
 
 async def get_or_create_project(
@@ -196,7 +228,7 @@ async def post_evaluate_url_input_test(payload: EvaluateURLInput):
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id
             ''',
             project_id, payload.source, payload.branch, payload.commitHash,
-            payload.gitDirty, payload.mergeRequestId, payload.url, len(payload.metrics)
+            payload.gitDirty, payload.mergeRequestId, normalize_assessed_target(payload.url), len(payload.metrics)
         )
     finally:
         await conn.close()
@@ -263,7 +295,9 @@ async def evaluate_with_artifacts(
                 project_id, source, branch, "commitHash", "gitDirty", "mergeRequestId", "assessedTarget", "metricsCount"
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id
             ''',
-            project_id, source, branch, commitHash, gitDirty, mergeRequestId, assessedTarget or file.filename, len(mm)
+            project_id, source, branch, commitHash, gitDirty, mergeRequestId,
+            normalize_assessed_target(assessedTarget) if assessedTarget else file.filename,
+            len(mm)
         )
     finally:
         await conn.close()
@@ -329,9 +363,19 @@ async def get_eval_result(wui_id: str):
             )
             if run and run['status'] == 'PENDING':
                 # results is a list of {metric_id, results: []}
-                if len(results) >= run['metricsCount']:
+                completed_metric_count = len({
+                    result['metric_id'].split('_')[0]
+                    for result in results
+                    if isinstance(result, dict) and isinstance(result.get('metric_id'), str)
+                })
+                if completed_metric_count >= run['metricsCount']:
                     # All metrics evaluated (some might have failed with empty results)
-                    all_success = all(isinstance(r.get('results'), list) and len(r['results']) > 0 for r in results)
+                    all_success = all(
+                        isinstance(result, dict)
+                        and isinstance(result.get('results'), list)
+                        and len(result['results']) > 0
+                        for result in results
+                    )
                     await conn.execute(
                         'UPDATE assessment_run SET status = $1, success = $2 WHERE id = $3',
                         'COMPLETED', all_success, run['id']
@@ -340,3 +384,107 @@ async def get_eval_result(wui_id: str):
             await conn.close()
 
         return results
+
+
+def metric_result_index(results):
+    """Index result entries by exact metric id, preferring non-empty values."""
+    indexed = {}
+    if not isinstance(results, list):
+        return indexed
+    for result in results:
+        if not isinstance(result, dict) or not isinstance(result.get('metric_id'), str):
+            continue
+        metric_id = result['metric_id']
+        existing = indexed.get(metric_id)
+        has_values = isinstance(result.get('results'), list) and len(result['results']) > 0
+        existing_has_values = (
+            isinstance(existing, dict)
+            and isinstance(existing.get('results'), list)
+            and len(existing['results']) > 0
+        )
+        if existing is None or (has_values and not existing_has_values):
+            indexed[metric_id] = result
+    return indexed
+
+
+@app.get("/eval/result/{wui_id}/history")
+async def get_eval_result_history(wui_id: str):
+    """Return the latest completed result for each matching metric and page."""
+    conn = await asyncpg.connect(
+        user=POSTGRES_USER,
+        password=POSTGRES_PASSWORD,
+        database=POSTGRES_DB,
+        host=POSTGRES_HOST
+    )
+    try:
+        current = await conn.fetchrow(
+            '''
+            SELECT id, project_id, "assessedTarget", "backendResultId", status
+            FROM assessment_run
+            WHERE "backendResultId" = $1
+            ''',
+            wui_id
+        )
+        if not current or current['status'] != 'COMPLETED':
+            return {'metrics': {}}
+
+        async with httpx.AsyncClient() as client:
+            try:
+                current_response = await client.get(
+                    f"{BACKEND_URL}/eval/result/{current['backendResultId']}"
+                )
+                current_response.raise_for_status()
+                current_results = current_response.json()
+            except (httpx.HTTPError, ValueError):
+                return {'metrics': {}}
+
+        outstanding_metric_ids = set(metric_result_index(current_results))
+        if not outstanding_metric_ids:
+            return {'metrics': {}}
+
+        previous_runs = await conn.fetch(
+            '''
+            SELECT id, "backendResultId", "createdAt"
+            FROM assessment_run
+            WHERE project_id = $1
+              AND "assessedTarget" = $2
+              AND status = 'COMPLETED'
+              AND id <> $3
+              AND ("createdAt", id) < (
+                  SELECT "createdAt", id FROM assessment_run WHERE id = $3
+              )
+            ORDER BY "createdAt" DESC, id DESC
+            LIMIT 50
+            ''',
+            current['project_id'], current['assessedTarget'], current['id']
+        )
+
+        history = {}
+        async with httpx.AsyncClient() as client:
+            for previous_run in previous_runs:
+                if not previous_run['backendResultId']:
+                    continue
+                try:
+                    response = await client.get(
+                        f"{BACKEND_URL}/eval/result/{previous_run['backendResultId']}"
+                    )
+                    response.raise_for_status()
+                    previous_results = response.json()
+                except (httpx.HTTPError, ValueError):
+                    continue
+
+                for metric_id, result in metric_result_index(previous_results).items():
+                    if metric_id not in outstanding_metric_ids:
+                        continue
+                    history[metric_id] = {
+                        'results': result.get('results'),
+                        'createdAt': previous_run['createdAt'].isoformat()
+                    }
+                    outstanding_metric_ids.remove(metric_id)
+
+                if not outstanding_metric_ids:
+                    break
+
+        return {'metrics': history}
+    finally:
+        await conn.close()
