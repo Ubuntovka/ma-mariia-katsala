@@ -16,6 +16,7 @@ import {
 	compareM6Segmentation,
 	compareSaliencyHeatmaps,
 	calculateM9Comparison,
+	calculateM10Comparison,
 	normalizeUiedElements,
 	getColorfulnessInterpretation,
 } from '../extension';
@@ -275,6 +276,29 @@ suite('Run Assessment flow', () => {
 		assert.ok(comparison);
 		assert.ok(Math.abs((comparison.edgeMapIou ?? 0) - 1 / 3) < 1e-10);
 		assert.strictEqual(comparison.edgeMapF1, 0.5);
+	});
+
+	test('compares the M10 scalar and normalized congestion maps', () => {
+		const previousMap = createSyntheticHeatmap(1);
+		const currentMap = createSyntheticHeatmap(4);
+		const comparison = calculateM10Comparison(
+			[6, 'current-map.png'],
+			[4, 'previous-map.png'],
+			currentMap,
+			previousMap
+		);
+		assert.ok(comparison);
+		assert.strictEqual(comparison.scalarDelta, 2);
+		assert.ok(Math.abs((comparison.mapMeanAbsoluteDifference ?? 0) - 0.2) < 1e-10);
+		assert.strictEqual(comparison.highCongestionOverlap, 0);
+	});
+
+	test('reports identical M10 congestion maps as unchanged', () => {
+		const map = createSyntheticHeatmap(3);
+		const comparison = calculateM10Comparison([4], [4], map, map);
+		assert.strictEqual(comparison?.scalarDelta, 0);
+		assert.strictEqual(comparison?.mapMeanAbsoluteDifference, 0);
+		assert.strictEqual(comparison?.highCongestionOverlap, 1);
 	});
 
 	test('reads actual dimensions from a PNG header', () => {

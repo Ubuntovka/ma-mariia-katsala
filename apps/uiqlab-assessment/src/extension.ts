@@ -150,6 +150,14 @@ export interface M9Comparison {
 	edgeMapF1?: number;
 }
 
+export interface M10Comparison {
+	currentCongestion: number;
+	previousCongestion: number;
+	scalarDelta: number;
+	mapMeanAbsoluteDifference?: number;
+	highCongestionOverlap?: number;
+}
+
 function finiteNumber(value: unknown): number | undefined {
 	if (typeof value === 'number' && Number.isFinite(value)) {
 		return value;
@@ -784,6 +792,92 @@ export function calculateM9Comparison(
 	};
 }
 
+function readM10Result(value: unknown): { congestion: number; mapUrl?: string } | undefined {
+	if (Array.isArray(value)) {
+		const congestion = finiteNumber(value[0]);
+		return congestion !== undefined
+			? { congestion, mapUrl: typeof value[1] === 'string' ? value[1] : undefined }
+			: undefined;
+	}
+	if (typeof value !== 'object' || value === null) { return undefined; }
+	const fields = new Map(Object.entries(value).map(([key, fieldValue]) => [
+		key.toLowerCase().replace(/[^a-z0-9]/g, ''), fieldValue,
+	]));
+	const congestion = finiteNumber(
+		fields.get('featurecongestion') ?? fields.get('congestion') ?? fields.get('score') ?? fields.get('value')
+	);
+	const map = fields.get('congestionmap') ?? fields.get('mapurl') ?? fields.get('visualization') ?? fields.get('image');
+	return congestion !== undefined
+		? { congestion, mapUrl: typeof map === 'string' ? map : undefined }
+		: undefined;
+}
+
+function normalizedIntensityMap(intensities: number[]): number[] {
+	const minimum = intensities.reduce((result, value) => Math.min(result, value), Number.POSITIVE_INFINITY);
+	const maximum = intensities.reduce((result, value) => Math.max(result, value), Number.NEGATIVE_INFINITY);
+	const range = maximum - minimum;
+	return range > 0
+		? intensities.map((value) => (value - minimum) / range)
+		: intensities.map(() => 0);
+}
+
+function compareCongestionMaps(
+	currentPng: Buffer,
+	previousPng: Buffer
+): { meanAbsoluteDifference: number; highCongestionOverlap: number } | undefined {
+	let current: PNG;
+	let previous: PNG;
+	try {
+		current = PNG.sync.read(currentPng);
+		previous = PNG.sync.read(previousPng);
+	} catch {
+		return undefined;
+	}
+	if (current.width !== previous.width || current.height !== previous.height) { return undefined; }
+	const step = Math.max(1, Math.ceil(Math.sqrt((current.width * current.height) / 76800)));
+	const currentValues = normalizedIntensityMap(sampledSaliencyMap(current, step).intensities);
+	const previousValues = normalizedIntensityMap(sampledSaliencyMap(previous, step).intensities);
+	const meanAbsoluteDifference = currentValues.reduce(
+		(sum, value, index) => sum + Math.abs(value - previousValues[index]),
+		0
+	) / currentValues.length;
+	const currentHigh = mostSalientLocations(currentValues);
+	const previousHigh = mostSalientLocations(previousValues);
+	let intersection = 0;
+	let union = 0;
+	for (let index = 0; index < currentValues.length; index++) {
+		const inCurrent = currentHigh.has(index);
+		const inPrevious = previousHigh.has(index);
+		if (inCurrent && inPrevious) { intersection++; }
+		if (inCurrent || inPrevious) { union++; }
+	}
+	return {
+		meanAbsoluteDifference,
+		highCongestionOverlap: union > 0 ? intersection / union : 1,
+	};
+}
+
+export function calculateM10Comparison(
+	currentValue: unknown,
+	previousValue: unknown,
+	currentMapPng?: Buffer,
+	previousMapPng?: Buffer
+): M10Comparison | undefined {
+	const current = readM10Result(currentValue);
+	const previous = readM10Result(previousValue);
+	if (!current || !previous) { return undefined; }
+	const mapComparison = currentMapPng && previousMapPng
+		? compareCongestionMaps(currentMapPng, previousMapPng)
+		: undefined;
+	return {
+		currentCongestion: current.congestion,
+		previousCongestion: previous.congestion,
+		scalarDelta: current.congestion - previous.congestion,
+		mapMeanAbsoluteDifference: mapComparison?.meanAbsoluteDifference,
+		highCongestionOverlap: mapComparison?.highCongestionOverlap,
+	};
+}
+
 function generateResultsHtml(results: any[], url: string, isComplete: boolean = true): string {
 	// Filter out results that are completely empty, but keep them if they are the only ones for a metric
 	const filteredResults = results.filter((r, i) => {
@@ -1181,6 +1275,52 @@ async function findM9HistoryComparison(
 	return undefined;
 }
 
+async function findM10HistoryComparison(
+	currentResults: any[],
+	history: AssessmentHistory
+): Promise<{
+	comparison: M10Comparison;
+	previousCreatedAt: string;
+	currentMapUrl?: string;
+	previousMapUrl?: string;
+} | undefined> {
+	for (const currentResult of currentResults) {
+		if (typeof currentResult?.metric_id !== 'string' || currentResult.metric_id.split('_')[0] !== 'm10') {
+			continue;
+		}
+		const historicalResult = history.metrics[currentResult.metric_id];
+		if (!historicalResult) { continue; }
+		const current = readM10Result(currentResult.results);
+		const previous = readM10Result(historicalResult.results);
+		if (!current || !previous) { continue; }
+		let currentMap: Buffer | undefined;
+		let previousMap: Buffer | undefined;
+		if (current.mapUrl && previous.mapUrl) {
+			try {
+				[currentMap, previousMap] = await Promise.all([
+					fetchImageBuffer(current.mapUrl),
+					fetchImageBuffer(previous.mapUrl),
+				]);
+			} catch { }
+		}
+		const comparison = calculateM10Comparison(
+			currentResult.results,
+			historicalResult.results,
+			currentMap,
+			previousMap
+		);
+		if (comparison) {
+			return {
+				comparison,
+				previousCreatedAt: historicalResult.createdAt,
+				currentMapUrl: current.mapUrl,
+				previousMapUrl: previous.mapUrl,
+			};
+		}
+	}
+	return undefined;
+}
+
 function signedNumber(value: number, maximumFractionDigits: number = 0): string {
 	if (value === 0 || Object.is(value, -0)) {
 		return '0';
@@ -1239,7 +1379,8 @@ async function showHistoryComparison(
 		: undefined;
 	const m7Match = await findM7HistoryComparison(currentResults, history);
 	const m9Match = await findM9HistoryComparison(currentResults, history);
-	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match && !m6Match && !m7Match && !m9Match) || !dimensions) {
+	const m10Match = await findM10HistoryComparison(currentResults, history);
+	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match && !m6Match && !m7Match && !m9Match && !m10Match) || !dimensions) {
 		return;
 	}
 
@@ -1415,6 +1556,39 @@ async function showHistoryComparison(
 			<div class="explanation"><p>The scalar edge density is the primary comparison. A higher density generally indicates more visual clutter. When both binary edge images are available, IoU and F1 additionally show how strongly the detected edge locations overlap, while the images help localize where the clutter pattern changed.</p></div>
 		</section>` : '';
 
+	const m10Direction = m10Match
+		? m10Match.comparison.scalarDelta > 0
+			? 'Feature congestion increased; this generally indicates more display clutter.'
+			: m10Match.comparison.scalarDelta < 0
+				? 'Feature congestion decreased; this generally indicates less display clutter.'
+				: 'Feature congestion did not change.'
+		: '';
+	const m10MapCards = m10Match?.comparison.mapMeanAbsoluteDifference !== undefined
+		&& m10Match.comparison.highCongestionOverlap !== undefined ? `
+			<div class="grid">
+				<div class="card"><span class="label">Normalized map MAD</span><span class="value">${m10Match.comparison.mapMeanAbsoluteDifference.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span></div>
+				<div class="card"><span class="label">Top-10% congestion overlap</span><span class="value">${(m10Match.comparison.highCongestionOverlap * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%</span></div>
+			</div>` : '';
+	const m10MapImages = m10Match?.currentMapUrl && m10Match.previousMapUrl ? `
+			<div class="heatmap-grid">
+				<figure><img src="${escapeHtml(m10Match.previousMapUrl)}" alt="Previous feature-congestion map"><figcaption>Previous congestion map</figcaption></figure>
+				<figure><img src="${escapeHtml(m10Match.currentMapUrl)}" alt="Current feature-congestion map"><figcaption>Current congestion map</figcaption></figure>
+			</div>` : '';
+	const m10Section = m10Match ? `
+		<section class="metric-section">
+			<h2>M10 · Feature congestion</h2>
+			<p class="previous-run">Compared with the completed run from ${new Date(m10Match.previousCreatedAt).toLocaleString()}</p>
+			<div class="grid">
+				<div class="card"><span class="label">Previous congestion</span><span class="value">${m10Match.comparison.previousCongestion.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span></div>
+				<div class="card"><span class="label">Current congestion</span><span class="value">${m10Match.comparison.currentCongestion.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span></div>
+				<div class="card"><span class="label">Scalar delta</span><span class="value">${signedNumber(m10Match.comparison.scalarDelta, 4)}</span></div>
+			</div>
+			<p class="structural-summary">${m10Direction}</p>
+			${m10MapImages}
+			${m10MapCards}
+			<div class="explanation"><p>The scalar feature-congestion score is the primary comparison. Higher values generally indicate more display clutter. When both visualizations are available, each congestion map is normalized independently to 0–1; mean absolute difference measures overall spatial change, while overlap compares the highest-congestion 10% of locations to help localize where clutter shifted.</p></div>
+		</section>` : '';
+
 	const panel = vscode.window.createWebviewPanel(
 		'historyComparison',
 		'Assessment History Comparison',
@@ -1478,6 +1652,7 @@ async function showHistoryComparison(
 		${m6Section}
 		${m7Section}
 		${m9Section}
+		${m10Section}
 	</main>
 </body>
 </html>`;
@@ -1613,7 +1788,7 @@ export function activate(context: vscode.ExtensionContext) {
 						let history: AssessmentHistory | undefined;
 						const hasComparableResult = resultData.some(
 							(result: any) => typeof result?.metric_id === 'string'
-								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm9'].includes(result.metric_id.split('_')[0])
+								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm9', 'm10'].includes(result.metric_id.split('_')[0])
 						);
 						if (hasComparableResult) {
 							try {
