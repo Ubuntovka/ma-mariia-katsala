@@ -6,11 +6,22 @@ import {
 	formatAssessmentRunSummary,
 	type QuickPickUi,
 } from '../runAssessment';
+import { getMetricDefinition, METRIC_DEFINITIONS } from '../metricCatalog';
 
 suite('Run Assessment flow', () => {
 	test('exposes all assessment names and data source options', () => {
 		assert.strictEqual(ASSESSMENTS.length, 14);
 		assert.deepStrictEqual(DATA_SOURCE_OPTIONS, ['Deployment URL', 'Local URL']);
+	});
+
+	test('provides an explanation for every assessment metric', () => {
+		assert.strictEqual(METRIC_DEFINITIONS.length, ASSESSMENTS.length);
+		for (const assessment of ASSESSMENTS) {
+			const metric = getMetricDefinition(assessment);
+			assert.ok(metric, `Missing metric definition for ${assessment}`);
+			assert.ok(metric.description.length > 40, `Description for ${assessment} is too short`);
+			assert.strictEqual(getMetricDefinition(metric.id), metric);
+		}
 	});
 
 	test('collects deployment-url requests', async () => {

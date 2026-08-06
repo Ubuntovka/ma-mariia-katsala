@@ -1,17 +1,17 @@
 import * as vscode from 'vscode';
 import {
-	collectAssessmentRunRequest,
 	formatAssessmentRunSummary,
 	submitUrlForEvaluation,
 	submitFileForEvaluation,
-	fetchEvaluationResult,
 	pollEvaluationResult,
 	toMetricIds,
 	getMetricInfoById,
 	GitInfo,
+	AssessmentRunRequest,
 } from './runAssessment';
 import { execSync } from 'child_process';
 import { getOrCreateProjectConfig, ProjectConfig } from './projectConfig';
+import { AssessmentSidebarProvider } from './assessmentSidebar';
 
 function getGitInfo(workspaceRoot: string, projectConfig: ProjectConfig): GitInfo {
 	let repositoryUrl = '';
@@ -210,13 +210,7 @@ function generateResultsHtml(results: any[], url: string, isComplete: boolean = 
 }
 
 export function activate(context: vscode.ExtensionContext) {
-	const disposable = vscode.commands.registerCommand('uiqlab-assessment.runAssessment', async () => {
-		const request = await collectAssessmentRunRequest(vscode.window);
-
-		if (!request) {
-			return;
-		}
-
+	const runConfiguredAssessment = async (request: AssessmentRunRequest, shareDeployment: boolean): Promise<void> => {
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 		let projectConfig: ProjectConfig;
 		try {
@@ -228,7 +222,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 		void vscode.window.showInformationMessage(formatAssessmentRunSummary(request));
 
-		// If user selected a deployment URL data source, offer to share it with the orchestrator
+		// Deployment consent is collected in the persistent sidebar form.
 		if (request.dataSource.kind === 'deployment-url') {
 			const deploymentUrl = request.dataSource.deploymentUrl;
 
@@ -237,34 +231,30 @@ export function activate(context: vscode.ExtensionContext) {
 				context.workspaceState.update('uiqlab.lastUrl', deploymentUrl);
 			} catch { }
 
-			// Fall back to submitting URL only (existing behavior)
-			const share = await vscode.window.showQuickPick(['Yes', 'No'], { title: 'Share deployment URL with orchestrator for evaluation?', placeHolder: 'Send URL and selected metrics to orchestrator?' });
-			if (share === 'Yes') {
+			if (shareDeployment) {
 				try {
-					const gitInfo = getGitInfo(workspaceRoot, projectConfig);
-					const resp: any = await submitUrlForEvaluation(request.dataSource.deploymentUrl, request.assessments, gitInfo);
-
-					// The orchestrator is expected to return some identifier (wui_id) or similar.
-					const wui_id = resp?.result_id;
-
-					if (!wui_id) {
-						vscode.window.showInformationMessage('Submitted for evaluation; response did not include an id.');
-						return;
-					}
-
-					vscode.window.showInformationMessage(`Submitted for evaluation (id: ${wui_id}). Waiting for result...`);
-
-					// Poll for result
-					const expectedCount = new Set(toMetricIds(request.assessments)).size;
-					let panel: vscode.WebviewPanel | undefined;
-
 					const resultData = await vscode.window.withProgress({
 						location: vscode.ProgressLocation.Notification,
-						title: 'Waiting for evaluation results',
+						title: 'Running UIQLab assessment',
 						cancellable: true
 					}, async (progress, token) => {
-						return await pollEvaluationResult(wui_id, expectedCount, {
+						progress.report({ message: 'Step 1 of 3: Submitting the page' });
+						const gitInfo = getGitInfo(workspaceRoot, projectConfig);
+						const resp: any = await submitUrlForEvaluation(deploymentUrl, request.assessments, gitInfo);
+						const wui_id = resp?.result_id;
+
+						if (!wui_id) {
+							throw new Error('The evaluation service did not return the tracking information needed to retrieve results.');
+						}
+
+						const expectedCount = new Set(toMetricIds(request.assessments)).size;
+						let panel: vscode.WebviewPanel | undefined;
+						progress.report({ message: `Step 2 of 3: Running assessments (0 of ${expectedCount} complete)` });
+
+						const results = await pollEvaluationResult(wui_id, expectedCount, {
 							onUpdate: (currentResults) => {
+								const completedCount = new Set(currentResults.map((result: any) => result.metric_id.split('_')[0])).size;
+								progress.report({ message: `Step 2 of 3: Running assessments (${Math.min(completedCount, expectedCount)} of ${expectedCount} complete)` });
 								if (!panel) {
 									panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
 								}
@@ -272,18 +262,20 @@ export function activate(context: vscode.ExtensionContext) {
 							},
 							isCancelled: () => token.isCancellationRequested
 						});
+
+						if (results.length > 0) {
+							progress.report({ message: 'Step 3 of 3: Displaying results' });
+							if (!panel) {
+								panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
+							}
+							createResultsWebview(panel, results, deploymentUrl, true);
+						}
+
+						return results;
 					});
 
 					if (resultData && resultData.length > 0) {
-						if (!panel) {
-							panel = vscode.window.createWebviewPanel(
-								'evaluationResults',
-								'Evaluation Results',
-								vscode.ViewColumn.One,
-								{}
-							);
-						}
-						createResultsWebview(panel, resultData, deploymentUrl, true);
+						vscode.window.showInformationMessage('UIQLab assessment complete. Results are ready.');
 					} else {
 						vscode.window.showInformationMessage('Timed out or cancelled waiting for evaluation result. Check orchestrator/service for progress.');
 					}
@@ -295,8 +287,8 @@ export function activate(context: vscode.ExtensionContext) {
 			const localUrl = request.dataSource.localUrl;
 
 			try {
-				await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Capturing local page for assessment', cancellable: true }, async (progress, token) => {
-					progress.report({ message: 'Opening headless browser' });
+				await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Running UIQLab assessment', cancellable: true }, async (progress, token) => {
+					progress.report({ message: 'Step 1 of 4: Opening the local page' });
 					const { capturePage } = await import('./playwrightCapture.js');
 					const p = capturePage(localUrl);
 					// hook cancellation
@@ -304,24 +296,25 @@ export function activate(context: vscode.ExtensionContext) {
 						// Note: capturePage currently does not accept an AbortSignal; cancellation will just show message
 						vscode.window.showInformationMessage('Capture cancelled by user');
 					});
-					progress.report({ message: 'Waiting for page load and rendering' });
+					progress.report({ message: 'Step 1 of 4: Waiting for the page to finish rendering' });
 					const result = await p;
-					progress.report({ message: 'Uploading artifacts to orchestrator' });
+					progress.report({ message: 'Step 2 of 4: Uploading the captured page' });
 					const gitInfo = getGitInfo(workspaceRoot, projectConfig);
 					const resp = await submitFileForEvaluation(result.screenshot, 'capture.png', 'image/png', request.assessments, gitInfo, localUrl);
 					const wui_id = resp?.result_id;
 					if (!wui_id) {
-						vscode.window.showInformationMessage('Submitted artifacts for evaluation; response did not include an id.');
-						return;
+						throw new Error('The evaluation service did not return the tracking information needed to retrieve results.');
 					}
-					vscode.window.showInformationMessage(`Submitted for evaluation (id: ${wui_id}). Waiting for result...`);
 					
 					// Poll for result
 					const expectedCount = new Set(toMetricIds(request.assessments)).size;
 					let panel: vscode.WebviewPanel | undefined;
+					progress.report({ message: `Step 3 of 4: Running assessments (0 of ${expectedCount} complete)` });
 
 					const resultData = await pollEvaluationResult(wui_id, expectedCount, {
 						onUpdate: (currentResults) => {
+							const completedCount = new Set(currentResults.map((currentResult: any) => currentResult.metric_id.split('_')[0])).size;
+							progress.report({ message: `Step 3 of 4: Running assessments (${Math.min(completedCount, expectedCount)} of ${expectedCount} complete)` });
 							if (!panel) {
 								panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
 							}
@@ -331,10 +324,12 @@ export function activate(context: vscode.ExtensionContext) {
 					});
 
 					if (resultData && resultData.length > 0) {
+						progress.report({ message: 'Step 4 of 4: Displaying results' });
 						if (!panel) {
 							panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
 						}
 						createResultsWebview(panel, resultData, localUrl, true);
+						vscode.window.showInformationMessage('UIQLab assessment complete. Results are ready.');
 					} else {
 						vscode.window.showInformationMessage('Timed out or cancelled waiting for evaluation result.');
 					}
@@ -343,9 +338,16 @@ export function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage(`Capture or upload failed: ${err?.message ?? err}`);
 			}
 		}
-	});
+	};
 
-	context.subscriptions.push(disposable);
+	const sidebarProvider = new AssessmentSidebarProvider(context, runConfiguredAssessment);
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(AssessmentSidebarProvider.viewType, sidebarProvider),
+		vscode.commands.registerCommand('uiqlab-assessment.runAssessment', async () => {
+			await vscode.commands.executeCommand('workbench.view.extension.uiqlab-assessment');
+			sidebarProvider.reveal();
+		}),
+	);
 }
 
 export function deactivate() { }
