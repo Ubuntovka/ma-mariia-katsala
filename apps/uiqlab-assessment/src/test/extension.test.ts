@@ -7,7 +7,7 @@ import {
 	type QuickPickUi,
 } from '../runAssessment';
 import { getMetricDefinition, METRIC_DEFINITIONS } from '../metricCatalog';
-import { calculateM1SizeComparison } from '../extension';
+import { calculateM1SizeComparison, calculateM2Comparison } from '../extension';
 import { getPngDimensions } from '../playwrightCapture';
 
 suite('Run Assessment flow', () => {
@@ -93,6 +93,26 @@ suite('Run Assessment flow', () => {
 		assert.strictEqual(calculateM1SizeComparison(750, 1000)?.absoluteDelta, -250);
 		assert.strictEqual(calculateM1SizeComparison(750, 1000)?.relativeDeltaPercent, -25);
 		assert.strictEqual(calculateM1SizeComparison(100, 0)?.relativeDeltaPercent, undefined);
+	});
+
+	test('compares both M2 numeric-object fields independently', () => {
+		const comparison = calculateM2Comparison(
+			{ jpegBytes: 1200, compressionRatio: 2.4 },
+			{ jpegBytes: 1000, compressionRatio: 2 }
+		);
+		assert.ok(comparison);
+		assert.strictEqual(comparison.currentJpegBytes, 1200);
+		assert.strictEqual(comparison.previousJpegBytes, 1000);
+		assert.strictEqual(comparison.jpegRelativeDeltaPercent, 20);
+		assert.ok(Math.abs(comparison.compressionRatioAbsoluteDelta - 0.4) < 1e-10);
+		assert.ok(Math.abs((comparison.compressionRatioRelativeDeltaPercent ?? 0) - 20) < 1e-10);
+	});
+
+	test('supports the current UIQLab M2 result array', () => {
+		const comparison = calculateM2Comparison([900, 1.5], [1000, 2]);
+		assert.strictEqual(comparison?.jpegRelativeDeltaPercent, -10);
+		assert.strictEqual(comparison?.compressionRatioAbsoluteDelta, -0.5);
+		assert.strictEqual(comparison?.compressionRatioRelativeDeltaPercent, -25);
 	});
 
 	test('reads actual dimensions from a PNG header', () => {

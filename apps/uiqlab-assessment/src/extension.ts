@@ -65,6 +65,16 @@ export interface M1SizeComparison {
 	relativeDeltaPercent?: number;
 }
 
+export interface M2Comparison {
+	currentJpegBytes: number;
+	previousJpegBytes: number;
+	jpegRelativeDeltaPercent?: number;
+	currentCompressionRatio: number;
+	previousCompressionRatio: number;
+	compressionRatioAbsoluteDelta: number;
+	compressionRatioRelativeDeltaPercent?: number;
+}
+
 function finiteNumber(value: unknown): number | undefined {
 	if (typeof value === 'number' && Number.isFinite(value)) {
 		return value;
@@ -93,6 +103,61 @@ export function calculateM1SizeComparison(
 		relativeDeltaPercent: previousBytes === 0
 			? undefined
 			: (absoluteDelta / previousBytes) * 100,
+	};
+}
+
+function readM2Values(value: unknown): { jpegBytes: number; compressionRatio: number } | undefined {
+	if (Array.isArray(value)) {
+		if (value.length === 1 && typeof value[0] === 'object' && value[0] !== null) {
+			return readM2Values(value[0]);
+		}
+		const jpegBytes = finiteNumber(value[0]);
+		const compressionRatio = finiteNumber(value[1]);
+		return jpegBytes === undefined || compressionRatio === undefined
+			? undefined
+			: { jpegBytes, compressionRatio };
+	}
+	if (typeof value !== 'object' || value === null) {
+		return undefined;
+	}
+	const normalizedEntries = Object.entries(value).map(([key, fieldValue]) => [
+		key.toLowerCase().replace(/[^a-z0-9]/g, ''),
+		fieldValue,
+	] as const);
+	const jpegBytes = finiteNumber(normalizedEntries.find(([key]) =>
+		['jpegbytes', 'jpegsize', 'jpegfilesize', 'jpegfilesizebytes'].includes(key)
+	)?.[1]);
+	const compressionRatio = finiteNumber(normalizedEntries.find(([key]) =>
+		['compressionratio', 'jpegcompressionratio', 'ratio'].includes(key)
+	)?.[1]);
+	return jpegBytes === undefined || compressionRatio === undefined
+		? undefined
+		: { jpegBytes, compressionRatio };
+}
+
+export function calculateM2Comparison(
+	currentValue: unknown,
+	previousValue: unknown
+): M2Comparison | undefined {
+	const current = readM2Values(currentValue);
+	const previous = readM2Values(previousValue);
+	if (!current || !previous) {
+		return undefined;
+	}
+	const jpegDelta = current.jpegBytes - previous.jpegBytes;
+	const ratioDelta = current.compressionRatio - previous.compressionRatio;
+	return {
+		currentJpegBytes: current.jpegBytes,
+		previousJpegBytes: previous.jpegBytes,
+		jpegRelativeDeltaPercent: previous.jpegBytes === 0
+			? undefined
+			: (jpegDelta / previous.jpegBytes) * 100,
+		currentCompressionRatio: current.compressionRatio,
+		previousCompressionRatio: previous.compressionRatio,
+		compressionRatioAbsoluteDelta: ratioDelta,
+		compressionRatioRelativeDeltaPercent: previous.compressionRatio === 0
+			? undefined
+			: (ratioDelta / previous.compressionRatio) * 100,
 	};
 }
 
@@ -275,6 +340,26 @@ function findM1HistoryComparison(
 	return undefined;
 }
 
+function findM2HistoryComparison(
+	currentResults: any[],
+	history: AssessmentHistory
+): { comparison: M2Comparison; previousCreatedAt: string } | undefined {
+	for (const currentResult of currentResults) {
+		if (typeof currentResult?.metric_id !== 'string' || currentResult.metric_id.split('_')[0] !== 'm2') {
+			continue;
+		}
+		const historicalResult = history.metrics[currentResult.metric_id];
+		if (!historicalResult) {
+			continue;
+		}
+		const comparison = calculateM2Comparison(currentResult.results, historicalResult.results);
+		if (comparison) {
+			return { comparison, previousCreatedAt: historicalResult.createdAt };
+		}
+	}
+	return undefined;
+}
+
 function signedNumber(value: number, maximumFractionDigits: number = 0): string {
 	if (value === 0 || Object.is(value, -0)) {
 		return '0';
@@ -291,25 +376,58 @@ function escapeHtml(value: string): string {
 		.replace(/'/g, '&#39;');
 }
 
-function showM1HistoryComparison(
+function relativeChange(value: number | undefined): string {
+	return value === undefined ? 'Not available' : `${signedNumber(value, 2)}%`;
+}
+
+function showHistoryComparison(
 	currentResults: any[],
 	history: AssessmentHistory,
 	url: string
 ): void {
-	const match = findM1HistoryComparison(currentResults, history);
+	const m1Match = findM1HistoryComparison(currentResults, history);
+	const m2Match = findM2HistoryComparison(currentResults, history);
 	const dimensions = history.screenshotDimensions;
-	if (!match || !dimensions) {
+	if ((!m1Match && !m2Match) || !dimensions) {
 		return;
 	}
 
-	const { comparison, previousCreatedAt } = match;
-	const relativeDelta = comparison.relativeDeltaPercent === undefined
-		? 'Not available'
-		: `${signedNumber(comparison.relativeDeltaPercent, 2)}%`;
-	const previousDate = new Date(previousCreatedAt).toLocaleString();
+	const m1Section = m1Match ? `
+		<section class="metric-section">
+			<h2>M1 · PNG file size change</h2>
+			<p class="previous-run">Compared with the completed run from ${new Date(m1Match.previousCreatedAt).toLocaleString()}</p>
+			<div class="grid">
+				<div class="card"><span class="label">Previous size</span><span class="value">${m1Match.comparison.previousBytes.toLocaleString()} bytes</span></div>
+				<div class="card"><span class="label">Current size</span><span class="value">${m1Match.comparison.currentBytes.toLocaleString()} bytes</span></div>
+				<div class="card"><span class="label">Absolute delta</span><span class="value">${signedNumber(m1Match.comparison.absoluteDelta)} bytes</span></div>
+				<div class="card"><span class="label">Relative delta</span><span class="value">${relativeChange(m1Match.comparison.relativeDeltaPercent)}</span></div>
+			</div>
+			<div class="explanation"><p>M1 reports the PNG screenshot size in bytes. The absolute delta is current size minus previous size; the relative delta expresses that change as a percentage of the previous size. PNG size has no universal “better” direction, so this reports the change without labeling it as an improvement or regression.</p></div>
+		</section>` : '';
+
+	const m2Section = m2Match ? `
+		<section class="metric-section">
+			<h2>M2 · JPEG file size and compression ratio</h2>
+			<p class="previous-run">Compared with the completed run from ${new Date(m2Match.previousCreatedAt).toLocaleString()}</p>
+			<h3>JPEG file size</h3>
+			<div class="grid">
+				<div class="card"><span class="label">Previous size</span><span class="value">${m2Match.comparison.previousJpegBytes.toLocaleString()} bytes</span></div>
+				<div class="card"><span class="label">Current size</span><span class="value">${m2Match.comparison.currentJpegBytes.toLocaleString()} bytes</span></div>
+				<div class="card"><span class="label">Relative change</span><span class="value">${relativeChange(m2Match.comparison.jpegRelativeDeltaPercent)}</span></div>
+			</div>
+			<h3>Compression ratio</h3>
+			<div class="grid">
+				<div class="card"><span class="label">Previous ratio</span><span class="value">${m2Match.comparison.previousCompressionRatio.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span></div>
+				<div class="card"><span class="label">Current ratio</span><span class="value">${m2Match.comparison.currentCompressionRatio.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span></div>
+				<div class="card"><span class="label">Absolute change</span><span class="value">${signedNumber(m2Match.comparison.compressionRatioAbsoluteDelta, 4)}</span></div>
+				<div class="card"><span class="label">Relative change</span><span class="value">${relativeChange(m2Match.comparison.compressionRatioRelativeDeltaPercent)}</span></div>
+			</div>
+			<div class="explanation"><p>M2 changes can indicate altered JPEG compressibility or different visual content. JPEG byte size and compression ratio are compared independently. Neither an increase nor a decrease is automatically better.</p></div>
+		</section>` : '';
+
 	const panel = vscode.window.createWebviewPanel(
-		'm1HistoryComparison',
-		'M1 PNG Size Comparison',
+		'historyComparison',
+		'Assessment History Comparison',
 		vscode.ViewColumn.Beside,
 		{}
 	);
@@ -319,37 +437,32 @@ function showM1HistoryComparison(
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>M1 PNG Size Comparison</title>
+	<title>Assessment History Comparison</title>
 	<style>
 		* { box-sizing: border-box; }
 		body { margin: 0; padding: 28px; color: var(--vscode-foreground); background: var(--vscode-editor-background); font-family: var(--vscode-font-family); }
 		main { max-width: 860px; margin: 0 auto; }
 		h1 { margin: 0 0 8px; font-size: 26px; }
+		h2 { margin: 0 0 6px; font-size: 21px; }
+		h3 { margin: 20px 0 10px; font-size: 15px; }
 		.context { margin: 0 0 24px; color: var(--vscode-descriptionForeground); line-height: 1.5; }
 		.path { font-family: var(--vscode-editor-font-family); word-break: break-all; }
-		.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 24px; }
+		.metric-section { padding: 22px 0; border-top: 1px solid var(--vscode-widget-border); }
+		.previous-run { margin: 0 0 16px; color: var(--vscode-descriptionForeground); }
+		.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 18px; }
 		.card { padding: 18px; border: 1px solid var(--vscode-widget-border); border-radius: 8px; background: var(--vscode-sideBar-background); }
 		.label { display: block; margin-bottom: 8px; color: var(--vscode-descriptionForeground); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 		.value { font-size: 22px; font-weight: 650; }
 		.explanation { padding: 18px; border-left: 4px solid var(--vscode-focusBorder); background: var(--vscode-textBlockQuote-background); line-height: 1.55; }
-		.explanation h2 { margin: 0 0 8px; font-size: 16px; }
 		.explanation p { margin: 0; }
 	</style>
 </head>
 <body>
 	<main>
-		<h1>M1 · PNG file size change</h1>
-		<p class="context"><span class="path">${escapeHtml(url)}</span><br>${dimensions.width} × ${dimensions.height} px · compared with the completed run from ${previousDate}</p>
-		<section class="grid" aria-label="PNG size comparison">
-			<div class="card"><span class="label">Previous size</span><span class="value">${comparison.previousBytes.toLocaleString()} bytes</span></div>
-			<div class="card"><span class="label">Current size</span><span class="value">${comparison.currentBytes.toLocaleString()} bytes</span></div>
-			<div class="card"><span class="label">Absolute delta</span><span class="value">${signedNumber(comparison.absoluteDelta)} bytes</span></div>
-			<div class="card"><span class="label">Relative delta</span><span class="value">${relativeDelta}</span></div>
-		</section>
-		<section class="explanation">
-			<h2>How to read this comparison</h2>
-			<p>M1 reports the PNG screenshot size in bytes. The absolute delta is current size minus previous size; the relative delta expresses that change as a percentage of the previous size and is unavailable when the previous size is zero. Only screenshots with identical pixel dimensions are compared. PNG size has no universal “better” direction, so this page reports the change without labeling it as an improvement or regression.</p>
-		</section>
+		<h1>Assessment history comparison</h1>
+		<p class="context"><span class="path">${escapeHtml(url)}</span><br>${dimensions.width} × ${dimensions.height} px · only completed runs with identical screenshot dimensions are compared</p>
+		${m1Section}
+		${m2Section}
 	</main>
 </body>
 </html>`;
@@ -483,17 +596,18 @@ export function activate(context: vscode.ExtensionContext) {
 							panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
 						}
 						let history: AssessmentHistory | undefined;
-						const hasM1Result = resultData.some(
-							(result: any) => typeof result?.metric_id === 'string' && result.metric_id.split('_')[0] === 'm1'
+						const hasComparableResult = resultData.some(
+							(result: any) => typeof result?.metric_id === 'string'
+								&& ['m1', 'm2'].includes(result.metric_id.split('_')[0])
 						);
-						if (hasM1Result) {
+						if (hasComparableResult) {
 							try {
 								history = await fetchAssessmentHistory(wui_id);
 							} catch { }
 						}
 						createResultsWebview(panel, resultData, localUrl, true);
 						if (history) {
-							showM1HistoryComparison(resultData, history, localUrl);
+							showHistoryComparison(resultData, history, localUrl);
 						}
 						vscode.window.showInformationMessage('UIQLab assessment complete. Results are ready.');
 					} else {

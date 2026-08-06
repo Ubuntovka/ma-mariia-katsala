@@ -81,8 +81,9 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_assessment_run_history
             ON assessment_run(project_id, "assessedTarget", status, "createdAt" DESC);
         ''')
+        await conn.execute('DROP INDEX IF EXISTS idx_assessment_run_m1_history;')
         await conn.execute('''
-            CREATE INDEX IF NOT EXISTS idx_assessment_run_m1_history
+            CREATE INDEX IF NOT EXISTS idx_assessment_run_screenshot_history
             ON assessment_run(
                 project_id, "assessedTarget", "screenshotWidth", "screenshotHeight",
                 status, "createdAt" DESC
@@ -427,7 +428,7 @@ def metric_result_index(results):
 
 @app.get("/eval/result/{wui_id}/history")
 async def get_eval_result_history(wui_id: str):
-    """Return the latest completed result for each matching metric and page."""
+    """Return dimension-matched M1/M2 history for the same project and page."""
     conn = await asyncpg.connect(
         user=POSTGRES_USER,
         password=POSTGRES_PASSWORD,
@@ -465,7 +466,7 @@ async def get_eval_result_history(wui_id: str):
         outstanding_metric_ids = {
             metric_id
             for metric_id in metric_result_index(current_results)
-            if metric_id.split('_')[0] == 'm1'
+            if metric_id.split('_')[0] in {'m1', 'm2'}
         }
         if not outstanding_metric_ids:
             return {'metrics': {}}
