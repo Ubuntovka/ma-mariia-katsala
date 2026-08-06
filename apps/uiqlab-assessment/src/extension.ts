@@ -87,6 +87,18 @@ export interface M3Comparison {
 	rangeChanged: boolean;
 }
 
+export interface NumericChange {
+	current: number;
+	previous: number;
+	delta: number;
+}
+
+export interface M4Comparison {
+	means: { l: NumericChange; a: NumericChange; b: NumericChange };
+	standardDeviations: { l: NumericChange; a: NumericChange; b: NumericChange };
+	deltaE: number;
+}
+
 function finiteNumber(value: unknown): number | undefined {
 	if (typeof value === 'number' && Number.isFinite(value)) {
 		return value;
@@ -226,6 +238,91 @@ export function calculateM3Comparison(
 		currentInterpretation,
 		previousInterpretation,
 		rangeChanged: currentInterpretation !== previousInterpretation,
+	};
+}
+
+interface LabValues {
+	lMean: number;
+	lSd: number;
+	aMean: number;
+	aSd: number;
+	bMean: number;
+	bSd: number;
+}
+
+function readM4Values(value: unknown): LabValues | undefined {
+	if (Array.isArray(value)) {
+		if (value.length === 1 && Array.isArray(value[0])) {
+			return readM4Values(value[0]);
+		}
+		const values = value.slice(0, 6).map(finiteNumber);
+		if (values.length < 6 || values.some((item) => item === undefined)) {
+			return undefined;
+		}
+		return {
+			lMean: values[0]!, lSd: values[1]!,
+			aMean: values[2]!, aSd: values[3]!,
+			bMean: values[4]!, bSd: values[5]!,
+		};
+	}
+	if (typeof value !== 'object' || value === null) {
+		return undefined;
+	}
+	const fields = new Map(Object.entries(value).map(([key, fieldValue]) => [
+		key.toLowerCase().replace(/[^a-z0-9]/g, ''),
+		fieldValue,
+	]));
+	const pick = (aliases: string[]): number | undefined => {
+		for (const alias of aliases) {
+			const parsed = finiteNumber(fields.get(alias));
+			if (parsed !== undefined) { return parsed; }
+		}
+		return undefined;
+	};
+	const parsed = {
+		lMean: pick(['lmean', 'laverage', 'lightnessmean', 'lightnessaverage']),
+		lSd: pick(['lsd', 'lstd', 'lstandarddeviation', 'lightnesssd', 'lightnessstd', 'lightnessstandarddeviation']),
+		aMean: pick(['amean', 'aaverage']),
+		aSd: pick(['asd', 'astd', 'astandarddeviation']),
+		bMean: pick(['bmean', 'baverage']),
+		bSd: pick(['bsd', 'bstd', 'bstandarddeviation']),
+	};
+	if (Object.values(parsed).some((item) => item === undefined)) {
+		return undefined;
+	}
+	return parsed as LabValues;
+}
+
+function numericChange(current: number, previous: number): NumericChange {
+	return { current, previous, delta: current - previous };
+}
+
+export function calculateM4Comparison(
+	currentValue: unknown,
+	previousValue: unknown
+): M4Comparison | undefined {
+	const current = readM4Values(currentValue);
+	const previous = readM4Values(previousValue);
+	if (!current || !previous) {
+		return undefined;
+	}
+	const means = {
+		l: numericChange(current.lMean, previous.lMean),
+		a: numericChange(current.aMean, previous.aMean),
+		b: numericChange(current.bMean, previous.bMean),
+	};
+	return {
+		means,
+		standardDeviations: {
+			l: numericChange(current.lSd, previous.lSd),
+			a: numericChange(current.aSd, previous.aSd),
+			b: numericChange(current.bSd, previous.bSd),
+		},
+		deltaE: Math.sqrt(
+			means.l.delta ** 2
+			+ means.a.delta ** 2
+			+ means.b.delta ** 2
+		),
 	};
 }
 
@@ -448,6 +545,26 @@ function findM3HistoryComparison(
 	return undefined;
 }
 
+function findM4HistoryComparison(
+	currentResults: any[],
+	history: AssessmentHistory
+): { comparison: M4Comparison; previousCreatedAt: string } | undefined {
+	for (const currentResult of currentResults) {
+		if (typeof currentResult?.metric_id !== 'string' || currentResult.metric_id.split('_')[0] !== 'm4') {
+			continue;
+		}
+		const historicalResult = history.metrics[currentResult.metric_id];
+		if (!historicalResult) {
+			continue;
+		}
+		const comparison = calculateM4Comparison(currentResult.results, historicalResult.results);
+		if (comparison) {
+			return { comparison, previousCreatedAt: historicalResult.createdAt };
+		}
+	}
+	return undefined;
+}
+
 function signedNumber(value: number, maximumFractionDigits: number = 0): string {
 	if (value === 0 || Object.is(value, -0)) {
 		return '0';
@@ -468,6 +585,14 @@ function relativeChange(value: number | undefined): string {
 	return value === undefined ? 'Not available' : `${signedNumber(value, 2)}%`;
 }
 
+function labComparisonRow(channel: string, change: NumericChange): string {
+	return `<tr><th scope="row">${channel}</th><td>${change.previous.toLocaleString(undefined, { maximumFractionDigits: 3 })}</td><td>${change.current.toLocaleString(undefined, { maximumFractionDigits: 3 })}</td><td>${signedNumber(change.delta, 3)}</td></tr>`;
+}
+
+function variationDirection(change: NumericChange): string {
+	return change.delta > 0 ? 'increased' : change.delta < 0 ? 'decreased' : 'unchanged';
+}
+
 function showHistoryComparison(
 	currentResults: any[],
 	history: AssessmentHistory,
@@ -476,8 +601,9 @@ function showHistoryComparison(
 	const m1Match = findM1HistoryComparison(currentResults, history);
 	const m2Match = findM2HistoryComparison(currentResults, history);
 	const m3Match = findM3HistoryComparison(currentResults, history);
+	const m4Match = findM4HistoryComparison(currentResults, history);
 	const dimensions = history.screenshotDimensions;
-	if ((!m1Match && !m2Match && !m3Match) || !dimensions) {
+	if ((!m1Match && !m2Match && !m3Match && !m4Match) || !dimensions) {
 		return;
 	}
 
@@ -533,6 +659,30 @@ function showHistoryComparison(
 			<div class="explanation"><p>M3 is the Hasler–Süsstrunk colorfulness score. A positive delta means the screenshot is more colorful and a negative delta means it is less colorful. Crossing an interpretation threshold is reported separately. More or less colorful is not automatically an improvement or regression.</p></div>
 		</section>` : '';
 
+	const m4VariationSummary = m4Match
+		? `L* variation ${variationDirection(m4Match.comparison.standardDeviations.l)}, a* variation ${variationDirection(m4Match.comparison.standardDeviations.a)}, and b* variation ${variationDirection(m4Match.comparison.standardDeviations.b)}.`
+		: '';
+	const m4Section = m4Match ? `
+		<section class="metric-section">
+			<h2>M4 · CIELAB mean and standard deviation</h2>
+			<p class="previous-run">Compared with the completed run from ${new Date(m4Match.previousCreatedAt).toLocaleString()}</p>
+			<h3>Mean color</h3>
+			<div class="table-wrap"><table><thead><tr><th>Channel</th><th>Previous</th><th>Current</th><th>Delta</th></tr></thead><tbody>
+				${labComparisonRow('L* · lightness', m4Match.comparison.means.l)}
+				${labComparisonRow('a* · green–red', m4Match.comparison.means.a)}
+				${labComparisonRow('b* · blue–yellow', m4Match.comparison.means.b)}
+			</tbody></table></div>
+			<div class="grid compact-grid"><div class="card"><span class="label">Mean-color distance · ΔE</span><span class="value">${m4Match.comparison.deltaE.toLocaleString(undefined, { maximumFractionDigits: 3 })}</span></div></div>
+			<h3>Color-distribution variation · standard deviation</h3>
+			<div class="table-wrap"><table><thead><tr><th>Channel</th><th>Previous SD</th><th>Current SD</th><th>Delta</th></tr></thead><tbody>
+				${labComparisonRow('L* · lightness', m4Match.comparison.standardDeviations.l)}
+				${labComparisonRow('a* · green–red', m4Match.comparison.standardDeviations.a)}
+				${labComparisonRow('b* · blue–yellow', m4Match.comparison.standardDeviations.b)}
+			</tbody></table></div>
+			<p class="variation-summary">${m4VariationSummary}</p>
+			<div class="explanation"><p>The L* mean describes average brightness, while a* and b* locate the average palette on the green–red and blue–yellow axes. ΔE is the Euclidean distance between the previous and current mean Lab colors. Standard-deviation changes describe shifts in color distribution and variation within each channel. These changes have no universal better direction.</p></div>
+		</section>` : '';
+
 	const panel = vscode.window.createWebviewPanel(
 		'historyComparison',
 		'Assessment History Comparison',
@@ -563,6 +713,13 @@ function showHistoryComparison(
 		.value { font-size: 22px; font-weight: 650; }
 		.text-value { font-size: 18px; }
 		.wide-card { grid-column: 1 / -1; }
+		.compact-grid { grid-template-columns: minmax(220px, 300px); margin-top: 14px; }
+		.table-wrap { overflow-x: auto; margin-bottom: 14px; }
+		table { width: 100%; border-collapse: collapse; background: var(--vscode-sideBar-background); }
+		th, td { padding: 11px 13px; border: 1px solid var(--vscode-widget-border); text-align: right; }
+		th:first-child, td:first-child { text-align: left; }
+		thead th { color: var(--vscode-descriptionForeground); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+		.variation-summary { margin: 8px 0 18px; color: var(--vscode-descriptionForeground); }
 		.explanation { padding: 18px; border-left: 4px solid var(--vscode-focusBorder); background: var(--vscode-textBlockQuote-background); line-height: 1.55; }
 		.explanation p { margin: 0; }
 	</style>
@@ -574,6 +731,7 @@ function showHistoryComparison(
 		${m1Section}
 		${m2Section}
 		${m3Section}
+		${m4Section}
 	</main>
 </body>
 </html>`;
@@ -709,7 +867,7 @@ export function activate(context: vscode.ExtensionContext) {
 						let history: AssessmentHistory | undefined;
 						const hasComparableResult = resultData.some(
 							(result: any) => typeof result?.metric_id === 'string'
-								&& ['m1', 'm2', 'm3'].includes(result.metric_id.split('_')[0])
+								&& ['m1', 'm2', 'm3', 'm4'].includes(result.metric_id.split('_')[0])
 						);
 						if (hasComparableResult) {
 							try {

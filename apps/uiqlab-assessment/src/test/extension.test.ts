@@ -11,6 +11,7 @@ import {
 	calculateM1SizeComparison,
 	calculateM2Comparison,
 	calculateM3Comparison,
+	calculateM4Comparison,
 	getColorfulnessInterpretation,
 } from '../extension';
 import { getPngDimensions } from '../playwrightCapture';
@@ -148,6 +149,30 @@ suite('Run Assessment flow', () => {
 		assert.strictEqual(getColorfulnessInterpretation(59), 'quite colorful');
 		assert.strictEqual(getColorfulnessInterpretation(82), 'highly colorful');
 		assert.strictEqual(getColorfulnessInterpretation(109), 'extremely colorful');
+	});
+
+	test('compares all M4 Lab channels and calculates mean-color delta E', () => {
+		const comparison = calculateM4Comparison(
+			[52, 12, 4, 5, -3, 8],
+			[50, 10, 1, 6, 1, 8]
+		);
+		assert.ok(comparison);
+		assert.strictEqual(comparison.means.l.delta, 2);
+		assert.strictEqual(comparison.means.a.delta, 3);
+		assert.strictEqual(comparison.means.b.delta, -4);
+		assert.strictEqual(comparison.standardDeviations.l.delta, 2);
+		assert.strictEqual(comparison.standardDeviations.a.delta, -1);
+		assert.strictEqual(comparison.standardDeviations.b.delta, 0);
+		assert.ok(Math.abs(comparison.deltaE - Math.sqrt(29)) < 1e-10);
+	});
+
+	test('supports named M4 numeric fields', () => {
+		const comparison = calculateM4Comparison(
+			{ lMean: 60, lSd: 8, aMean: 2, aSd: 3, bMean: -1, bSd: 4 },
+			{ lMean: 58, lSd: 7, aMean: 1, aSd: 3, bMean: -1, bSd: 5 }
+		);
+		assert.strictEqual(comparison?.means.l.delta, 2);
+		assert.strictEqual(comparison?.standardDeviations.b.delta, -1);
 	});
 
 	test('reads actual dimensions from a PNG header', () => {
