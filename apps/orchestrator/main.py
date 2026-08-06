@@ -428,7 +428,7 @@ def metric_result_index(results):
 
 @app.get("/eval/result/{wui_id}/history")
 async def get_eval_result_history(wui_id: str):
-    """Return dimension-matched M1/M2 history for the same project and page."""
+    """Return dimension-matched M1-M3 history for the same project and page."""
     conn = await asyncpg.connect(
         user=POSTGRES_USER,
         password=POSTGRES_PASSWORD,
@@ -466,7 +466,7 @@ async def get_eval_result_history(wui_id: str):
         outstanding_metric_ids = {
             metric_id
             for metric_id in metric_result_index(current_results)
-            if metric_id.split('_')[0] in {'m1', 'm2'}
+            if metric_id.split('_')[0] in {'m1', 'm2', 'm3'}
         }
         if not outstanding_metric_ids:
             return {'metrics': {}}

@@ -7,7 +7,12 @@ import {
 	type QuickPickUi,
 } from '../runAssessment';
 import { getMetricDefinition, METRIC_DEFINITIONS } from '../metricCatalog';
-import { calculateM1SizeComparison, calculateM2Comparison } from '../extension';
+import {
+	calculateM1SizeComparison,
+	calculateM2Comparison,
+	calculateM3Comparison,
+	getColorfulnessInterpretation,
+} from '../extension';
 import { getPngDimensions } from '../playwrightCapture';
 
 suite('Run Assessment flow', () => {
@@ -113,6 +118,36 @@ suite('Run Assessment flow', () => {
 		assert.strictEqual(comparison?.jpegRelativeDeltaPercent, -10);
 		assert.strictEqual(comparison?.compressionRatioAbsoluteDelta, -0.5);
 		assert.strictEqual(comparison?.compressionRatioRelativeDeltaPercent, -25);
+	});
+
+	test('reports M3 scalar and interpretation-range movement', () => {
+		const comparison = calculateM3Comparison([46], [32]);
+		assert.ok(comparison);
+		assert.strictEqual(comparison.scalarDelta, 14);
+		assert.strictEqual(comparison.direction, 'more colorful');
+		assert.strictEqual(comparison.previousInterpretation, 'slightly colorful');
+		assert.strictEqual(comparison.currentInterpretation, 'averagely colorful');
+		assert.strictEqual(comparison.rangeChanged, true);
+	});
+
+	test('reports M3 movement within the same interpretation range', () => {
+		const comparison = calculateM3Comparison(
+			{ colorfulness: 20 },
+			{ score: 25 }
+		);
+		assert.strictEqual(comparison?.direction, 'less colorful');
+		assert.strictEqual(comparison?.rangeChanged, false);
+		assert.strictEqual(comparison?.currentInterpretation, 'slightly colorful');
+	});
+
+	test('uses UIQLab colorfulness interpretation thresholds', () => {
+		assert.strictEqual(getColorfulnessInterpretation(14.99), 'not colorful');
+		assert.strictEqual(getColorfulnessInterpretation(15), 'slightly colorful');
+		assert.strictEqual(getColorfulnessInterpretation(33), 'moderately colorful');
+		assert.strictEqual(getColorfulnessInterpretation(45), 'averagely colorful');
+		assert.strictEqual(getColorfulnessInterpretation(59), 'quite colorful');
+		assert.strictEqual(getColorfulnessInterpretation(82), 'highly colorful');
+		assert.strictEqual(getColorfulnessInterpretation(109), 'extremely colorful');
 	});
 
 	test('reads actual dimensions from a PNG header', () => {

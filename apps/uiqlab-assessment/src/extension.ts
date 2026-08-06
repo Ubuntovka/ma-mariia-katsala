@@ -75,6 +75,18 @@ export interface M2Comparison {
 	compressionRatioRelativeDeltaPercent?: number;
 }
 
+export type ColorfulnessDirection = 'more colorful' | 'less colorful' | 'unchanged';
+
+export interface M3Comparison {
+	currentScore: number;
+	previousScore: number;
+	scalarDelta: number;
+	direction: ColorfulnessDirection;
+	currentInterpretation: string;
+	previousInterpretation: string;
+	rangeChanged: boolean;
+}
+
 function finiteNumber(value: unknown): number | undefined {
 	if (typeof value === 'number' && Number.isFinite(value)) {
 		return value;
@@ -158,6 +170,62 @@ export function calculateM2Comparison(
 		compressionRatioRelativeDeltaPercent: previous.compressionRatio === 0
 			? undefined
 			: (ratioDelta / previous.compressionRatio) * 100,
+	};
+}
+
+function readM3Scalar(value: unknown): number | undefined {
+	const direct = finiteNumber(value);
+	if (direct !== undefined) {
+		return direct;
+	}
+	if (Array.isArray(value)) {
+		return readM3Scalar(value[0]);
+	}
+	if (typeof value !== 'object' || value === null) {
+		return undefined;
+	}
+	const scalarEntry = Object.entries(value).find(([key]) =>
+		['colorfulness', 'colorfulnessscore', 'score', 'scalar', 'value'].includes(
+			key.toLowerCase().replace(/[^a-z0-9]/g, '')
+		)
+	);
+	return scalarEntry ? finiteNumber(scalarEntry[1]) : undefined;
+}
+
+export function getColorfulnessInterpretation(score: number): string {
+	if (score < 15) { return 'not colorful'; }
+	if (score < 33) { return 'slightly colorful'; }
+	if (score < 45) { return 'moderately colorful'; }
+	if (score < 59) { return 'averagely colorful'; }
+	if (score < 82) { return 'quite colorful'; }
+	if (score < 109) { return 'highly colorful'; }
+	return 'extremely colorful';
+}
+
+export function calculateM3Comparison(
+	currentValue: unknown,
+	previousValue: unknown
+): M3Comparison | undefined {
+	const currentScore = readM3Scalar(currentValue);
+	const previousScore = readM3Scalar(previousValue);
+	if (currentScore === undefined || previousScore === undefined) {
+		return undefined;
+	}
+	const scalarDelta = currentScore - previousScore;
+	const currentInterpretation = getColorfulnessInterpretation(currentScore);
+	const previousInterpretation = getColorfulnessInterpretation(previousScore);
+	return {
+		currentScore,
+		previousScore,
+		scalarDelta,
+		direction: scalarDelta > 0
+			? 'more colorful'
+			: scalarDelta < 0
+				? 'less colorful'
+				: 'unchanged',
+		currentInterpretation,
+		previousInterpretation,
+		rangeChanged: currentInterpretation !== previousInterpretation,
 	};
 }
 
@@ -360,6 +428,26 @@ function findM2HistoryComparison(
 	return undefined;
 }
 
+function findM3HistoryComparison(
+	currentResults: any[],
+	history: AssessmentHistory
+): { comparison: M3Comparison; previousCreatedAt: string } | undefined {
+	for (const currentResult of currentResults) {
+		if (typeof currentResult?.metric_id !== 'string' || currentResult.metric_id.split('_')[0] !== 'm3') {
+			continue;
+		}
+		const historicalResult = history.metrics[currentResult.metric_id];
+		if (!historicalResult) {
+			continue;
+		}
+		const comparison = calculateM3Comparison(currentResult.results, historicalResult.results);
+		if (comparison) {
+			return { comparison, previousCreatedAt: historicalResult.createdAt };
+		}
+	}
+	return undefined;
+}
+
 function signedNumber(value: number, maximumFractionDigits: number = 0): string {
 	if (value === 0 || Object.is(value, -0)) {
 		return '0';
@@ -387,8 +475,9 @@ function showHistoryComparison(
 ): void {
 	const m1Match = findM1HistoryComparison(currentResults, history);
 	const m2Match = findM2HistoryComparison(currentResults, history);
+	const m3Match = findM3HistoryComparison(currentResults, history);
 	const dimensions = history.screenshotDimensions;
-	if ((!m1Match && !m2Match) || !dimensions) {
+	if ((!m1Match && !m2Match && !m3Match) || !dimensions) {
 		return;
 	}
 
@@ -425,6 +514,25 @@ function showHistoryComparison(
 			<div class="explanation"><p>M2 changes can indicate altered JPEG compressibility or different visual content. JPEG byte size and compression ratio are compared independently. Neither an increase nor a decrease is automatically better.</p></div>
 		</section>` : '';
 
+	const m3RangeMovement = m3Match
+		? m3Match.comparison.rangeChanged
+			? `${m3Match.comparison.previousInterpretation} → ${m3Match.comparison.currentInterpretation}`
+			: `Remained ${m3Match.comparison.currentInterpretation}`
+		: '';
+	const m3Section = m3Match ? `
+		<section class="metric-section">
+			<h2>M3 · Colorfulness</h2>
+			<p class="previous-run">Compared with the completed run from ${new Date(m3Match.previousCreatedAt).toLocaleString()}</p>
+			<div class="grid">
+				<div class="card"><span class="label">Previous score</span><span class="value">${m3Match.comparison.previousScore.toLocaleString(undefined, { maximumFractionDigits: 3 })}</span></div>
+				<div class="card"><span class="label">Current score</span><span class="value">${m3Match.comparison.currentScore.toLocaleString(undefined, { maximumFractionDigits: 3 })}</span></div>
+				<div class="card"><span class="label">Scalar delta</span><span class="value">${signedNumber(m3Match.comparison.scalarDelta, 3)}</span></div>
+				<div class="card"><span class="label">Colorfulness movement</span><span class="value text-value">${m3Match.comparison.direction}</span></div>
+				<div class="card wide-card"><span class="label">Interpretation range</span><span class="value text-value">${m3RangeMovement}</span></div>
+			</div>
+			<div class="explanation"><p>M3 is the Hasler–Süsstrunk colorfulness score. A positive delta means the screenshot is more colorful and a negative delta means it is less colorful. Crossing an interpretation threshold is reported separately. More or less colorful is not automatically an improvement or regression.</p></div>
+		</section>` : '';
+
 	const panel = vscode.window.createWebviewPanel(
 		'historyComparison',
 		'Assessment History Comparison',
@@ -453,6 +561,8 @@ function showHistoryComparison(
 		.card { padding: 18px; border: 1px solid var(--vscode-widget-border); border-radius: 8px; background: var(--vscode-sideBar-background); }
 		.label { display: block; margin-bottom: 8px; color: var(--vscode-descriptionForeground); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 		.value { font-size: 22px; font-weight: 650; }
+		.text-value { font-size: 18px; }
+		.wide-card { grid-column: 1 / -1; }
 		.explanation { padding: 18px; border-left: 4px solid var(--vscode-focusBorder); background: var(--vscode-textBlockQuote-background); line-height: 1.55; }
 		.explanation p { margin: 0; }
 	</style>
@@ -463,6 +573,7 @@ function showHistoryComparison(
 		<p class="context"><span class="path">${escapeHtml(url)}</span><br>${dimensions.width} × ${dimensions.height} px · only completed runs with identical screenshot dimensions are compared</p>
 		${m1Section}
 		${m2Section}
+		${m3Section}
 	</main>
 </body>
 </html>`;
@@ -598,7 +709,7 @@ export function activate(context: vscode.ExtensionContext) {
 						let history: AssessmentHistory | undefined;
 						const hasComparableResult = resultData.some(
 							(result: any) => typeof result?.metric_id === 'string'
-								&& ['m1', 'm2'].includes(result.metric_id.split('_')[0])
+								&& ['m1', 'm2', 'm3'].includes(result.metric_id.split('_')[0])
 						);
 						if (hasComparableResult) {
 							try {
