@@ -49,6 +49,16 @@ export interface GitInfo {
 	mergeRequestId?: string;
 }
 
+export interface HistoricalMetricResult {
+	results: any;
+	createdAt: string;
+}
+
+export interface AssessmentHistory {
+	metrics: Record<string, HistoricalMetricResult>;
+	screenshotDimensions?: { width: number; height: number };
+}
+
 export interface QuickPickUi {
 	showQuickPick(
 		items: readonly string[],
@@ -72,12 +82,14 @@ import * as http from 'http';
 import * as https from 'https';
 
 const ORCHESTRATOR_BASE = 'http://127.0.0.1:8181';
-const MAX_MULTIPART_BODY_BYTES = 1024 * 1024;
+// The orchestrator receives both the screenshot and rendered HTML when a DOM
+// metric is selected. It forwards them to the evaluator as separate requests.
+const MAX_MULTIPART_BODY_BYTES = 10 * 1024 * 1024;
 
 import FormData = require('form-data');
 
 
-async function httpGetJson<T>(url: string): Promise<T> {
+async function httpGetJson<T>(url: string, timeoutMs: number = 100): Promise<T> {
 	const parsed = new URL(url);
 	const lib = parsed.protocol === 'https:' ? https : http;
 
@@ -98,7 +110,7 @@ async function httpGetJson<T>(url: string): Promise<T> {
 			});
 		});
 		req.on('error', reject);
-		req.setTimeout(100, () => {
+		req.setTimeout(timeoutMs, () => {
 			req.destroy();
 			reject(new Error(`Timeout fetching ${url}`));
 		});
@@ -231,18 +243,32 @@ export async function submitFileForEvaluation(
 	contentType: string,
 	selectedAssessments: AssessmentName[],
 	gitInfo: GitInfo,
-	assessedTarget?: string
+	assessedTarget?: string,
+	screenshotDimensions?: { width: number; height: number },
+	htmlContent?: string
 ): Promise<any> {
 	if (!Buffer.isBuffer(fileData)) {
 		throw new Error('fileData must be a Buffer');
 	}
 
 	const form = new FormData();
+	const metricIds = toMetricIds(selectedAssessments);
+	const needsHtml = metricIds.some((metricId) => metricId.split('_')[0] === 'm8');
+	if (needsHtml && htmlContent === undefined) {
+		throw new Error('Word count requires the captured HTML artifact');
+	}
+
 	form.append('file', fileData, {
 		filename: fileName,
 		contentType: contentType,
 	} as any);
-	toMetricIds(selectedAssessments).forEach((m) => {
+	if (needsHtml && htmlContent !== undefined) {
+		form.append('html', Buffer.from(htmlContent, 'utf8'), {
+			filename: 'capture.html',
+			contentType: 'text/html',
+		} as any);
+	}
+	metricIds.forEach((m) => {
 		form.append('mm', m);
 	});
 
@@ -255,6 +281,10 @@ export async function submitFileForEvaluation(
 	if (gitInfo.gitDirty !== undefined) { form.append('gitDirty', String(gitInfo.gitDirty)); }
 	if (gitInfo.mergeRequestId) { form.append('mergeRequestId', gitInfo.mergeRequestId); }
 	if (assessedTarget) { form.append('assessedTarget', assessedTarget); }
+	if (screenshotDimensions) {
+		form.append('screenshotWidth', String(screenshotDimensions.width));
+		form.append('screenshotHeight', String(screenshotDimensions.height));
+	}
 
 	const parsed = new URL(`${ORCHESTRATOR_BASE}/eval/evaluate_with_artifacts`);
 	const lib = parsed.protocol === 'https:' ? (await import('https')) : (await import('http'));
@@ -263,7 +293,7 @@ export async function submitFileForEvaluation(
 	const bodyLength = form.getLengthSync();
 	if (bodyLength > MAX_MULTIPART_BODY_BYTES) {
 		throw new Error(
-			`Captured page upload is ${bodyLength} bytes, exceeding the 1 MiB backend limit.`,
+			`Captured page upload is ${bodyLength} bytes, exceeding the 10 MiB orchestrator limit.`,
 		);
 	}
 	headers['content-length'] = String(bodyLength);
@@ -312,6 +342,13 @@ export function toMetricIds(selectedAssessments: AssessmentName[]): string[] {
 
 export async function fetchEvaluationResult(wui_id: string): Promise<any> {
 	return await httpGetJson(`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}`);
+}
+
+export async function fetchAssessmentHistory(wui_id: string): Promise<AssessmentHistory> {
+	return await httpGetJson(
+		`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}/history`,
+		10_000
+	);
 }
 
 /**
