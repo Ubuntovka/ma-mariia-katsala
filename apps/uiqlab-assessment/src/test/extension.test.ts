@@ -122,6 +122,7 @@ suite('Run Assessment flow', () => {
 		assert.ok(comparison);
 		assert.strictEqual(comparison.currentJpegBytes, 1200);
 		assert.strictEqual(comparison.previousJpegBytes, 1000);
+		assert.strictEqual(comparison.jpegAbsoluteDelta, 200);
 		assert.strictEqual(comparison.jpegRelativeDeltaPercent, 20);
 		assert.ok(Math.abs(comparison.compressionRatioAbsoluteDelta - 0.4) < 1e-10);
 		assert.ok(Math.abs((comparison.compressionRatioRelativeDeltaPercent ?? 0) - 20) < 1e-10);
@@ -129,9 +130,13 @@ suite('Run Assessment flow', () => {
 
 	test('supports the current UIQLab M2 result array', () => {
 		const comparison = calculateM2Comparison([900, 1.5], [1000, 2]);
+		assert.strictEqual(comparison?.jpegAbsoluteDelta, -100);
 		assert.strictEqual(comparison?.jpegRelativeDeltaPercent, -10);
 		assert.strictEqual(comparison?.compressionRatioAbsoluteDelta, -0.5);
 		assert.strictEqual(comparison?.compressionRatioRelativeDeltaPercent, -25);
+		const zeroBaseline = calculateM2Comparison([250, 1.2], [0, 1]);
+		assert.strictEqual(zeroBaseline?.jpegAbsoluteDelta, 250);
+		assert.strictEqual(zeroBaseline?.jpegRelativeDeltaPercent, undefined);
 	});
 
 	test('reports M3 scalar and interpretation-range movement', () => {

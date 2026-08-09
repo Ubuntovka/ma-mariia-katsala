@@ -69,6 +69,7 @@ export interface M1SizeComparison {
 export interface M2Comparison {
 	currentJpegBytes: number;
 	previousJpegBytes: number;
+	jpegAbsoluteDelta: number;
 	jpegRelativeDeltaPercent?: number;
 	currentCompressionRatio: number;
 	previousCompressionRatio: number;
@@ -283,6 +284,7 @@ export function calculateM2Comparison(
 	return {
 		currentJpegBytes: current.jpegBytes,
 		previousJpegBytes: previous.jpegBytes,
+		jpegAbsoluteDelta: jpegDelta,
 		jpegRelativeDeltaPercent: previous.jpegBytes === 0
 			? undefined
 			: (jpegDelta / previous.jpegBytes) * 100,
@@ -1852,6 +1854,7 @@ async function showHistoryComparison(
 			<div class="grid">
 				<div class="card"><span class="label">Previous size</span><span class="value">${m2Match.comparison.previousJpegBytes.toLocaleString()} bytes</span></div>
 				<div class="card"><span class="label">Current size</span><span class="value">${m2Match.comparison.currentJpegBytes.toLocaleString()} bytes</span></div>
+				<div class="card"><span class="label">Absolute delta</span><span class="value">${signedNumber(m2Match.comparison.jpegAbsoluteDelta)} bytes</span></div>
 				<div class="card"><span class="label">Relative change</span><span class="value">${relativeChange(m2Match.comparison.jpegRelativeDeltaPercent)}</span></div>
 			</div>
 			<h3>Compression ratio</h3>
@@ -1861,7 +1864,7 @@ async function showHistoryComparison(
 				<div class="card"><span class="label">Absolute change</span><span class="value">${signedNumber(m2Match.comparison.compressionRatioAbsoluteDelta, 4)}</span></div>
 				<div class="card"><span class="label">Relative change</span><span class="value">${relativeChange(m2Match.comparison.compressionRatioRelativeDeltaPercent)}</span></div>
 			</div>
-			<div class="explanation"><p>M2 changes can indicate altered JPEG compressibility or different visual content. JPEG byte size and compression ratio are compared independently. Neither an increase nor a decrease is automatically better.</p></div>
+			<div class="explanation"><p>M2 changes can indicate altered JPEG compressibility or different visual content. JPEG size shows both the absolute byte delta and the relative change as a percentage of the previous size. File size and compression ratio are compared independently. Neither an increase nor a decrease is automatically better.</p></div>
 		</section>` : '';
 
 	const m3RangeMovement = m3Match
