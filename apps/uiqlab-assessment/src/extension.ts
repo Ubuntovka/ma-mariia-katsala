@@ -438,6 +438,31 @@ export function calculateM4Comparison(
 	};
 }
 
+export function getM4ComparisonUnavailableReason(options: {
+	hasCurrentResult: boolean;
+	currentValue?: unknown;
+	hasHistoricalResult: boolean;
+	previousValue?: unknown;
+	dimensionsAvailable: boolean;
+}): string | undefined {
+	if (!options.hasCurrentResult) {
+		return 'The current assessment did not return an M4 result.';
+	}
+	if (!readM4Values(options.currentValue)) {
+		return 'The current M4 result did not contain all six numeric CIELAB mean and standard-deviation values.';
+	}
+	if (!options.dimensionsAvailable) {
+		return 'Screenshot dimensions were unavailable, so a dimension-matched historical run could not be selected.';
+	}
+	if (!options.hasHistoricalResult) {
+		return 'No completed previous M4 result was found for the same project, page, and screenshot dimensions.';
+	}
+	if (!readM4Values(options.previousValue)) {
+		return 'The matching previous M4 result did not contain all six numeric CIELAB mean and standard-deviation values.';
+	}
+	return undefined;
+}
+
 function readM5Proportion(value: unknown): number | undefined {
 	let proportion = finiteNumber(value);
 	if (proportion === undefined && Array.isArray(value)) {
@@ -1810,8 +1835,16 @@ function accessibilityIssueList(issues: AccessibilityIssue[]): string {
 async function showHistoryComparison(
 	currentResults: any[],
 	history: AssessmentHistory,
-	url: string
+	url: string,
+	selectedMetricIds: string[] = []
 ): Promise<void> {
+	const currentM4Result = currentResults.find(
+		(result: any) => typeof result?.metric_id === 'string' && result.metric_id.split('_')[0] === 'm4'
+	);
+	const selectedM4MetricId = selectedMetricIds.find((metricId) => metricId.split('_')[0] === 'm4');
+	const m4WasSelected = Boolean(currentM4Result || selectedM4MetricId);
+	const m4MetricId = currentM4Result?.metric_id ?? selectedM4MetricId;
+	const historicalM4Result = m4MetricId ? history.metrics[m4MetricId] : undefined;
 	const m1Match = findM1HistoryComparison(currentResults, history);
 	const m2Match = findM2HistoryComparison(currentResults, history);
 	const m3Match = findM3HistoryComparison(currentResults, history);
@@ -1829,7 +1862,7 @@ async function showHistoryComparison(
 	const m8Match = findM8HistoryComparison(currentResults, history);
 	const m9Match = await findM9HistoryComparison(currentResults, history);
 	const m10Match = await findM10HistoryComparison(currentResults, history);
-	if ((!m1Match && !m2Match && !m3Match && !m4Match && !m5Match && !m6Match && !m7Match && !m8Match && !m9Match && !m10Match && !m11Match && !m12Match && !m13Match && !m14Match) || !dimensions) {
+	if (!m1Match && !m2Match && !m3Match && !m4Match && !m4WasSelected && !m5Match && !m6Match && !m7Match && !m8Match && !m9Match && !m10Match && !m11Match && !m12Match && !m13Match && !m14Match) {
 		return;
 	}
 
@@ -1908,6 +1941,31 @@ async function showHistoryComparison(
 			</tbody></table></div>
 			<p class="variation-summary">${m4VariationSummary}</p>
 			<div class="explanation"><p>The L* mean describes average brightness, while a* and b* locate the average palette on the green–red and blue–yellow axes. ΔE is the Euclidean distance between the previous and current mean Lab colors. Standard-deviation changes describe shifts in color distribution and variation within each channel. These changes have no universal better direction.</p></div>
+		</section>` : '';
+	const currentM4Values = currentM4Result ? readM4Values(currentM4Result.results) : undefined;
+	const m4UnavailableReason = m4WasSelected && !m4Match
+		? getM4ComparisonUnavailableReason({
+			hasCurrentResult: Boolean(currentM4Result),
+			currentValue: currentM4Result?.results,
+			hasHistoricalResult: Boolean(historicalM4Result),
+			previousValue: historicalM4Result?.results,
+			dimensionsAvailable: Boolean(dimensions),
+		})
+		: undefined;
+	const m4CurrentValues = currentM4Values ? `
+			<h3>Current CIELAB values</h3>
+			<div class="table-wrap"><table><thead><tr><th>Channel</th><th>Mean</th><th>Standard deviation</th></tr></thead><tbody>
+				<tr><th scope="row">L* · lightness</th><td>${currentM4Values.lMean.toLocaleString(undefined, { maximumFractionDigits: 3 })}</td><td>${currentM4Values.lSd.toLocaleString(undefined, { maximumFractionDigits: 3 })}</td></tr>
+				<tr><th scope="row">a* · green–red</th><td>${currentM4Values.aMean.toLocaleString(undefined, { maximumFractionDigits: 3 })}</td><td>${currentM4Values.aSd.toLocaleString(undefined, { maximumFractionDigits: 3 })}</td></tr>
+				<tr><th scope="row">b* · blue–yellow</th><td>${currentM4Values.bMean.toLocaleString(undefined, { maximumFractionDigits: 3 })}</td><td>${currentM4Values.bSd.toLocaleString(undefined, { maximumFractionDigits: 3 })}</td></tr>
+			</tbody></table></div>` : '';
+	const m4UnavailableSection = m4UnavailableReason ? `
+		<section class="metric-section">
+			<h2>M4 · CIELAB mean and standard deviation</h2>
+			<p class="structural-summary">History comparison unavailable</p>
+			<div class="comparison-warning"><p>${escapeHtml(m4UnavailableReason)}</p></div>
+			${m4CurrentValues}
+			<div class="explanation"><p>M4 remains visible because it was selected for the current assessment. A comparison is only calculated when both runs provide six numeric CIELAB values and the previous completed run matches the same project, page, metric, and screenshot dimensions.</p></div>
 		</section>` : '';
 
 	const m5Assessment = m5Match?.comparison.percentagePointDelta === 0
@@ -2205,16 +2263,19 @@ async function showHistoryComparison(
 		figcaption { margin-top: 7px; color: var(--vscode-descriptionForeground); text-align: center; }
 		.explanation { padding: 18px; border-left: 4px solid var(--vscode-focusBorder); background: var(--vscode-textBlockQuote-background); line-height: 1.55; }
 		.explanation p { margin: 0; }
+		.comparison-warning { margin-bottom: 18px; padding: 14px 16px; border-left: 4px solid var(--vscode-editorWarning-foreground); background: var(--vscode-textBlockQuote-background); line-height: 1.5; }
+		.comparison-warning p { margin: 0; }
 	</style>
 </head>
 <body>
 	<main>
 		<h1>Assessment history comparison</h1>
-		<p class="context"><span class="path">${escapeHtml(url)}</span><br>${dimensions.width} × ${dimensions.height} px · only completed runs with identical screenshot dimensions are compared</p>
+		<p class="context"><span class="path">${escapeHtml(url)}</span><br>${dimensions ? `${dimensions.width} × ${dimensions.height} px · only completed runs with identical screenshot dimensions are compared` : 'Screenshot dimensions unavailable'}</p>
 		${m1Section}
 		${m2Section}
 		${m3Section}
 		${m4Section}
+		${m4UnavailableSection}
 		${m5Section}
 		${m6Section}
 		${m7Section}
@@ -2370,7 +2431,7 @@ export function activate(context: vscode.ExtensionContext) {
 						}
 						createResultsWebview(panel, resultData, localUrl, true);
 						if (history) {
-							await showHistoryComparison(resultData, history, localUrl);
+							await showHistoryComparison(resultData, history, localUrl, toMetricIds(request.assessments));
 						}
 						vscode.window.showInformationMessage('UIQLab assessment complete. Results are ready.');
 					} else {

@@ -12,6 +12,7 @@ import {
 	calculateM2Comparison,
 	calculateM3Comparison,
 	calculateM4Comparison,
+	getM4ComparisonUnavailableReason,
 	calculateM5Comparison,
 	compareM6Segmentation,
 	compareSaliencyHeatmaps,
@@ -191,6 +192,41 @@ suite('Run Assessment flow', () => {
 		);
 		assert.strictEqual(comparison?.means.l.delta, 2);
 		assert.strictEqual(comparison?.standardDeviations.b.delta, -1);
+	});
+
+	test('explains when no dimension-matched historical M4 result is available', () => {
+		assert.strictEqual(
+			getM4ComparisonUnavailableReason({
+				hasCurrentResult: true,
+				currentValue: [52, 12, 4, 5, -3, 8],
+				hasHistoricalResult: false,
+				dimensionsAvailable: true,
+			}),
+			'No completed previous M4 result was found for the same project, page, and screenshot dimensions.'
+		);
+	});
+
+	test('explains invalid current and previous M4 output', () => {
+		assert.strictEqual(
+			getM4ComparisonUnavailableReason({
+				hasCurrentResult: true,
+				currentValue: [],
+				hasHistoricalResult: true,
+				previousValue: [50, 10, 1, 6, 1, 8],
+				dimensionsAvailable: true,
+			}),
+			'The current M4 result did not contain all six numeric CIELAB mean and standard-deviation values.'
+		);
+		assert.strictEqual(
+			getM4ComparisonUnavailableReason({
+				hasCurrentResult: true,
+				currentValue: [52, 12, 4, 5, -3, 8],
+				hasHistoricalResult: true,
+				previousValue: [],
+				dimensionsAvailable: true,
+			}),
+			'The matching previous M4 result did not contain all six numeric CIELAB mean and standard-deviation values.'
+		);
 	});
 
 	test('calculates M5 white-space change in percentage points', () => {
