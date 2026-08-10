@@ -4,6 +4,7 @@ import {
 	DATA_SOURCE_OPTIONS,
 	collectAssessmentRunRequest,
 	formatAssessmentRunSummary,
+	normalizeAvailableMetricItems,
 	type QuickPickUi,
 } from '../runAssessment';
 import { getMetricDefinition, METRIC_DEFINITIONS } from '../metricCatalog';
@@ -43,6 +44,23 @@ suite('Run Assessment flow', () => {
 			assert.ok(metric, `Missing metric definition for ${assessment}`);
 			assert.ok(metric.description.length > 40, `Description for ${assessment} is too short`);
 			assert.strictEqual(getMetricDefinition(metric.id), metric);
+		}
+	});
+
+	test('uses catalog names for backend metrics so sidebar definitions resolve by ID', () => {
+		const metrics = normalizeAvailableMetricItems([
+			{ id: 'm2', name: 'JPEG file size and compression ratio (80)' },
+			{ id: 'm3', name: 'Colorfulness (Hassler & Süsstrunk)' },
+			{ id: 'm4', name: 'CIELAB color average and standard deviation' },
+		]);
+
+		assert.deepStrictEqual(metrics.map((metric) => metric.name), [
+			'JPEG file size and compression ratio',
+			'Colorfulness',
+			'CIELab color average & standard deviation',
+		]);
+		for (const metric of metrics) {
+			assert.ok(getMetricDefinition(metric.name), `Missing sidebar definition for ${metric.id}`);
 		}
 	});
 

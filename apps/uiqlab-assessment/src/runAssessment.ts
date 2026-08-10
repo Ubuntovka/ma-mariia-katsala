@@ -1,3 +1,5 @@
+import { getMetricDefinition } from './metricCatalog';
+
 export const ASSESSMENTS = [
 	'PNG file size',
 	'JPEG file size and compression ratio',
@@ -160,7 +162,7 @@ async function httpPostJson<T>(url: string, body: any): Promise<T> {
 	});
 }
 
-interface MetricInfo {
+export interface MetricInfo {
 	name: AssessmentName;
 	id: string;
 }
@@ -172,6 +174,25 @@ let cachedMetrics: MetricInfo[] = [];
  */
 export function getMetricInfoById(metricId: string): MetricInfo | undefined {
 	return cachedMetrics.find((m) => m.id === metricId || m.id === metricId.split('_')[0]);
+}
+
+export function normalizeAvailableMetricItems(items: unknown[]): MetricInfo[] {
+	return items.map((item) => {
+		if (typeof item !== 'object' || item === null) {
+			return undefined;
+		}
+
+		const candidate = item as { id?: unknown; name?: unknown };
+		if (typeof candidate.id !== 'string' || typeof candidate.name !== 'string') {
+			return undefined;
+		}
+
+		const definition = getMetricDefinition(candidate.id);
+		return {
+			id: candidate.id,
+			name: definition?.name ?? candidate.name,
+		};
+	}).filter((metric): metric is MetricInfo => Boolean(metric));
 }
 
 /**
@@ -199,16 +220,10 @@ export async function fetchAvailableAssessments(): Promise<AssessmentName[]> {
 
 		// Extract metric names from the response objects and cache the mapping.
 		// Each item is expected to be: { id: "m1", name: "PNG file size", ... }
-		cachedMetrics = items.map((it) => {
-			if (typeof it === 'object' && it !== null && it.name && it.id) {
-				// Object with name and id properties: use them directly
-				return {
-					name: it.name as AssessmentName,
-					id: it.id as string,
-				};
-			}
-			return undefined;
-		}).filter((m): m is MetricInfo => Boolean(m));
+		// Resolve built-in metrics by their stable ID. Backend display names can
+		// differ slightly from the extension catalog, which previously prevented
+		// the sidebar from finding and showing some metric definitions.
+		cachedMetrics = normalizeAvailableMetricItems(items);
 
 		const names = cachedMetrics.map((m) => m.name);
 		return names.length > 0 ? names : Array.from(ASSESSMENTS) as AssessmentName[];
