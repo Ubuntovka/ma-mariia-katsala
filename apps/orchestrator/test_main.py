@@ -2,11 +2,14 @@ import unittest
 
 from main import (
     backend_result_ids_for_run,
+    build_explanation_messages,
     decode_backend_result_ids,
+    extract_llm_explanation,
     fetch_merged_backend_results,
     merge_metric_results,
     metric_result_index,
     normalize_assessed_target,
+    resolve_llm_chat_completions_url,
     split_file_metrics,
 )
 
@@ -110,6 +113,52 @@ class HistoryBackendResultTests(unittest.IsolatedAsyncioTestCase):
             {'metric_id': 'm1_png_file_size', 'results': [123]},
             {'metric_id': 'm8_word_count', 'results': [17]},
         ])
+
+
+class LlmExplanationTests(unittest.TestCase):
+    def test_resolves_provider_base_and_full_chat_urls(self):
+        self.assertEqual(
+            resolve_llm_chat_completions_url('https://provider.example/v1'),
+            'https://provider.example/v1/chat/completions'
+        )
+        self.assertEqual(
+            resolve_llm_chat_completions_url('https://provider.example'),
+            'https://provider.example/v1/chat/completions'
+        )
+        self.assertEqual(
+            resolve_llm_chat_completions_url('https://provider.example/v1/chat/completions'),
+            'https://provider.example/v1/chat/completions'
+        )
+
+    def test_prompt_contains_current_history_and_plain_language_guidance(self):
+        messages = build_explanation_messages(
+            [{'metric_id': 'm9_edge_density', 'results': [0.24]}],
+            {'metrics': {
+                'm9_edge_density': {'results': [0.18], 'createdAt': '2026-01-01T12:00:00Z'}
+            }},
+        )
+
+        self.assertIn('non-technical reader', messages[0]['content'])
+        self.assertIn('Edge density', messages[1]['content'])
+        self.assertIn('0.24', messages[1]['content'])
+        self.assertIn('0.18', messages[1]['content'])
+
+    def test_artifact_urls_are_not_sent_to_llm(self):
+        messages = build_explanation_messages(
+            [{'metric_id': 'm7_saliency', 'results': ['https://private.example/map.png']}],
+            None,
+        )
+
+        self.assertNotIn('private.example', messages[1]['content'])
+        self.assertIn('[artifact URL omitted]', messages[1]['content'])
+
+    def test_extracts_openai_compatible_message_content(self):
+        self.assertEqual(
+            extract_llm_explanation({
+                'choices': [{'message': {'content': '  The page became less cluttered.  '}}]
+            }),
+            'The page became less cluttered.'
+        )
 
 
 if __name__ == '__main__':

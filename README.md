@@ -16,6 +16,11 @@ Environment variables are managed in a `.env` file in the root directory.
     ```
 2.  **Adjust variables**: Open the `.env` file and modify any values if necessary (e.g., database credentials or ports).
 
+    To enable plain-language assessment explanations, set `LLM_API_URL`,
+    `LLM_API_KEY`, and `LLM_MODEL`. The URL can be an OpenAI-compatible API base
+    URL (such as one ending in `/v1`) or a full Chat Completions endpoint. These values are passed only to the orchestrator and
+    are never included in extension or webview responses.
+
 ## Running the Services
 
 To build and start the services, run the following command from the project root:

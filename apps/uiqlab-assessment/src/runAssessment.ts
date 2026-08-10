@@ -61,6 +61,10 @@ export interface AssessmentHistory {
 	screenshotDimensions?: { width: number; height: number };
 }
 
+export interface AssessmentExplanation {
+	explanation: string;
+}
+
 export interface QuickPickUi {
 	showQuickPick(
 		items: readonly string[],
@@ -120,7 +124,7 @@ async function httpGetJson<T>(url: string, timeoutMs: number = 100): Promise<T> 
 	});
 }
 
-async function httpPostJson<T>(url: string, body: any): Promise<T> {
+async function httpPostJson<T>(url: string, body: any, timeoutMs: number = 130_000): Promise<T> {
 	const parsed = new URL(url);
 	const lib = parsed.protocol === 'https:' ? https : http;
 	const payload = JSON.stringify(body);
@@ -143,7 +147,12 @@ async function httpPostJson<T>(url: string, body: any): Promise<T> {
 			res.on('end', () => {
 				try {
 					if (res.statusCode && res.statusCode >= 400) {
-						reject(new Error(`HTTP ${res.statusCode} from ${url}`));
+						let detail = '';
+						try {
+							const errorBody = JSON.parse(data);
+							detail = typeof errorBody?.detail === 'string' ? errorBody.detail : '';
+						} catch { }
+						reject(new Error(detail || `HTTP ${res.statusCode} from ${url}`));
 						return;
 					}
 					resolve(JSON.parse(data));
@@ -153,7 +162,7 @@ async function httpPostJson<T>(url: string, body: any): Promise<T> {
 			});
 		});
 		req.on('error', reject);
-		req.setTimeout(130_000, () => {
+		req.setTimeout(timeoutMs, () => {
 			req.destroy();
 			reject(new Error(`Timeout posting to ${url}`));
 		});
@@ -364,6 +373,21 @@ export async function fetchAssessmentHistory(wui_id: string): Promise<Assessment
 		`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}/history`,
 		10_000
 	);
+}
+
+export async function fetchAssessmentExplanation(
+	currentResults: any[],
+	history?: AssessmentHistory
+): Promise<string> {
+	const response = await httpPostJson<AssessmentExplanation>(
+		`${ORCHESTRATOR_BASE}/eval/explanation`,
+		{ currentResults, history: history ?? { metrics: {} } },
+		210_000
+	);
+	if (typeof response.explanation !== 'string' || !response.explanation.trim()) {
+		throw new Error('The explanation service returned an empty response.');
+	}
+	return response.explanation.trim();
 }
 
 /**
