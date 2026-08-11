@@ -1297,7 +1297,7 @@ function generateResultsHtml(
 		`;
 	}).join('');
 	const explanationHtml = explanation === undefined ? '' : explanation
-		? `<section class="ai-explanation"><h2>Plain-language explanation</h2>${escapeHtml(explanation).split(/\n{2,}/).map((paragraph) => `<p>${paragraph.replace(/\n/g, '<br>')}</p>`).join('')}<p class="ai-note">AI-generated interpretation. Verify important decisions against the metric values below.</p></section>`
+		? `<section class="ai-explanation"><h2>Plain-language explanation</h2>${renderExplanationHtml(explanation)}<p class="ai-note">AI-generated interpretation. Verify important decisions against the metric values below.</p></section>`
 		: `<section class="ai-explanation unavailable"><h2>Plain-language explanation</h2><p>${escapeHtml(explanationError || 'The AI explanation is unavailable.')} The assessment results are still shown below.</p></section>`;
 
 	return `<!DOCTYPE html>
@@ -1363,7 +1363,10 @@ function generateResultsHtml(
 			line-height: 1.6;
 		}
 		.ai-explanation h2 { margin-bottom: 12px; color: #4f5fc7; font-size: 20px; }
+		.ai-explanation h3 { margin: 14px 0 6px; font-size: 16px; }
 		.ai-explanation p { margin: 0 0 10px; }
+		.ai-explanation ul, .ai-explanation ol { margin: 0 0 10px 22px; }
+		.ai-explanation code { padding: 1px 4px; border-radius: 3px; background: rgba(0, 0, 0, 0.07); }
 		.ai-explanation p:last-child { margin-bottom: 0; }
 		.ai-explanation.unavailable { background: #fff8e8; border-color: #d8a83e; }
 		.ai-note { color: #666; font-size: 12px; }
@@ -1821,6 +1824,72 @@ function escapeHtml(value: string): string {
 		.replace(/>/g, '&gt;')
 		.replace(/"/g, '&quot;')
 		.replace(/'/g, '&#39;');
+}
+
+function renderExplanationInline(value: string): string {
+	return escapeHtml(value)
+		// Some providers put spaces just inside emphasis markers. Accept that
+		// common variation as well as standard Markdown.
+		.replace(/\*\*\s*(.+?)\s*\*\*/g, '<strong>$1</strong>')
+		.replace(/__\s*(.+?)\s*__/g, '<strong>$1</strong>')
+		.replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+
+/** Render the small Markdown subset commonly returned by explanation models. */
+export function renderExplanationHtml(value: string): string {
+	const output: string[] = [];
+	let paragraph: string[] = [];
+	let listType: 'ul' | 'ol' | undefined;
+	let listItems: string[] = [];
+
+	const flushParagraph = () => {
+		if (paragraph.length > 0) {
+			output.push(`<p>${paragraph.map(renderExplanationInline).join('<br>')}</p>`);
+			paragraph = [];
+		}
+	};
+	const flushList = () => {
+		if (listType && listItems.length > 0) {
+			output.push(`<${listType}>${listItems.map((item) => `<li>${renderExplanationInline(item)}</li>`).join('')}</${listType}>`);
+		}
+		listType = undefined;
+		listItems = [];
+	};
+
+	for (const line of value.replace(/\r\n?/g, '\n').split('\n')) {
+		if (!line.trim()) {
+			flushParagraph();
+			flushList();
+			continue;
+		}
+
+		const heading = line.match(/^#{1,3}\s+(.+)$/);
+		if (heading) {
+			flushParagraph();
+			flushList();
+			output.push(`<h3>${renderExplanationInline(heading[1])}</h3>`);
+			continue;
+		}
+
+		const unorderedItem = line.match(/^\s*[-*]\s+(.+)$/);
+		const orderedItem = line.match(/^\s*\d+[.)]\s+(.+)$/);
+		const nextListType = unorderedItem ? 'ul' : orderedItem ? 'ol' : undefined;
+		const item = unorderedItem?.[1] ?? orderedItem?.[1];
+		if (nextListType && item) {
+			flushParagraph();
+			if (listType && listType !== nextListType) { flushList(); }
+			listType = nextListType;
+			listItems.push(item);
+			continue;
+		}
+
+		flushList();
+		paragraph.push(line);
+	}
+
+	flushParagraph();
+	flushList();
+	return output.join('');
 }
 
 function relativeChange(value: number | undefined): string {
