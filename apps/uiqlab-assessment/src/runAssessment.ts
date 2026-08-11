@@ -38,6 +38,9 @@ export interface LocalUrlDataSource {
 export interface AssessmentRunRequest {
 	assessments: AssessmentName[];
 	dataSource: DeploymentUrlDataSource | LocalUrlDataSource;
+	comparison?:
+		| { kind: 'latest' }
+		| { kind: 'selected'; baselineRunId: number };
 }
 
 export interface GitInfo {
@@ -59,6 +62,25 @@ export interface HistoricalMetricResult {
 export interface AssessmentHistory {
 	metrics: Record<string, HistoricalMetricResult>;
 	screenshotDimensions?: { width: number; height: number };
+	currentRun?: AssessmentRunSummary;
+	baselineRun?: AssessmentRunSummary;
+}
+
+export interface AssessmentRunSummary {
+	id: number;
+	createdAt: string;
+	commitHash?: string;
+	gitDirty?: boolean;
+	branch?: string;
+	assessedTarget?: string;
+	screenshotDimensions?: { width: number; height: number };
+}
+
+export interface AssessmentRunComparison {
+	currentResults: any[];
+	history: AssessmentHistory;
+	current: AssessmentRunSummary;
+	baseline: AssessmentRunSummary;
 }
 
 export interface AssessmentExplanation {
@@ -368,10 +390,28 @@ export async function fetchEvaluationResult(wui_id: string): Promise<any> {
 	return await httpGetJson(`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}`);
 }
 
-export async function fetchAssessmentHistory(wui_id: string): Promise<AssessmentHistory> {
+export async function fetchAssessmentHistory(wui_id: string, baselineRunId?: number): Promise<AssessmentHistory> {
+	const query = baselineRunId === undefined ? '' : `?baseline_run_id=${encodeURIComponent(String(baselineRunId))}`;
 	return await httpGetJson(
-		`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}/history`,
+		`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}/history${query}`,
 		10_000
+	);
+}
+
+export async function fetchProjectAssessmentRuns(projectKey: string): Promise<AssessmentRunSummary[]> {
+	return await httpGetJson(
+		`${ORCHESTRATOR_BASE}/eval/projects/${encodeURIComponent(projectKey)}/assessment-runs`,
+		10_000
+	);
+}
+
+export async function fetchAssessmentRunComparison(
+	currentRunId: number,
+	baselineRunId: number
+): Promise<AssessmentRunComparison> {
+	return await httpGetJson(
+		`${ORCHESTRATOR_BASE}/eval/assessment-runs/${currentRunId}/comparison?baseline_run_id=${baselineRunId}`,
+		20_000
 	);
 }
 

@@ -1,6 +1,8 @@
 import unittest
+from datetime import datetime, timezone
 
 from main import (
+    assessment_run_summary,
     backend_result_ids_for_run,
     build_explanation_messages,
     decode_backend_result_ids,
@@ -12,6 +14,31 @@ from main import (
     resolve_llm_chat_completions_url,
     split_file_metrics,
 )
+
+
+class AssessmentRunSummaryTests(unittest.TestCase):
+    def test_exposes_commit_dirty_state_target_and_dimensions(self):
+        created_at = datetime(2026, 8, 11, 12, 30, tzinfo=timezone.utc)
+        summary = assessment_run_summary({
+            'id': 17,
+            'createdAt': created_at,
+            'commitHash': 'abcdef1234567890',
+            'gitDirty': True,
+            'branch': 'main',
+            'assessedTarget': '/dashboard',
+            'screenshotWidth': 1440,
+            'screenshotHeight': 900,
+        })
+
+        self.assertEqual(summary, {
+            'id': 17,
+            'createdAt': created_at.isoformat(),
+            'commitHash': 'abcdef1234567890',
+            'gitDirty': True,
+            'branch': 'main',
+            'assessedTarget': '/dashboard',
+            'screenshotDimensions': {'width': 1440, 'height': 900},
+        })
 
 
 class AssessedTargetTests(unittest.TestCase):

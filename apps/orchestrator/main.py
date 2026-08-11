@@ -822,8 +822,23 @@ def merge_metric_results(*result_sets):
     return [merged[metric_id] for metric_id in order]
 
 
+def assessment_run_summary(run):
+    dimensions = None
+    if run['screenshotWidth'] is not None and run['screenshotHeight'] is not None:
+        dimensions = {'width': run['screenshotWidth'], 'height': run['screenshotHeight']}
+    return {
+        'id': run['id'],
+        'createdAt': run['createdAt'].isoformat(),
+        'commitHash': run['commitHash'],
+        'gitDirty': run['gitDirty'],
+        'branch': run['branch'],
+        'assessedTarget': run['assessedTarget'],
+        'screenshotDimensions': dimensions,
+    }
+
+
 @app.get("/eval/result/{wui_id}/history")
-async def get_eval_result_history(wui_id: str):
+async def get_eval_result_history(wui_id: str, baseline_run_id: Optional[int] = None):
     """Return dimension-matched screenshot-metric history for the same project and page."""
     conn = await asyncpg.connect(
         user=POSTGRES_USER,
@@ -834,7 +849,8 @@ async def get_eval_result_history(wui_id: str):
     try:
         current = await conn.fetchrow(
             '''
-            SELECT ar.id, ar.project_id, ar."assessedTarget", ar.status,
+            SELECT ar.id, ar.project_id, ar.branch, ar."commitHash", ar."gitDirty",
+                   ar."assessedTarget", ar."createdAt", ar.status,
                    ar."screenshotWidth", ar."screenshotHeight",
                    ARRAY_AGG(job.backend_result_id ORDER BY job.ordinal) AS backend_result_ids
             FROM assessment_run ar
@@ -847,12 +863,7 @@ async def get_eval_result_history(wui_id: str):
             ''',
             wui_id
         )
-        if (
-            not current
-            or current['status'] != 'COMPLETED'
-            or current['screenshotWidth'] is None
-            or current['screenshotHeight'] is None
-        ):
+        if not current or current['status'] != 'COMPLETED':
             return {'metrics': {}}
 
         async with httpx.AsyncClient() as client:
@@ -872,9 +883,18 @@ async def get_eval_result_history(wui_id: str):
         if not outstanding_metric_ids:
             return {'metrics': {}}
 
+        baseline_filter = 'AND ar.id = $6' if baseline_run_id is not None else ''
+        previous_run_args = [
+            current['project_id'], current['assessedTarget'], current['id'],
+            current['screenshotWidth'], current['screenshotHeight']
+        ]
+        if baseline_run_id is not None:
+            previous_run_args.append(baseline_run_id)
         previous_runs = await conn.fetch(
-            '''
-            SELECT ar.id, ar."createdAt",
+            f'''
+            SELECT ar.id, ar.branch, ar."commitHash", ar."gitDirty",
+                   ar."assessedTarget", ar."screenshotWidth", ar."screenshotHeight",
+                   ar."createdAt",
                    ARRAY_AGG(job.backend_result_id ORDER BY job.ordinal) AS backend_result_ids
             FROM assessment_run ar
             JOIN assessment_backend_job job
@@ -882,18 +902,18 @@ async def get_eval_result_history(wui_id: str):
             WHERE ar.project_id = $1
               AND ar."assessedTarget" = $2
               AND ar.status = 'COMPLETED'
-              AND ar."screenshotWidth" = $4
-              AND ar."screenshotHeight" = $5
+              AND ar."screenshotWidth" IS NOT DISTINCT FROM $4
+              AND ar."screenshotHeight" IS NOT DISTINCT FROM $5
               AND ar.id <> $3
               AND (ar."createdAt", ar.id) < (
                   SELECT "createdAt", id FROM assessment_run WHERE id = $3
               )
+              {baseline_filter}
             GROUP BY ar.id
             ORDER BY ar."createdAt" DESC, ar.id DESC
-            LIMIT 50
+            LIMIT 1
             ''',
-            current['project_id'], current['assessedTarget'], current['id'],
-            current['screenshotWidth'], current['screenshotHeight']
+            *previous_run_args
         )
 
         history = {}
@@ -922,12 +942,103 @@ async def get_eval_result_history(wui_id: str):
                 if not outstanding_metric_ids:
                     break
 
-        return {
-            'metrics': history,
-            'screenshotDimensions': {
+        response = {'metrics': history, 'currentRun': assessment_run_summary(current)}
+        if previous_runs:
+            response['baselineRun'] = assessment_run_summary(previous_runs[0])
+        if current['screenshotWidth'] is not None and current['screenshotHeight'] is not None:
+            response['screenshotDimensions'] = {
                 'width': current['screenshotWidth'],
                 'height': current['screenshotHeight']
             }
+        return response
+    finally:
+        await conn.close()
+
+
+@app.get("/eval/projects/{project_key}/assessment-runs")
+async def get_project_assessment_runs(project_key: UUID):
+    """List completed assessment records so two historical commits can be selected."""
+    conn = await asyncpg.connect(
+        user=POSTGRES_USER, password=POSTGRES_PASSWORD,
+        database=POSTGRES_DB, host=POSTGRES_HOST
+    )
+    try:
+        runs = await conn.fetch('''
+            SELECT ar.id, ar.branch, ar."commitHash", ar."gitDirty", ar."assessedTarget",
+                   ar."screenshotWidth", ar."screenshotHeight", ar."createdAt"
+            FROM assessment_run ar
+            JOIN project p ON p.id = ar.project_id
+            WHERE p.project_key = $1 AND ar.status = 'COMPLETED'
+            ORDER BY ar."createdAt" DESC, ar.id DESC
+            LIMIT 200
+        ''', project_key)
+        return [assessment_run_summary(run) for run in runs]
+    finally:
+        await conn.close()
+
+
+@app.get("/eval/assessment-runs/{current_run_id}/comparison")
+async def get_assessment_run_comparison(current_run_id: int, baseline_run_id: int):
+    """Return two explicitly selected, compatible historical assessment runs."""
+    conn = await asyncpg.connect(
+        user=POSTGRES_USER, password=POSTGRES_PASSWORD,
+        database=POSTGRES_DB, host=POSTGRES_HOST
+    )
+    try:
+        rows = await conn.fetch('''
+            SELECT ar.id, ar.project_id, ar.branch, ar."commitHash", ar."gitDirty",
+                   ar."assessedTarget", ar."screenshotWidth", ar."screenshotHeight",
+                   ar."createdAt", ar.status,
+                   ARRAY_AGG(job.backend_result_id ORDER BY job.ordinal) AS backend_result_ids
+            FROM assessment_run ar
+            JOIN assessment_backend_job job ON job.assessment_run_id = ar.id
+            WHERE ar.id = ANY($1::int[])
+            GROUP BY ar.id
+        ''', [current_run_id, baseline_run_id])
+        by_id = {run['id']: run for run in rows}
+        current = by_id.get(current_run_id)
+        baseline = by_id.get(baseline_run_id)
+        if not current or not baseline or current['status'] != 'COMPLETED' or baseline['status'] != 'COMPLETED':
+            raise HTTPException(status_code=404, detail='Both assessment runs must exist and be completed')
+        compatible = (
+            current['project_id'] == baseline['project_id']
+            and current['assessedTarget'] == baseline['assessedTarget']
+            and current['screenshotWidth'] == baseline['screenshotWidth']
+            and current['screenshotHeight'] == baseline['screenshotHeight']
+        )
+        if not compatible:
+            raise HTTPException(status_code=400, detail='Assessment runs must use the same project, page, and screenshot dimensions')
+        async with httpx.AsyncClient() as client:
+            try:
+                current_results, baseline_results = await asyncio.gather(
+                    fetch_merged_backend_results(client, backend_result_ids_for_run(current)),
+                    fetch_merged_backend_results(client, backend_result_ids_for_run(baseline)),
+                )
+            except (httpx.HTTPError, ValueError):
+                raise HTTPException(status_code=502, detail='Stored assessment results could not be retrieved')
+        baseline_index = metric_result_index(baseline_results)
+        history = {
+            metric_id: {
+                'results': result.get('results'),
+                'createdAt': baseline['createdAt'].isoformat(),
+            }
+            for metric_id, result in baseline_index.items()
         }
+        dimensions = None
+        if current['screenshotWidth'] is not None and current['screenshotHeight'] is not None:
+            dimensions = {'width': current['screenshotWidth'], 'height': current['screenshotHeight']}
+        response = {
+            'currentResults': current_results,
+            'history': {
+                'metrics': history,
+                'currentRun': assessment_run_summary(current),
+                'baselineRun': assessment_run_summary(baseline),
+            },
+            'current': assessment_run_summary(current),
+            'baseline': assessment_run_summary(baseline),
+        }
+        if dimensions is not None:
+            response['history']['screenshotDimensions'] = dimensions
+        return response
     finally:
         await conn.close()

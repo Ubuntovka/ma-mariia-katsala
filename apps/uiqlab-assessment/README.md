@@ -29,7 +29,8 @@ How to run an assessment:
 - Open the **UIQLab Assessment** icon in the Activity Bar (or run **Run Assessment** from the Command Palette to reveal it).
 - Choose **Deployment** or **Local URL** and enter the page URL in the persistent sidebar form.
 - Select one or more metrics. Expand **What does this measure?** below any metric to read its definition and learn how to interpret its output.
-- Select **Run assessment**. The form and its selections remain in the sidebar while you work.
+- Choose **Current state vs latest assessment**, **Current state vs selected assessment**, or **Two previous assessments**. Historical assessments are selected in the sidebar before the action starts.
+- Select **Run and compare** for a current-state mode, or **Compare assessments** for two historical runs. The sidebar hides page and metric controls when no new assessment is required.
 - Local URLs (for example `http://localhost:3000`) are captured with Playwright.
 - For a local URL, the extension opens a headless Chromium, waits for page load, waits until document.readyState === "complete", waits an extra 5s, disables animations, captures a fixed-viewport PNG and rendered HTML, then uploads the screenshot to the orchestrator.
 

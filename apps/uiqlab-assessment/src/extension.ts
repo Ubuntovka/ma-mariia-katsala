@@ -5,12 +5,15 @@ import {
 	submitFileForEvaluation,
 	pollEvaluationResult,
 	fetchAssessmentHistory,
+	fetchProjectAssessmentRuns,
+	fetchAssessmentRunComparison,
 	fetchAssessmentExplanation,
 	toMetricIds,
 	getMetricInfoById,
 	GitInfo,
 	AssessmentRunRequest,
 	AssessmentHistory,
+	AssessmentRunSummary,
 } from './runAssessment';
 import { execSync } from 'child_process';
 import { PNG } from 'pngjs';
@@ -1928,12 +1931,18 @@ function accessibilityIssueList(issues: AccessibilityIssue[]): string {
 		<li><strong>${escapeHtml(issue.ruleId)}</strong> · ${escapeHtml(issue.impact)}<br><code>${escapeHtml(issue.target)}</code>${issue.description ? `<br><span>${escapeHtml(issue.description)}</span>` : ''}</li>`).join('')}</ul>`;
 }
 
+function comparisonRunText(run: AssessmentRunSummary): string {
+	const commit = run.commitHash ? run.commitHash.slice(0, 8) : 'no commit';
+	const dirty = run.gitDirty ? ' + working changes' : '';
+	return `${commit}${dirty} · ${new Date(run.createdAt).toLocaleString()}`;
+}
+
 async function showHistoryComparison(
 	currentResults: any[],
 	history: AssessmentHistory,
 	url: string,
 	selectedMetricIds: string[] = []
-): Promise<void> {
+): Promise<boolean> {
 	const currentM4Result = currentResults.find(
 		(result: any) => typeof result?.metric_id === 'string' && result.metric_id.split('_')[0] === 'm4'
 	);
@@ -1959,8 +1968,11 @@ async function showHistoryComparison(
 	const m9Match = await findM9HistoryComparison(currentResults, history);
 	const m10Match = await findM10HistoryComparison(currentResults, history);
 	if (!m1Match && !m2Match && !m3Match && !m4Match && !m4WasSelected && !m5Match && !m6Match && !m7Match && !m8Match && !m9Match && !m10Match && !m11Match && !m12Match && !m13Match && !m14Match) {
-		return;
+		return false;
 	}
+	const runContext = history.currentRun || history.baselineRun
+		? `<br>${history.currentRun ? `<strong>Current side:</strong> ${escapeHtml(comparisonRunText(history.currentRun))}` : ''}${history.currentRun && history.baselineRun ? '<br>' : ''}${history.baselineRun ? `<strong>Baseline:</strong> ${escapeHtml(comparisonRunText(history.baselineRun))}` : ''}`
+		: '';
 
 	const m1Section = m1Match ? `
 		<section class="metric-section">
@@ -2366,7 +2378,7 @@ async function showHistoryComparison(
 <body>
 	<main>
 		<h1>Assessment history comparison</h1>
-		<p class="context"><span class="path">${escapeHtml(url)}</span><br>${dimensions ? `${dimensions.width} × ${dimensions.height} px · only completed runs with identical screenshot dimensions are compared` : 'Screenshot dimensions unavailable'}</p>
+		<p class="context"><span class="path">${escapeHtml(url)}</span><br>${dimensions ? `${dimensions.width} × ${dimensions.height} px · only completed runs with identical screenshot dimensions are compared` : 'Screenshot dimensions unavailable'}${runContext}</p>
 		${m1Section}
 		${m2Section}
 		${m3Section}
@@ -2385,6 +2397,47 @@ async function showHistoryComparison(
 	</main>
 </body>
 </html>`;
+	return true;
+}
+
+async function chooseHistoryForCurrentRun(
+	wuiId: string,
+	comparison: AssessmentRunRequest['comparison']
+): Promise<AssessmentHistory | undefined> {
+	if (!comparison || comparison.kind === 'latest') {
+		try { return await fetchAssessmentHistory(wuiId); } catch { return undefined; }
+	}
+	try {
+		const history = await fetchAssessmentHistory(wuiId, comparison.baselineRunId);
+		if (Object.keys(history.metrics).length === 0) {
+			void vscode.window.showInformationMessage('The selected assessment is not compatible or has no metrics in common with the current run.');
+			return undefined;
+		}
+		return history;
+	} catch (error: any) {
+		void vscode.window.showErrorMessage(`Could not load the selected assessment: ${error?.message ?? error}`);
+		return undefined;
+	}
+}
+
+async function compareAssessmentRuns(
+	projectConfig: ProjectConfig,
+	currentRunId: number,
+	baselineRunId: number,
+): Promise<void> {
+	try {
+		const comparison = await fetchAssessmentRunComparison(currentRunId, baselineRunId);
+		const shown = await showHistoryComparison(
+			comparison.currentResults,
+			comparison.history,
+			comparison.current.assessedTarget ?? projectConfig.name,
+		);
+		if (!shown) {
+			void vscode.window.showInformationMessage('The selected assessments do not contain any comparable metrics.');
+		}
+	} catch (error: any) {
+		void vscode.window.showErrorMessage(`Could not compare assessments: ${error?.message ?? error}`);
+	}
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -2453,14 +2506,17 @@ export function activate(context: vscode.ExtensionContext) {
 							let history: AssessmentHistory | undefined;
 							let explanation: string | null | undefined;
 							let explanationError: string | undefined;
+							history = await chooseHistoryForCurrentRun(wui_id, request.comparison);
 							if (useLlmExplanation) {
-								try { history = await fetchAssessmentHistory(wui_id); } catch { }
 								try { explanation = await fetchAssessmentExplanation(results, history); }
 								catch (error: any) { explanationError = error?.message; }
 							} else {
 								explanation = undefined;
 							}
 							createResultsWebview(panel, results, deploymentUrl, true, explanation, explanationError);
+							if (history) {
+								await showHistoryComparison(results, history, deploymentUrl, toMetricIds(request.assessments));
+							}
 						}
 
 						return results;
@@ -2535,9 +2591,7 @@ export function activate(context: vscode.ExtensionContext) {
 								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14'].includes(result.metric_id.split('_')[0])
 						);
 						if (hasComparableResult) {
-							try {
-								history = await fetchAssessmentHistory(wui_id);
-							} catch { }
+							history = await chooseHistoryForCurrentRun(wui_id, request.comparison);
 						}
 						let explanation: string | null | undefined;
 						let explanationError: string | undefined;
@@ -2562,12 +2616,31 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	};
 
-	const sidebarProvider = new AssessmentSidebarProvider(context, runConfiguredAssessment);
+	const loadAssessmentRuns = async (): Promise<AssessmentRunSummary[]> => {
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+		const projectConfig = await getOrCreateProjectConfig(workspaceRoot);
+		return await fetchProjectAssessmentRuns(projectConfig.projectKey);
+	};
+	const compareSelectedRuns = async (currentRunId: number, baselineRunId: number): Promise<void> => {
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+		const projectConfig = await getOrCreateProjectConfig(workspaceRoot);
+		await compareAssessmentRuns(projectConfig, currentRunId, baselineRunId);
+	};
+	const sidebarProvider = new AssessmentSidebarProvider(
+		context,
+		runConfiguredAssessment,
+		loadAssessmentRuns,
+		compareSelectedRuns,
+	);
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(AssessmentSidebarProvider.viewType, sidebarProvider),
 		vscode.commands.registerCommand('uiqlab-assessment.runAssessment', async () => {
 			await vscode.commands.executeCommand('workbench.view.extension.uiqlab-assessment');
 			sidebarProvider.reveal();
+		}),
+		vscode.commands.registerCommand('uiqlab-assessment.comparePastAssessments', async () => {
+			await vscode.commands.executeCommand('workbench.view.extension.uiqlab-assessment');
+			sidebarProvider.revealPastComparison();
 		}),
 	);
 }
