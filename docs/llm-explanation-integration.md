@@ -173,11 +173,13 @@ from client-facing errors.
 
 `build_explanation_messages()` creates two messages:
 
-- A system message tells the model to write for a non-technical reader, start
-  with an overall summary, explain important metrics and historical changes,
-  avoid unsupported claims, and keep the answer below 450 words.
+- A system message tells the model to write for a non-technical reader, cover
+  every preselected comparison finding, combine overlaps into conclusions,
+  avoid repeating the displayed comparison values, and provide conditional,
+  goal-dependent improvement suggestions.
 - A user message contains metric definitions, current results, and available
-  previous results as JSON data.
+  previous results as JSON data. It also contains a deterministic comparison
+  selection produced before the model is called.
 
 `METRIC_EXPLANATIONS` provides short domain descriptions for metrics M1–M14.
 This gives the model enough context to explain values such as edge density,
@@ -187,6 +189,19 @@ the reader already understands them.
 The prompt explicitly instructs the model to treat assessment values as data,
 not instructions. It also tells the model not to invent thresholds, causes, or
 recommendations unsupported by the results.
+
+For comparisons, `select_comparison_findings()` applies fixed absolute and
+relative materiality rules to each supported primary metric value. It recognizes
+cross-metric patterns only when at least two material changes in a predefined
+group move in the same direction. Pattern and individual candidates are sorted
+by a stable score and metric-ID tie-breaker. Every qualifying finding is sent to
+the model. The prompt asks it to synthesize overlapping evidence, draw cautious
+conclusions, and suggest feasible experiments rather than repeat values already
+shown in the comparison UI. For direction-neutral metrics, suggestions cover the
+trade-off and possible movement in either direction depending on the design goal.
+“Material” here is a reporting rule, not a statistical-significance claim. The
+provider temperature is set to zero to reduce wording variation; finding
+selection itself does not depend on the model.
 
 ## Payload reduction and privacy
 
@@ -199,7 +214,8 @@ basic limits:
 - content nested deeper than six levels is omitted;
 - the final serialized assessment data is limited to 30,000 characters.
 
-The response is limited to 700 tokens in the provider request. The integration
+The response is limited to 1,600 tokens in the provider request so all material
+findings can be covered without forcing repetitive detail. The integration
 does not currently cache explanations or store them in PostgreSQL; a new
 explanation is requested for every completed assessment.
 

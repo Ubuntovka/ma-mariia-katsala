@@ -12,6 +12,7 @@ from main import (
     metric_result_index,
     normalize_assessed_target,
     resolve_llm_chat_completions_url,
+    select_comparison_findings,
     split_file_metrics,
 )
 
@@ -165,6 +166,44 @@ class LlmExplanationTests(unittest.TestCase):
         self.assertIn('Edge density', messages[1]['content'])
         self.assertIn('0.24', messages[1]['content'])
         self.assertIn('0.18', messages[1]['content'])
+        self.assertIn('deterministicComparisonSelection', messages[1]['content'])
+        self.assertIn('every item', messages[0]['content'])
+        self.assertIn('Do not merely restate values', messages[0]['content'])
+        self.assertIn('concrete, feasible suggestions', messages[0]['content'])
+
+    def test_deterministically_orders_all_material_findings(self):
+        current = [
+            {'metric_id': 'm8_word_count', 'results': [150]},
+            {'metric_id': 'm9_edge_density', 'results': [0.24]},
+            {'metric_id': 'm10_feature_congestion', 'results': [5.0]},
+            {'metric_id': 'm11_subband_entropy', 'results': [3.6]},
+        ]
+        history = {'metrics': {
+            'm8_word_count': {'results': [100]},
+            'm9_edge_density': {'results': [0.18]},
+            'm10_feature_congestion': {'results': [4.0]},
+            'm11_subband_entropy': {'results': [3.0]},
+        }}
+
+        first = select_comparison_findings(current, history)
+        second = select_comparison_findings(list(reversed(current)), history)
+
+        self.assertEqual(first['findings'], second['findings'])
+        self.assertGreater(len(first['findings']), 3)
+        self.assertEqual(first['findings'][0]['type'], 'cross-metric-pattern')
+        self.assertEqual(
+            first['findings'][0]['metricFamilies'],
+            ['m9', 'm10', 'm11'],
+        )
+
+    def test_excludes_changes_below_fixed_materiality_rules(self):
+        selection = select_comparison_findings(
+            [{'metric_id': 'm9_edge_density', 'results': [0.181]}],
+            {'metrics': {'m9_edge_density': {'results': [0.18]}}},
+        )
+
+        self.assertEqual(selection['materialChangeCount'], 0)
+        self.assertEqual(selection['findings'], [])
 
     def test_artifact_urls_are_not_sent_to_llm(self):
         messages = build_explanation_messages(
