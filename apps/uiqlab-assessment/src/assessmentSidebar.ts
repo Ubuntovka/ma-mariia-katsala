@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import {
 	AssessmentName,
 	AssessmentRunRequest,
+	AssessmentRunSummary,
 	fetchAvailableAssessments,
 } from './runAssessment';
 import { getMetricDefinition } from './metricCatalog';
@@ -12,7 +13,23 @@ interface RunMessage {
 	dataSource: 'deployment-url' | 'local-url';
 	url: string;
 	shareDeployment: boolean;
+	useLlmExplanation: boolean;
+	comparisonMode: 'current-latest' | 'current-selected';
+	baselineRunId?: number;
 }
+
+interface LlmPreferenceMessage {
+	type: 'setLlmExplanation';
+	value: boolean;
+}
+
+interface ComparePastMessage {
+	type: 'comparePastAssessments';
+	currentRunId: number;
+	baselineRunId: number;
+}
+
+type SidebarMessage = RunMessage | LlmPreferenceMessage | ComparePastMessage;
 
 export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'uiqlab-assessment.sidebar';
@@ -20,15 +37,48 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 
 	constructor(
 		private readonly context: vscode.ExtensionContext,
-		private readonly runAssessment: (request: AssessmentRunRequest, shareDeployment: boolean) => Promise<void>,
+		private readonly runAssessment: (
+			request: AssessmentRunRequest,
+			shareDeployment: boolean,
+			useLlmExplanation: boolean,
+		) => Promise<void>,
+		private readonly fetchAssessmentRuns: () => Promise<AssessmentRunSummary[]>,
+		private readonly comparePastAssessments: (
+			currentRunId: number,
+			baselineRunId: number,
+		) => Promise<void>,
 	) { }
 
 	public async resolveWebviewView(view: vscode.WebviewView): Promise<void> {
 		this.view = view;
 		view.webview.options = { enableScripts: true };
-		view.webview.html = this.render(await fetchAvailableAssessments());
+		const [assessments, assessmentRuns] = await Promise.all([
+			fetchAvailableAssessments(),
+			this.fetchAssessmentRuns().catch(() => []),
+		]);
+		view.webview.html = this.render(assessments, assessmentRuns);
 
-		view.webview.onDidReceiveMessage(async (message: RunMessage) => {
+		view.webview.onDidReceiveMessage(async (message: SidebarMessage) => {
+			if (message.type === 'comparePastAssessments') {
+				if (!Number.isInteger(message.currentRunId) || !Number.isInteger(message.baselineRunId)) {
+					void vscode.window.showErrorMessage('Choose two assessments to compare.');
+					return;
+				}
+				void view.webview.postMessage({ type: 'running', value: true });
+				try {
+					await this.comparePastAssessments(message.currentRunId, message.baselineRunId);
+				} catch (error: any) {
+					void vscode.window.showErrorMessage(`Could not compare assessments: ${error?.message ?? error}`);
+				} finally {
+					void view.webview.postMessage({ type: 'running', value: false });
+				}
+				return;
+			}
+			if (message.type === 'setLlmExplanation') {
+				await this.context.workspaceState.update('uiqlab.useLlmExplanation', Boolean(message.value));
+				return;
+			}
+
 			if (message.type !== 'runAssessment') {
 				return;
 			}
@@ -50,15 +100,30 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 			}
 
 			await this.context.workspaceState.update('uiqlab.lastUrl', url);
+			const comparison = message.comparisonMode === 'current-selected'
+				? { kind: 'selected' as const, baselineRunId: Number(message.baselineRunId) }
+				: { kind: 'latest' as const };
+			if (comparison.kind === 'selected' && !Number.isInteger(comparison.baselineRunId)) {
+				void vscode.window.showErrorMessage('Choose a previous assessment to compare with the current state.');
+				return;
+			}
 			const request: AssessmentRunRequest = message.dataSource === 'local-url'
-				? { assessments, dataSource: { kind: 'local-url', localUrl: url } }
-				: { assessments, dataSource: { kind: 'deployment-url', deploymentUrl: url } };
+				? { assessments, dataSource: { kind: 'local-url', localUrl: url }, comparison }
+				: { assessments, dataSource: { kind: 'deployment-url', deploymentUrl: url }, comparison };
 
 			view.webview.postMessage({ type: 'running', value: true });
 			try {
-				await this.runAssessment(request, Boolean(message.shareDeployment));
+				await this.runAssessment(
+					request,
+					Boolean(message.shareDeployment),
+					Boolean(message.useLlmExplanation),
+				);
 			} finally {
-				view.webview.postMessage({ type: 'running', value: false });
+				void view.webview.postMessage({ type: 'running', value: false });
+				try {
+					const runs = (await this.fetchAssessmentRuns()).map(toSidebarAssessmentRun);
+					void view.webview.postMessage({ type: 'assessmentRuns', runs });
+				} catch { }
 			}
 		});
 	}
@@ -67,9 +132,15 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 		this.view?.show?.(true);
 	}
 
-	private render(assessments: AssessmentName[]): string {
+	public revealPastComparison(): void {
+		this.reveal();
+		void this.view?.webview.postMessage({ type: 'setComparisonMode', value: 'past-past' });
+	}
+
+	private render(assessments: AssessmentName[], assessmentRuns: AssessmentRunSummary[]): string {
 		const nonce = getNonce();
 		const lastUrl = this.context.workspaceState.get<string>('uiqlab.lastUrl', '');
+		const useLlmExplanation = this.context.workspaceState.get<boolean>('uiqlab.useLlmExplanation', true);
 		const metricRows = assessments.map((name, index) => {
 			const definition = getMetricDefinition(name);
 			const id = definition?.id ?? `metric-${index + 1}`;
@@ -79,6 +150,7 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 				<details><summary aria-label="Read about ${escapeHtml(name)}">What does this measure?</summary><p><span class="metric-id">${escapeHtml(id)}</span>${escapeHtml(description)}</p></details>
 			</div>`;
 		}).join('');
+		const runOptions = JSON.stringify(assessmentRuns.map(toSidebarAssessmentRun)).replace(/</g, '\\u003c');
 
 		return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -92,13 +164,30 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	fieldset { border: 0; padding: 0; margin: 0 0 18px; min-width: 0; }
 	legend { font-weight: 600; margin-bottom: 8px; }
 	.source-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+	.comparison-options { display: grid; gap: 6px; }
 	.source-option { border: 1px solid var(--vscode-input-border, transparent); padding: 7px; cursor: pointer; }
 	.source-option:has(input:checked) { border-color: var(--vscode-focusBorder); background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
 	.source-option input { margin: 0 5px 0 0; }
 	label[for="url"] { display: block; font-weight: 600; margin: 12px 0 6px; }
 	input[type="url"] { width: 100%; border: 1px solid var(--vscode-input-border, transparent); background: var(--vscode-input-background); color: var(--vscode-input-foreground); padding: 7px 8px; outline: none; }
+	select { width: 100%; border: 1px solid var(--vscode-input-border, transparent); background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); padding: 7px 8px; outline: none; }
+	.select-label { display: block; margin: 10px 0 6px; font-weight: 600; }
+	.mode-panel { margin-top: 8px; padding: 4px 0; }
+	.hidden { display: none; }
+	.empty-history { color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.4; }
 	input[type="url"]:focus { border-color: var(--vscode-focusBorder); }
 	.share { display: flex; gap: 7px; align-items: flex-start; margin-top: 10px; color: var(--vscode-descriptionForeground); font-size: 12px; }
+	.preference { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
+	.preference-copy { min-width: 0; }
+	.preference-title { display: block; font-weight: 600; line-height: 1.35; }
+	.preference-description { display: block; margin-top: 2px; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.4; }
+	.switch { position: relative; display: inline-block; flex: 0 0 auto; width: 34px; height: 18px; }
+	.switch input { width: 1px; height: 1px; opacity: 0; }
+	.slider { position: absolute; inset: 0; border: 1px solid var(--vscode-input-border, var(--vscode-widget-border)); border-radius: 9px; background: var(--vscode-input-background); cursor: pointer; transition: background .15s; }
+	.slider::before { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--vscode-descriptionForeground); transition: transform .15s, background .15s; }
+	.switch input:checked + .slider { border-color: var(--vscode-focusBorder); background: var(--vscode-button-background); }
+	.switch input:checked + .slider::before { transform: translateX(16px); background: var(--vscode-button-foreground); }
+	.switch input:focus-visible + .slider { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
 	.section-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
 	.section-row legend { margin: 0; }
 	.link-button { border: 0; padding: 0; color: var(--vscode-textLink-foreground); background: none; font: inherit; font-size: 11px; cursor: pointer; }
@@ -115,34 +204,89 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	button.run:disabled { opacity: .65; cursor: wait; }
 </style></head><body>
 	<h2>Web UI assessment</h2><p class="intro">Configure an assessment here. Your choices remain available while you work.</p>
-	<form id="assessment-form">
+	<form id="assessment-form" novalidate>
+		<fieldset><legend>What do you want to compare?</legend><div class="comparison-options">
+			<label class="source-option"><input type="radio" name="comparison" value="current-latest" checked>Current state vs latest assessment</label>
+			<label class="source-option"><input type="radio" name="comparison" value="current-selected">Current state vs selected assessment</label>
+			<label class="source-option"><input type="radio" name="comparison" value="past-past">Two previous assessments</label>
+		</div>
+		<div class="mode-panel hidden" id="selected-baseline-panel"><label class="select-label" for="selected-baseline">Previous assessment</label><select id="selected-baseline"></select><p class="empty-history hidden" id="selected-empty">No previous assessment matches this page.</p></div>
+		<div class="mode-panel hidden" id="past-comparison-panel">
+			<label class="select-label" for="past-current">Assessment A · current side</label><select id="past-current"></select>
+			<label class="select-label" for="past-baseline">Assessment B · baseline side</label><select id="past-baseline"></select>
+			<p class="empty-history hidden" id="past-empty">Two compatible completed assessments are required.</p>
+		</div></fieldset>
+		<div id="current-assessment-fields">
 		<fieldset><legend>Page source</legend><div class="source-options">
 			<label class="source-option"><input type="radio" name="source" value="deployment-url" checked>Deployment</label>
 			<label class="source-option"><input type="radio" name="source" value="local-url">Local URL</label>
 		</div><label for="url" id="url-label">Deployment URL</label><input id="url" type="url" required placeholder="https://example.com" value="${escapeHtml(lastUrl)}">
 			<label class="share" id="share-row"><input id="share" type="checkbox" required checked><span>Allow this URL and the selected metrics to be sent to the evaluation service (required to run).</span></label></fieldset>
+		<fieldset><legend>Explanation</legend><div class="preference">
+			<div class="preference-copy"><label class="preference-title" for="llm-explanation">Use LLM explanation</label><span class="preference-description">Generate a plain-language interpretation of the results.</span></div>
+			<label class="switch" aria-label="Use LLM explanation"><input id="llm-explanation" type="checkbox"${useLlmExplanation ? ' checked' : ''}><span class="slider"></span></label>
+		</div></fieldset>
 		<fieldset><div class="section-row"><legend>Metrics</legend><span><button class="link-button" id="select-all" type="button">All</button> · <button class="link-button" id="select-none" type="button">None</button></span></div>${metricRows}</fieldset>
+		</div>
 		<p class="error" id="error" role="alert"></p><button class="run" id="run" type="submit">Run assessment</button>
 	</form>
 <script nonce="${nonce}">
 	const vscode = acquireVsCodeApi();
+	let assessmentRuns = ${runOptions};
 	const form = document.getElementById('assessment-form'); const url = document.getElementById('url'); const error = document.getElementById('error'); const run = document.getElementById('run');
 	const saved = vscode.getState() || {};
 	if (saved.source) document.querySelector('input[name="source"][value="' + saved.source + '"]').checked = true;
 	if (saved.url) url.value = saved.url;
 	if (Array.isArray(saved.metrics)) document.querySelectorAll('input[name="metric"]').forEach(i => i.checked = saved.metrics.includes(i.value));
 	if (typeof saved.share === 'boolean') document.getElementById('share').checked = saved.share;
+	if (typeof saved.useLlmExplanation === 'boolean') document.getElementById('llm-explanation').checked = saved.useLlmExplanation;
+	if (saved.comparison) { const comparison = document.querySelector('input[name="comparison"][value="' + saved.comparison + '"]'); if (comparison) comparison.checked = true; }
 	function source() { return document.querySelector('input[name="source"]:checked').value; }
-	function updateSource() { const local = source() === 'local-url'; const share = document.getElementById('share'); document.getElementById('url-label').textContent = local ? 'Local URL' : 'Deployment URL'; url.placeholder = local ? 'http://localhost:3000' : 'https://example.com'; document.getElementById('share-row').style.display = local ? 'none' : 'flex'; share.required = !local; save(); }
-	function save() { vscode.setState({ source: source(), url: url.value, metrics: [...document.querySelectorAll('input[name="metric"]:checked')].map(i => i.value), share: document.getElementById('share').checked }); }
-	document.querySelectorAll('input').forEach(i => i.addEventListener('change', () => { if (i.name === 'source') updateSource(); else save(); })); url.addEventListener('input', save);
+	function comparison() { return document.querySelector('input[name="comparison"]:checked').value; }
+	function normalizedTarget(value) { try { const parsed = new URL(value); const path = parsed.pathname.replace(/\\/+$/, ''); return path || '/'; } catch { return ''; } }
+	function setOptions(select, items, savedId) { const existingId = Number(select.value); const preferredId = items.some(item => item.id === existingId) ? existingId : Number(savedId); select.textContent = ''; for (const item of items) { const option = document.createElement('option'); option.value = String(item.id); option.textContent = item.label; option.selected = preferredId === item.id; select.appendChild(option); } select.disabled = items.length === 0; }
+	function compatible(a, b) { return a.id !== b.id && a.target === b.target && a.width === b.width && a.height === b.height; }
+	function updateHistoricalSelectors() { const target = normalizedTarget(url.value); const local = source() === 'local-url'; const currentCandidates = assessmentRuns.filter(item => (!target || item.target === target) && (local ? item.width !== undefined : item.width === undefined)); setOptions(document.getElementById('selected-baseline'), currentCandidates, saved.selectedBaseline); document.getElementById('selected-empty').classList.toggle('hidden', currentCandidates.length > 0); const currentSelect = document.getElementById('past-current'); setOptions(currentSelect, assessmentRuns, saved.pastCurrent); const selectedCurrent = assessmentRuns.find(item => item.id === Number(currentSelect.value)); const baselines = selectedCurrent ? assessmentRuns.filter(item => compatible(selectedCurrent, item)) : []; setOptions(document.getElementById('past-baseline'), baselines, saved.pastBaseline); document.getElementById('past-empty').classList.toggle('hidden', assessmentRuns.length >= 2 && baselines.length > 0); }
+	function updateMode() { const mode = comparison(); const past = mode === 'past-past'; document.getElementById('current-assessment-fields').classList.toggle('hidden', past); document.getElementById('selected-baseline-panel').classList.toggle('hidden', mode !== 'current-selected'); document.getElementById('past-comparison-panel').classList.toggle('hidden', !past); run.textContent = past ? 'Compare assessments' : 'Run and compare'; updateHistoricalSelectors(); save(); }
+	function updateSource() { const local = source() === 'local-url'; const share = document.getElementById('share'); document.getElementById('url-label').textContent = local ? 'Local URL' : 'Deployment URL'; url.placeholder = local ? 'http://localhost:3000' : 'https://example.com'; document.getElementById('share-row').style.display = local ? 'none' : 'flex'; share.required = !local; updateHistoricalSelectors(); save(); }
+	function selectedId(id) { const value = document.getElementById(id).value; return value ? Number(value) : null; }
+	function save() { vscode.setState({ source: source(), comparison: comparison(), url: url.value, metrics: [...document.querySelectorAll('input[name="metric"]:checked')].map(i => i.value), share: document.getElementById('share').checked, useLlmExplanation: document.getElementById('llm-explanation').checked, selectedBaseline: selectedId('selected-baseline'), pastCurrent: selectedId('past-current'), pastBaseline: selectedId('past-baseline') }); }
+	document.querySelectorAll('input').forEach(i => i.addEventListener('change', () => { if (i.name === 'source') updateSource(); else if (i.name === 'comparison') updateMode(); else { save(); if (i.id === 'llm-explanation') vscode.postMessage({ type: 'setLlmExplanation', value: i.checked }); } })); url.addEventListener('input', () => { updateHistoricalSelectors(); save(); });
+	document.getElementById('past-current').addEventListener('change', () => { updateHistoricalSelectors(); save(); }); document.getElementById('past-baseline').addEventListener('change', save); document.getElementById('selected-baseline').addEventListener('change', save);
 	document.getElementById('select-all').addEventListener('click', () => { document.querySelectorAll('input[name="metric"]').forEach(i => i.checked = true); save(); });
 	document.getElementById('select-none').addEventListener('click', () => { document.querySelectorAll('input[name="metric"]').forEach(i => i.checked = false); save(); });
-	form.addEventListener('submit', event => { event.preventDefault(); const metrics = [...document.querySelectorAll('input[name="metric"]:checked')].map(i => i.value); if (!metrics.length) { error.textContent = 'Select at least one metric.'; error.style.display = 'block'; return; } if (!url.checkValidity()) { error.textContent = 'Enter a valid URL.'; error.style.display = 'block'; return; } error.style.display = 'none'; save(); vscode.postMessage({ type: 'runAssessment', assessments: metrics, dataSource: source(), url: url.value, shareDeployment: document.getElementById('share').checked }); });
-	window.addEventListener('message', event => { if (event.data.type === 'running') { run.disabled = event.data.value; run.textContent = event.data.value ? 'Assessment running…' : 'Run assessment'; } });
+	form.addEventListener('submit', event => { event.preventDefault(); const mode = comparison(); if (mode === 'past-past') { const currentRunId = selectedId('past-current'); const baselineRunId = selectedId('past-baseline'); if (!Number.isInteger(currentRunId) || !Number.isInteger(baselineRunId)) { error.textContent = 'Choose two compatible assessments.'; error.style.display = 'block'; return; } error.style.display = 'none'; save(); vscode.postMessage({ type: 'comparePastAssessments', currentRunId, baselineRunId }); return; } const metrics = [...document.querySelectorAll('input[name="metric"]:checked')].map(i => i.value); if (!metrics.length) { error.textContent = 'Select at least one metric.'; error.style.display = 'block'; return; } if (!url.checkValidity()) { error.textContent = 'Enter a valid URL.'; error.style.display = 'block'; return; } const baselineRunId = mode === 'current-selected' ? selectedId('selected-baseline') : undefined; if (mode === 'current-selected' && !Number.isInteger(baselineRunId)) { error.textContent = 'Choose a previous assessment.'; error.style.display = 'block'; return; } error.style.display = 'none'; save(); vscode.postMessage({ type: 'runAssessment', assessments: metrics, dataSource: source(), url: url.value, comparisonMode: mode, baselineRunId, shareDeployment: document.getElementById('share').checked, useLlmExplanation: document.getElementById('llm-explanation').checked }); });
+	window.addEventListener('message', event => { if (event.data.type === 'running') { run.disabled = event.data.value; if (event.data.value) run.textContent = comparison() === 'past-past' ? 'Comparing…' : 'Assessment running…'; else updateMode(); } if (event.data.type === 'setComparisonMode') { const input = document.querySelector('input[name="comparison"][value="' + event.data.value + '"]'); if (input) { input.checked = true; updateMode(); } } if (event.data.type === 'assessmentRuns' && Array.isArray(event.data.runs)) { assessmentRuns = event.data.runs; updateHistoricalSelectors(); save(); } });
 	updateSource();
+	updateHistoricalSelectors(); updateMode();
 </script></body></html>`;
 	}
+}
+
+function formatAssessmentRunLabel(run: AssessmentRunSummary): string {
+	const commit = run.commitHash ? run.commitHash.slice(0, 8) : 'no commit';
+	const dirty = run.gitDirty ? ' + working changes' : '';
+	const target = run.assessedTarget ? ` · ${run.assessedTarget}` : '';
+	const dimensions = run.screenshotDimensions
+		? ` · ${run.screenshotDimensions.width}×${run.screenshotDimensions.height}`
+		: '';
+	return `${commit}${dirty} · ${new Date(run.createdAt).toLocaleString()}${target}${dimensions}`;
+}
+
+function toSidebarAssessmentRun(run: AssessmentRunSummary): {
+	id: number;
+	label: string;
+	target: string;
+	width?: number;
+	height?: number;
+} {
+	return {
+		id: run.id,
+		label: formatAssessmentRunLabel(run),
+		target: run.assessedTarget ?? '',
+		width: run.screenshotDimensions?.width,
+		height: run.screenshotDimensions?.height,
+	};
 }
 
 function escapeHtml(value: string): string {

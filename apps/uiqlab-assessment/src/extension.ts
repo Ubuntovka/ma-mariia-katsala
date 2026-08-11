@@ -5,11 +5,15 @@ import {
 	submitFileForEvaluation,
 	pollEvaluationResult,
 	fetchAssessmentHistory,
+	fetchProjectAssessmentRuns,
+	fetchAssessmentRunComparison,
+	fetchAssessmentExplanation,
 	toMetricIds,
 	getMetricInfoById,
 	GitInfo,
 	AssessmentRunRequest,
 	AssessmentHistory,
+	AssessmentRunSummary,
 } from './runAssessment';
 import { execSync } from 'child_process';
 import { PNG } from 'pngjs';
@@ -53,9 +57,11 @@ function createResultsWebview(
 	panel: vscode.WebviewPanel,
 	results: any[],
 	url: string,
-	isComplete: boolean = true
+	isComplete: boolean = true,
+	explanation?: string | null,
+	explanationError?: string
 ): void {
-	const html = generateResultsHtml(results, url, isComplete);
+	const html = generateResultsHtml(results, url, isComplete, explanation, explanationError);
 	panel.webview.html = html;
 }
 
@@ -1247,7 +1253,13 @@ export function calculateM8Comparison(
 	};
 }
 
-function generateResultsHtml(results: any[], url: string, isComplete: boolean = true): string {
+function generateResultsHtml(
+	results: any[],
+	url: string,
+	isComplete: boolean = true,
+	explanation?: string | null,
+	explanationError?: string
+): string {
 	// Filter out results that are completely empty, but keep them if they are the only ones for a metric
 	const filteredResults = results.filter((r, i) => {
 		if (Array.isArray(r.results) && r.results.length > 0) {
@@ -1287,6 +1299,9 @@ function generateResultsHtml(results: any[], url: string, isComplete: boolean = 
 		</div>
 		`;
 	}).join('');
+	const explanationHtml = explanation === undefined ? '' : explanation
+		? `<section class="ai-explanation"><h2>Plain-language explanation</h2>${renderExplanationHtml(explanation)}<p class="ai-note">AI-generated interpretation. Verify important decisions against the metric values below.</p></section>`
+		: `<section class="ai-explanation unavailable"><h2>Plain-language explanation</h2><p>${escapeHtml(explanationError || 'The AI explanation is unavailable.')} The assessment results are still shown below.</p></section>`;
 
 	return `<!DOCTYPE html>
 <html>
@@ -1341,6 +1356,23 @@ function generateResultsHtml(results: any[], url: string, isComplete: boolean = 
 		.content {
 			padding: 30px;
 		}
+		.ai-explanation {
+			margin-bottom: 24px;
+			padding: 20px;
+			border: 1px solid #c8cef8;
+			border-left: 5px solid #667eea;
+			border-radius: 7px;
+			background: #f4f6ff;
+			line-height: 1.6;
+		}
+		.ai-explanation h2 { margin-bottom: 12px; color: #4f5fc7; font-size: 20px; }
+		.ai-explanation h3 { margin: 14px 0 6px; font-size: 16px; }
+		.ai-explanation p { margin: 0 0 10px; }
+		.ai-explanation ul, .ai-explanation ol { margin: 0 0 10px 22px; }
+		.ai-explanation code { padding: 1px 4px; border-radius: 3px; background: rgba(0, 0, 0, 0.07); }
+		.ai-explanation p:last-child { margin-bottom: 0; }
+		.ai-explanation.unavailable { background: #fff8e8; border-color: #d8a83e; }
+		.ai-note { color: #666; font-size: 12px; }
 		.metric-result {
 			background: #f8f9fa;
 			border-left: 4px solid #667eea;
@@ -1393,6 +1425,7 @@ function generateResultsHtml(results: any[], url: string, isComplete: boolean = 
 			<div class="url-display">🔗 ${url}</div>
 		</div>
 		<div class="content">
+			${explanationHtml}
 			${resultItems.length > 0 ? resultItems : '<div class="empty-state"><p>No results available yet. Please try again.</p></div>'}
 		</div>
 	</div>
@@ -1796,6 +1829,72 @@ function escapeHtml(value: string): string {
 		.replace(/'/g, '&#39;');
 }
 
+function renderExplanationInline(value: string): string {
+	return escapeHtml(value)
+		// Some providers put spaces just inside emphasis markers. Accept that
+		// common variation as well as standard Markdown.
+		.replace(/\*\*\s*(.+?)\s*\*\*/g, '<strong>$1</strong>')
+		.replace(/__\s*(.+?)\s*__/g, '<strong>$1</strong>')
+		.replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+
+/** Render the small Markdown subset commonly returned by explanation models. */
+export function renderExplanationHtml(value: string): string {
+	const output: string[] = [];
+	let paragraph: string[] = [];
+	let listType: 'ul' | 'ol' | undefined;
+	let listItems: string[] = [];
+
+	const flushParagraph = () => {
+		if (paragraph.length > 0) {
+			output.push(`<p>${paragraph.map(renderExplanationInline).join('<br>')}</p>`);
+			paragraph = [];
+		}
+	};
+	const flushList = () => {
+		if (listType && listItems.length > 0) {
+			output.push(`<${listType}>${listItems.map((item) => `<li>${renderExplanationInline(item)}</li>`).join('')}</${listType}>`);
+		}
+		listType = undefined;
+		listItems = [];
+	};
+
+	for (const line of value.replace(/\r\n?/g, '\n').split('\n')) {
+		if (!line.trim()) {
+			flushParagraph();
+			flushList();
+			continue;
+		}
+
+		const heading = line.match(/^#{1,3}\s+(.+)$/);
+		if (heading) {
+			flushParagraph();
+			flushList();
+			output.push(`<h3>${renderExplanationInline(heading[1])}</h3>`);
+			continue;
+		}
+
+		const unorderedItem = line.match(/^\s*[-*]\s+(.+)$/);
+		const orderedItem = line.match(/^\s*\d+[.)]\s+(.+)$/);
+		const nextListType = unorderedItem ? 'ul' : orderedItem ? 'ol' : undefined;
+		const item = unorderedItem?.[1] ?? orderedItem?.[1];
+		if (nextListType && item) {
+			flushParagraph();
+			if (listType && listType !== nextListType) { flushList(); }
+			listType = nextListType;
+			listItems.push(item);
+			continue;
+		}
+
+		flushList();
+		paragraph.push(line);
+	}
+
+	flushParagraph();
+	flushList();
+	return output.join('');
+}
+
 function relativeChange(value: number | undefined): string {
 	return value === undefined ? 'Not available' : `${signedNumber(value, 2)}%`;
 }
@@ -1832,12 +1931,18 @@ function accessibilityIssueList(issues: AccessibilityIssue[]): string {
 		<li><strong>${escapeHtml(issue.ruleId)}</strong> · ${escapeHtml(issue.impact)}<br><code>${escapeHtml(issue.target)}</code>${issue.description ? `<br><span>${escapeHtml(issue.description)}</span>` : ''}</li>`).join('')}</ul>`;
 }
 
+function comparisonRunText(run: AssessmentRunSummary): string {
+	const commit = run.commitHash ? run.commitHash.slice(0, 8) : 'no commit';
+	const dirty = run.gitDirty ? ' + working changes' : '';
+	return `${commit}${dirty} · ${new Date(run.createdAt).toLocaleString()}`;
+}
+
 async function showHistoryComparison(
 	currentResults: any[],
 	history: AssessmentHistory,
 	url: string,
 	selectedMetricIds: string[] = []
-): Promise<void> {
+): Promise<boolean> {
 	const currentM4Result = currentResults.find(
 		(result: any) => typeof result?.metric_id === 'string' && result.metric_id.split('_')[0] === 'm4'
 	);
@@ -1863,8 +1968,11 @@ async function showHistoryComparison(
 	const m9Match = await findM9HistoryComparison(currentResults, history);
 	const m10Match = await findM10HistoryComparison(currentResults, history);
 	if (!m1Match && !m2Match && !m3Match && !m4Match && !m4WasSelected && !m5Match && !m6Match && !m7Match && !m8Match && !m9Match && !m10Match && !m11Match && !m12Match && !m13Match && !m14Match) {
-		return;
+		return false;
 	}
+	const runContext = history.currentRun || history.baselineRun
+		? `<br>${history.currentRun ? `<strong>Current side:</strong> ${escapeHtml(comparisonRunText(history.currentRun))}` : ''}${history.currentRun && history.baselineRun ? '<br>' : ''}${history.baselineRun ? `<strong>Baseline:</strong> ${escapeHtml(comparisonRunText(history.baselineRun))}` : ''}`
+		: '';
 
 	const m1Section = m1Match ? `
 		<section class="metric-section">
@@ -2270,7 +2378,7 @@ async function showHistoryComparison(
 <body>
 	<main>
 		<h1>Assessment history comparison</h1>
-		<p class="context"><span class="path">${escapeHtml(url)}</span><br>${dimensions ? `${dimensions.width} × ${dimensions.height} px · only completed runs with identical screenshot dimensions are compared` : 'Screenshot dimensions unavailable'}</p>
+		<p class="context"><span class="path">${escapeHtml(url)}</span><br>${dimensions ? `${dimensions.width} × ${dimensions.height} px · only completed runs with identical screenshot dimensions are compared` : 'Screenshot dimensions unavailable'}${runContext}</p>
 		${m1Section}
 		${m2Section}
 		${m3Section}
@@ -2289,10 +2397,55 @@ async function showHistoryComparison(
 	</main>
 </body>
 </html>`;
+	return true;
+}
+
+async function chooseHistoryForCurrentRun(
+	wuiId: string,
+	comparison: AssessmentRunRequest['comparison']
+): Promise<AssessmentHistory | undefined> {
+	if (!comparison || comparison.kind === 'latest') {
+		try { return await fetchAssessmentHistory(wuiId); } catch { return undefined; }
+	}
+	try {
+		const history = await fetchAssessmentHistory(wuiId, comparison.baselineRunId);
+		if (Object.keys(history.metrics).length === 0) {
+			void vscode.window.showInformationMessage('The selected assessment is not compatible or has no metrics in common with the current run.');
+			return undefined;
+		}
+		return history;
+	} catch (error: any) {
+		void vscode.window.showErrorMessage(`Could not load the selected assessment: ${error?.message ?? error}`);
+		return undefined;
+	}
+}
+
+async function compareAssessmentRuns(
+	projectConfig: ProjectConfig,
+	currentRunId: number,
+	baselineRunId: number,
+): Promise<void> {
+	try {
+		const comparison = await fetchAssessmentRunComparison(currentRunId, baselineRunId);
+		const shown = await showHistoryComparison(
+			comparison.currentResults,
+			comparison.history,
+			comparison.current.assessedTarget ?? projectConfig.name,
+		);
+		if (!shown) {
+			void vscode.window.showInformationMessage('The selected assessments do not contain any comparable metrics.');
+		}
+	} catch (error: any) {
+		void vscode.window.showErrorMessage(`Could not compare assessments: ${error?.message ?? error}`);
+	}
 }
 
 export function activate(context: vscode.ExtensionContext) {
-	const runConfiguredAssessment = async (request: AssessmentRunRequest, shareDeployment: boolean): Promise<void> => {
+	const runConfiguredAssessment = async (
+		request: AssessmentRunRequest,
+		shareDeployment: boolean,
+		useLlmExplanation: boolean,
+	): Promise<void> => {
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 		let projectConfig: ProjectConfig;
 		try {
@@ -2346,11 +2499,24 @@ export function activate(context: vscode.ExtensionContext) {
 						});
 
 						if (results.length > 0) {
-							progress.report({ message: 'Step 3 of 3: Displaying results' });
+							progress.report({ message: useLlmExplanation ? 'Step 3 of 3: Explaining results' : 'Step 3 of 3: Preparing results' });
 							if (!panel) {
 								panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
 							}
-							createResultsWebview(panel, results, deploymentUrl, true);
+							let history: AssessmentHistory | undefined;
+							let explanation: string | null | undefined;
+							let explanationError: string | undefined;
+							history = await chooseHistoryForCurrentRun(wui_id, request.comparison);
+							if (useLlmExplanation) {
+								try { explanation = await fetchAssessmentExplanation(results, history); }
+								catch (error: any) { explanationError = error?.message; }
+							} else {
+								explanation = undefined;
+							}
+							createResultsWebview(panel, results, deploymentUrl, true, explanation, explanationError);
+							if (history) {
+								await showHistoryComparison(results, history, deploymentUrl, toMetricIds(request.assessments));
+							}
 						}
 
 						return results;
@@ -2415,7 +2581,7 @@ export function activate(context: vscode.ExtensionContext) {
 					});
 
 					if (resultData && resultData.length > 0) {
-						progress.report({ message: 'Step 4 of 4: Displaying results' });
+						progress.report({ message: useLlmExplanation ? 'Step 4 of 4: Explaining results' : 'Step 4 of 4: Preparing results' });
 						if (!panel) {
 							panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
 						}
@@ -2425,11 +2591,17 @@ export function activate(context: vscode.ExtensionContext) {
 								&& ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14'].includes(result.metric_id.split('_')[0])
 						);
 						if (hasComparableResult) {
-							try {
-								history = await fetchAssessmentHistory(wui_id);
-							} catch { }
+							history = await chooseHistoryForCurrentRun(wui_id, request.comparison);
 						}
-						createResultsWebview(panel, resultData, localUrl, true);
+						let explanation: string | null | undefined;
+						let explanationError: string | undefined;
+						if (useLlmExplanation) {
+							try { explanation = await fetchAssessmentExplanation(resultData, history); }
+							catch (error: any) { explanationError = error?.message; }
+						} else {
+							explanation = undefined;
+						}
+						createResultsWebview(panel, resultData, localUrl, true, explanation, explanationError);
 						if (history) {
 							await showHistoryComparison(resultData, history, localUrl, toMetricIds(request.assessments));
 						}
@@ -2444,12 +2616,31 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	};
 
-	const sidebarProvider = new AssessmentSidebarProvider(context, runConfiguredAssessment);
+	const loadAssessmentRuns = async (): Promise<AssessmentRunSummary[]> => {
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+		const projectConfig = await getOrCreateProjectConfig(workspaceRoot);
+		return await fetchProjectAssessmentRuns(projectConfig.projectKey);
+	};
+	const compareSelectedRuns = async (currentRunId: number, baselineRunId: number): Promise<void> => {
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+		const projectConfig = await getOrCreateProjectConfig(workspaceRoot);
+		await compareAssessmentRuns(projectConfig, currentRunId, baselineRunId);
+	};
+	const sidebarProvider = new AssessmentSidebarProvider(
+		context,
+		runConfiguredAssessment,
+		loadAssessmentRuns,
+		compareSelectedRuns,
+	);
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(AssessmentSidebarProvider.viewType, sidebarProvider),
 		vscode.commands.registerCommand('uiqlab-assessment.runAssessment', async () => {
 			await vscode.commands.executeCommand('workbench.view.extension.uiqlab-assessment');
 			sidebarProvider.reveal();
+		}),
+		vscode.commands.registerCommand('uiqlab-assessment.comparePastAssessments', async () => {
+			await vscode.commands.executeCommand('workbench.view.extension.uiqlab-assessment');
+			sidebarProvider.revealPastComparison();
 		}),
 	);
 }

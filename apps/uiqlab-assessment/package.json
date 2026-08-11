@@ -11,6 +11,7 @@
   ],
   "activationEvents": [
     "onCommand:uiqlab-assessment.runAssessment",
+    "onCommand:uiqlab-assessment.comparePastAssessments",
     "onView:uiqlab-assessment.sidebar"
   ],
   "main": "./dist/extension.js",
@@ -37,6 +38,10 @@
       {
         "command": "uiqlab-assessment.runAssessment",
         "title": "Run Assessment"
+      },
+      {
+        "command": "uiqlab-assessment.comparePastAssessments",
+        "title": "Compare Past Assessments"
       }
     ]
   },

@@ -1,3 +1,5 @@
+import { getMetricDefinition } from './metricCatalog';
+
 export const ASSESSMENTS = [
 	'PNG file size',
 	'JPEG file size and compression ratio',
@@ -36,6 +38,9 @@ export interface LocalUrlDataSource {
 export interface AssessmentRunRequest {
 	assessments: AssessmentName[];
 	dataSource: DeploymentUrlDataSource | LocalUrlDataSource;
+	comparison?:
+		| { kind: 'latest' }
+		| { kind: 'selected'; baselineRunId: number };
 }
 
 export interface GitInfo {
@@ -57,6 +62,29 @@ export interface HistoricalMetricResult {
 export interface AssessmentHistory {
 	metrics: Record<string, HistoricalMetricResult>;
 	screenshotDimensions?: { width: number; height: number };
+	currentRun?: AssessmentRunSummary;
+	baselineRun?: AssessmentRunSummary;
+}
+
+export interface AssessmentRunSummary {
+	id: number;
+	createdAt: string;
+	commitHash?: string;
+	gitDirty?: boolean;
+	branch?: string;
+	assessedTarget?: string;
+	screenshotDimensions?: { width: number; height: number };
+}
+
+export interface AssessmentRunComparison {
+	currentResults: any[];
+	history: AssessmentHistory;
+	current: AssessmentRunSummary;
+	baseline: AssessmentRunSummary;
+}
+
+export interface AssessmentExplanation {
+	explanation: string;
 }
 
 export interface QuickPickUi {
@@ -118,7 +146,7 @@ async function httpGetJson<T>(url: string, timeoutMs: number = 100): Promise<T> 
 	});
 }
 
-async function httpPostJson<T>(url: string, body: any): Promise<T> {
+async function httpPostJson<T>(url: string, body: any, timeoutMs: number = 130_000): Promise<T> {
 	const parsed = new URL(url);
 	const lib = parsed.protocol === 'https:' ? https : http;
 	const payload = JSON.stringify(body);
@@ -141,7 +169,12 @@ async function httpPostJson<T>(url: string, body: any): Promise<T> {
 			res.on('end', () => {
 				try {
 					if (res.statusCode && res.statusCode >= 400) {
-						reject(new Error(`HTTP ${res.statusCode} from ${url}`));
+						let detail = '';
+						try {
+							const errorBody = JSON.parse(data);
+							detail = typeof errorBody?.detail === 'string' ? errorBody.detail : '';
+						} catch { }
+						reject(new Error(detail || `HTTP ${res.statusCode} from ${url}`));
 						return;
 					}
 					resolve(JSON.parse(data));
@@ -151,7 +184,7 @@ async function httpPostJson<T>(url: string, body: any): Promise<T> {
 			});
 		});
 		req.on('error', reject);
-		req.setTimeout(130_000, () => {
+		req.setTimeout(timeoutMs, () => {
 			req.destroy();
 			reject(new Error(`Timeout posting to ${url}`));
 		});
@@ -160,7 +193,7 @@ async function httpPostJson<T>(url: string, body: any): Promise<T> {
 	});
 }
 
-interface MetricInfo {
+export interface MetricInfo {
 	name: AssessmentName;
 	id: string;
 }
@@ -172,6 +205,25 @@ let cachedMetrics: MetricInfo[] = [];
  */
 export function getMetricInfoById(metricId: string): MetricInfo | undefined {
 	return cachedMetrics.find((m) => m.id === metricId || m.id === metricId.split('_')[0]);
+}
+
+export function normalizeAvailableMetricItems(items: unknown[]): MetricInfo[] {
+	return items.map((item) => {
+		if (typeof item !== 'object' || item === null) {
+			return undefined;
+		}
+
+		const candidate = item as { id?: unknown; name?: unknown };
+		if (typeof candidate.id !== 'string' || typeof candidate.name !== 'string') {
+			return undefined;
+		}
+
+		const definition = getMetricDefinition(candidate.id);
+		return {
+			id: candidate.id,
+			name: definition?.name ?? candidate.name,
+		};
+	}).filter((metric): metric is MetricInfo => Boolean(metric));
 }
 
 /**
@@ -199,16 +251,10 @@ export async function fetchAvailableAssessments(): Promise<AssessmentName[]> {
 
 		// Extract metric names from the response objects and cache the mapping.
 		// Each item is expected to be: { id: "m1", name: "PNG file size", ... }
-		cachedMetrics = items.map((it) => {
-			if (typeof it === 'object' && it !== null && it.name && it.id) {
-				// Object with name and id properties: use them directly
-				return {
-					name: it.name as AssessmentName,
-					id: it.id as string,
-				};
-			}
-			return undefined;
-		}).filter((m): m is MetricInfo => Boolean(m));
+		// Resolve built-in metrics by their stable ID. Backend display names can
+		// differ slightly from the extension catalog, which previously prevented
+		// the sidebar from finding and showing some metric definitions.
+		cachedMetrics = normalizeAvailableMetricItems(items);
 
 		const names = cachedMetrics.map((m) => m.name);
 		return names.length > 0 ? names : Array.from(ASSESSMENTS) as AssessmentName[];
@@ -344,11 +390,44 @@ export async function fetchEvaluationResult(wui_id: string): Promise<any> {
 	return await httpGetJson(`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}`);
 }
 
-export async function fetchAssessmentHistory(wui_id: string): Promise<AssessmentHistory> {
+export async function fetchAssessmentHistory(wui_id: string, baselineRunId?: number): Promise<AssessmentHistory> {
+	const query = baselineRunId === undefined ? '' : `?baseline_run_id=${encodeURIComponent(String(baselineRunId))}`;
 	return await httpGetJson(
-		`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}/history`,
+		`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}/history${query}`,
 		10_000
 	);
+}
+
+export async function fetchProjectAssessmentRuns(projectKey: string): Promise<AssessmentRunSummary[]> {
+	return await httpGetJson(
+		`${ORCHESTRATOR_BASE}/eval/projects/${encodeURIComponent(projectKey)}/assessment-runs`,
+		10_000
+	);
+}
+
+export async function fetchAssessmentRunComparison(
+	currentRunId: number,
+	baselineRunId: number
+): Promise<AssessmentRunComparison> {
+	return await httpGetJson(
+		`${ORCHESTRATOR_BASE}/eval/assessment-runs/${currentRunId}/comparison?baseline_run_id=${baselineRunId}`,
+		20_000
+	);
+}
+
+export async function fetchAssessmentExplanation(
+	currentResults: any[],
+	history?: AssessmentHistory
+): Promise<string> {
+	const response = await httpPostJson<AssessmentExplanation>(
+		`${ORCHESTRATOR_BASE}/eval/explanation`,
+		{ currentResults, history: history ?? { metrics: {} } },
+		210_000
+	);
+	if (typeof response.explanation !== 'string' || !response.explanation.trim()) {
+		throw new Error('The explanation service returned an empty response.');
+	}
+	return response.explanation.trim();
 }
 
 /**

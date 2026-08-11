@@ -1,14 +1,45 @@
 import unittest
+from datetime import datetime, timezone
 
 from main import (
+    assessment_run_summary,
     backend_result_ids_for_run,
+    build_explanation_messages,
     decode_backend_result_ids,
+    extract_llm_explanation,
     fetch_merged_backend_results,
     merge_metric_results,
     metric_result_index,
     normalize_assessed_target,
+    resolve_llm_chat_completions_url,
+    select_comparison_findings,
     split_file_metrics,
 )
+
+
+class AssessmentRunSummaryTests(unittest.TestCase):
+    def test_exposes_commit_dirty_state_target_and_dimensions(self):
+        created_at = datetime(2026, 8, 11, 12, 30, tzinfo=timezone.utc)
+        summary = assessment_run_summary({
+            'id': 17,
+            'createdAt': created_at,
+            'commitHash': 'abcdef1234567890',
+            'gitDirty': True,
+            'branch': 'main',
+            'assessedTarget': '/dashboard',
+            'screenshotWidth': 1440,
+            'screenshotHeight': 900,
+        })
+
+        self.assertEqual(summary, {
+            'id': 17,
+            'createdAt': created_at.isoformat(),
+            'commitHash': 'abcdef1234567890',
+            'gitDirty': True,
+            'branch': 'main',
+            'assessedTarget': '/dashboard',
+            'screenshotDimensions': {'width': 1440, 'height': 900},
+        })
 
 
 class AssessedTargetTests(unittest.TestCase):
@@ -39,7 +70,7 @@ class MetricResultIndexTests(unittest.TestCase):
 
 
 class FileMetricRoutingTests(unittest.TestCase):
-    def test_decodes_jsonb_backend_ids_returned_by_asyncpg(self):
+    def test_decodes_legacy_jsonb_backend_ids_for_migration(self):
         self.assertEqual(
             decode_backend_result_ids('["png-id", "html-id"]'),
             ['png-id', 'html-id']
@@ -48,19 +79,15 @@ class FileMetricRoutingTests(unittest.TestCase):
     def test_history_uses_every_backend_job_for_split_artifacts(self):
         self.assertEqual(
             backend_result_ids_for_run({
-                'backendResultId': 'png-id',
-                'backendResultIds': '["png-id", "html-id"]',
+                'backend_result_ids': ['png-id', 'html-id'],
             }),
             ['png-id', 'html-id']
         )
 
-    def test_history_falls_back_to_legacy_single_backend_job(self):
+    def test_unknown_run_falls_back_to_requested_backend_job(self):
         self.assertEqual(
-            backend_result_ids_for_run({
-                'backendResultId': 'legacy-id',
-                'backendResultIds': None,
-            }),
-            ['legacy-id']
+            backend_result_ids_for_run(None, 'requested-id'),
+            ['requested-id']
         )
 
     def test_routes_word_count_to_html_and_keeps_visual_metrics_on_png(self):
@@ -110,6 +137,90 @@ class HistoryBackendResultTests(unittest.IsolatedAsyncioTestCase):
             {'metric_id': 'm1_png_file_size', 'results': [123]},
             {'metric_id': 'm8_word_count', 'results': [17]},
         ])
+
+
+class LlmExplanationTests(unittest.TestCase):
+    def test_resolves_provider_base_and_full_chat_urls(self):
+        self.assertEqual(
+            resolve_llm_chat_completions_url('https://provider.example/v1'),
+            'https://provider.example/v1/chat/completions'
+        )
+        self.assertEqual(
+            resolve_llm_chat_completions_url('https://provider.example'),
+            'https://provider.example/v1/chat/completions'
+        )
+        self.assertEqual(
+            resolve_llm_chat_completions_url('https://provider.example/v1/chat/completions'),
+            'https://provider.example/v1/chat/completions'
+        )
+
+    def test_prompt_contains_current_history_and_plain_language_guidance(self):
+        messages = build_explanation_messages(
+            [{'metric_id': 'm9_edge_density', 'results': [0.24]}],
+            {'metrics': {
+                'm9_edge_density': {'results': [0.18], 'createdAt': '2026-01-01T12:00:00Z'}
+            }},
+        )
+
+        self.assertIn('non-technical reader', messages[0]['content'])
+        self.assertIn('Edge density', messages[1]['content'])
+        self.assertIn('0.24', messages[1]['content'])
+        self.assertIn('0.18', messages[1]['content'])
+        self.assertIn('deterministicComparisonSelection', messages[1]['content'])
+        self.assertIn('every item', messages[0]['content'])
+        self.assertIn('Do not merely restate values', messages[0]['content'])
+        self.assertIn('concrete, feasible suggestions', messages[0]['content'])
+
+    def test_deterministically_orders_all_material_findings(self):
+        current = [
+            {'metric_id': 'm8_word_count', 'results': [150]},
+            {'metric_id': 'm9_edge_density', 'results': [0.24]},
+            {'metric_id': 'm10_feature_congestion', 'results': [5.0]},
+            {'metric_id': 'm11_subband_entropy', 'results': [3.6]},
+        ]
+        history = {'metrics': {
+            'm8_word_count': {'results': [100]},
+            'm9_edge_density': {'results': [0.18]},
+            'm10_feature_congestion': {'results': [4.0]},
+            'm11_subband_entropy': {'results': [3.0]},
+        }}
+
+        first = select_comparison_findings(current, history)
+        second = select_comparison_findings(list(reversed(current)), history)
+
+        self.assertEqual(first['findings'], second['findings'])
+        self.assertGreater(len(first['findings']), 3)
+        self.assertEqual(first['findings'][0]['type'], 'cross-metric-pattern')
+        self.assertEqual(
+            first['findings'][0]['metricFamilies'],
+            ['m9', 'm10', 'm11'],
+        )
+
+    def test_excludes_changes_below_fixed_materiality_rules(self):
+        selection = select_comparison_findings(
+            [{'metric_id': 'm9_edge_density', 'results': [0.181]}],
+            {'metrics': {'m9_edge_density': {'results': [0.18]}}},
+        )
+
+        self.assertEqual(selection['materialChangeCount'], 0)
+        self.assertEqual(selection['findings'], [])
+
+    def test_artifact_urls_are_not_sent_to_llm(self):
+        messages = build_explanation_messages(
+            [{'metric_id': 'm7_saliency', 'results': ['https://private.example/map.png']}],
+            None,
+        )
+
+        self.assertNotIn('private.example', messages[1]['content'])
+        self.assertIn('[artifact URL omitted]', messages[1]['content'])
+
+    def test_extracts_openai_compatible_message_content(self):
+        self.assertEqual(
+            extract_llm_explanation({
+                'choices': [{'message': {'content': '  The page became less cluttered.  '}}]
+            }),
+            'The page became less cluttered.'
+        )
 
 
 if __name__ == '__main__':

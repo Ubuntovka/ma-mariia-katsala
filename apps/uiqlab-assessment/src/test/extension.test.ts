@@ -4,6 +4,7 @@ import {
 	DATA_SOURCE_OPTIONS,
 	collectAssessmentRunRequest,
 	formatAssessmentRunSummary,
+	normalizeAvailableMetricItems,
 	type QuickPickUi,
 } from '../runAssessment';
 import { getMetricDefinition, METRIC_DEFINITIONS } from '../metricCatalog';
@@ -26,6 +27,7 @@ import {
 	calculateM14Comparison,
 	normalizeUiedElements,
 	getColorfulnessInterpretation,
+	renderExplanationHtml,
 } from '../extension';
 import { getPngDimensions } from '../playwrightCapture';
 import { PNG } from 'pngjs';
@@ -43,6 +45,35 @@ suite('Run Assessment flow', () => {
 			assert.ok(metric, `Missing metric definition for ${assessment}`);
 			assert.ok(metric.description.length > 40, `Description for ${assessment} is too short`);
 			assert.strictEqual(getMetricDefinition(metric.id), metric);
+		}
+	});
+
+	test('renders common LLM Markdown without exposing raw formatting markers', () => {
+		assert.strictEqual(
+			renderExplanationHtml('** Visual Complexity and Content **\n\n- Dense navigation\n- `42` visible items'),
+			'<p><strong>Visual Complexity and Content</strong></p><ul><li>Dense navigation</li><li><code>42</code> visible items</li></ul>'
+		);
+	});
+
+	test('escapes HTML in LLM explanations before adding safe formatting', () => {
+		const html = renderExplanationHtml('**Safe** <script>alert("x")</script>');
+		assert.strictEqual(html, '<p><strong>Safe</strong> &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;</p>');
+	});
+
+	test('uses catalog names for backend metrics so sidebar definitions resolve by ID', () => {
+		const metrics = normalizeAvailableMetricItems([
+			{ id: 'm2', name: 'JPEG file size and compression ratio (80)' },
+			{ id: 'm3', name: 'Colorfulness (Hassler & Süsstrunk)' },
+			{ id: 'm4', name: 'CIELAB color average and standard deviation' },
+		]);
+
+		assert.deepStrictEqual(metrics.map((metric) => metric.name), [
+			'JPEG file size and compression ratio',
+			'Colorfulness',
+			'CIELab color average & standard deviation',
+		]);
+		for (const metric of metrics) {
+			assert.ok(getMetricDefinition(metric.name), `Missing sidebar definition for ${metric.id}`);
 		}
 	});
 
