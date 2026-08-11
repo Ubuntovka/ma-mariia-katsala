@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
 from uuid import UUID
 import asyncio
@@ -85,8 +85,6 @@ async def init_db():
                 "gitDirty" BOOLEAN,
                 "mergeRequestId" TEXT,
                 "assessedTarget" TEXT,
-                "backendResultId" TEXT,
-                "backendResultIds" JSONB,
                 status TEXT DEFAULT 'PENDING',
                 success BOOLEAN,
                 "metricsCount" INTEGER,
@@ -97,8 +95,6 @@ async def init_db():
         ''')
         # Ensure columns exist for existing tables
         await conn.execute('''
-            ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS "backendResultId" TEXT;
-            ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS "backendResultIds" JSONB;
             ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'PENDING';
             ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS success BOOLEAN;
             ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS "metricsCount" INTEGER;
@@ -106,7 +102,108 @@ async def init_db():
             ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS "screenshotHeight" INTEGER;
             ALTER TABLE assessment_run DROP COLUMN IF EXISTS results;
         ''')
-        await conn.execute('CREATE INDEX IF NOT EXISTS idx_assessment_run_backend_id ON assessment_run("backendResultId");')
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS assessment_backend_job (
+                id SERIAL PRIMARY KEY,
+                assessment_run_id INTEGER NOT NULL REFERENCES assessment_run(id) ON DELETE CASCADE,
+                backend_result_id TEXT NOT NULL UNIQUE,
+                artifact_type TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                UNIQUE (assessment_run_id, ordinal)
+            );
+        ''')
+        # Migrate databases that created this table before local job IDs and job
+        # types were recorded. Existing rows receive sequence-backed IDs.
+        backend_job_columns = {
+            row['column_name']
+            for row in await conn.fetch('''
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'assessment_backend_job'
+            ''')
+        }
+        if 'id' not in backend_job_columns:
+            await conn.execute('''
+                ALTER TABLE assessment_backend_job ADD COLUMN id SERIAL
+            ''')
+        await conn.execute('''
+            ALTER TABLE assessment_backend_job
+              ADD COLUMN IF NOT EXISTS artifact_type TEXT;
+            UPDATE assessment_backend_job
+              SET artifact_type = 'legacy'
+              WHERE artifact_type IS NULL;
+            ALTER TABLE assessment_backend_job
+              ALTER COLUMN artifact_type SET NOT NULL;
+        ''')
+        backend_job_primary_key = await conn.fetchrow('''
+            SELECT constraint_name,
+                   ARRAY_AGG(column_name ORDER BY ordinal_position) AS columns
+            FROM information_schema.key_column_usage
+            WHERE table_schema = current_schema()
+              AND table_name = 'assessment_backend_job'
+              AND constraint_name IN (
+                  SELECT constraint_name
+                  FROM information_schema.table_constraints
+                  WHERE table_schema = current_schema()
+                    AND table_name = 'assessment_backend_job'
+                    AND constraint_type = 'PRIMARY KEY'
+              )
+            GROUP BY constraint_name
+        ''')
+        if not backend_job_primary_key or list(backend_job_primary_key['columns']) != ['id']:
+            if backend_job_primary_key:
+                constraint_name = backend_job_primary_key['constraint_name'].replace('"', '""')
+                await conn.execute(
+                    f'ALTER TABLE assessment_backend_job DROP CONSTRAINT "{constraint_name}"'
+                )
+            await conn.execute('''
+                ALTER TABLE assessment_backend_job
+                  ADD CONSTRAINT assessment_backend_job_pkey PRIMARY KEY (id)
+            ''')
+
+        # Migrate the former single-ID/JSONB representation before removing it.
+        legacy_columns = {
+            row['column_name']
+            for row in await conn.fetch('''
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'assessment_run'
+                  AND column_name IN ('backendResultId', 'backendResultIds')
+            ''')
+        }
+        if legacy_columns:
+            selected_columns = ['id'] + [
+                f'"{column}"'
+                for column in ('backendResultId', 'backendResultIds')
+                if column in legacy_columns
+            ]
+            legacy_runs = await conn.fetch(
+                f'SELECT {", ".join(selected_columns)} FROM assessment_run'
+            )
+            jobs = []
+            for run in legacy_runs:
+                backend_ids = []
+                if 'backendResultId' in legacy_columns and run['backendResultId']:
+                    backend_ids.append(run['backendResultId'])
+                if 'backendResultIds' in legacy_columns:
+                    backend_ids.extend(decode_backend_result_ids(run['backendResultIds']))
+                for ordinal, backend_id in enumerate(dict.fromkeys(backend_ids)):
+                    jobs.append((run['id'], backend_id, 'legacy', ordinal))
+            if jobs:
+                await conn.executemany('''
+                    INSERT INTO assessment_backend_job (
+                        assessment_run_id, backend_result_id, artifact_type, ordinal
+                    ) VALUES ($1, $2, $3, $4)
+                    ON CONFLICT DO NOTHING
+                ''', jobs)
+
+            await conn.execute('''
+                DROP INDEX IF EXISTS idx_assessment_run_backend_id;
+                ALTER TABLE assessment_run DROP COLUMN IF EXISTS "backendResultId";
+                ALTER TABLE assessment_run DROP COLUMN IF EXISTS "backendResultIds";
+            ''')
         await conn.execute('''
             CREATE INDEX IF NOT EXISTS idx_assessment_run_history
             ON assessment_run(project_id, "assessedTarget", status, "createdAt" DESC);
@@ -183,8 +280,7 @@ async def get_or_create_project(
 
 async def update_assessment_run(
     run_id: int,
-    backend_id: Optional[str] = None,
-    backend_ids: Optional[List[str]] = None,
+    backend_jobs: Optional[List[Tuple[str, str]]] = None,
     status: Optional[str] = None,
     success: Optional[bool] = None
 ):
@@ -195,36 +291,26 @@ async def update_assessment_run(
         host=POSTGRES_HOST
     )
     try:
-        if backend_id is not None and backend_ids is not None:
-            await conn.execute(
-                'UPDATE assessment_run SET "backendResultId" = $1, "backendResultIds" = $2::jsonb WHERE id = $3',
-                backend_id, json.dumps(backend_ids), run_id
-            )
-        elif backend_id is not None and status is not None and success is not None:
-            await conn.execute(
-                'UPDATE assessment_run SET "backendResultId" = $1, status = $2, success = $3 WHERE id = $4',
-                backend_id, status, success, run_id
-            )
-        elif backend_id is not None and status is not None:
-            await conn.execute(
-                'UPDATE assessment_run SET "backendResultId" = $1, status = $2 WHERE id = $3',
-                backend_id, status, run_id
-            )
-        elif backend_id is not None:
-            await conn.execute(
-                'UPDATE assessment_run SET "backendResultId" = $1 WHERE id = $2',
-                backend_id, run_id
-            )
-        elif status is not None and success is not None:
-            await conn.execute(
-                'UPDATE assessment_run SET status = $1, success = $2 WHERE id = $3',
-                status, success, run_id
-            )
-        elif status is not None:
-            await conn.execute(
-                'UPDATE assessment_run SET status = $1 WHERE id = $2',
-                status, run_id
-            )
+        async with conn.transaction():
+            if backend_jobs is not None:
+                await conn.executemany('''
+                    INSERT INTO assessment_backend_job (
+                        assessment_run_id, backend_result_id, artifact_type, ordinal
+                    ) VALUES ($1, $2, $3, $4)
+                ''', [
+                    (run_id, backend_id, artifact_type, ordinal)
+                    for ordinal, (backend_id, artifact_type) in enumerate(backend_jobs)
+                ])
+            if status is not None and success is not None:
+                await conn.execute(
+                    'UPDATE assessment_run SET status = $1, success = $2 WHERE id = $3',
+                    status, success, run_id
+                )
+            elif status is not None:
+                await conn.execute(
+                    'UPDATE assessment_run SET status = $1 WHERE id = $2',
+                    status, run_id
+                )
     finally:
         await conn.close()
 
@@ -453,7 +539,9 @@ async def post_evaluate_url_input_test(payload: EvaluateURLInput):
             resp_json = response.json()
             backend_id = resp_json.get("result_id")
             if run_id and backend_id:
-                await update_assessment_run(run_id, backend_id=backend_id)
+                await update_assessment_run(
+                    run_id, backend_jobs=[(backend_id, 'url')]
+                )
             return resp_json
     except Exception as exc:
         if run_id:
@@ -538,27 +626,31 @@ async def evaluate_with_artifacts(
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             submissions = []
+            submission_types = []
             if png_metrics:
                 submissions.append(client.post(
                     f"{BACKEND_URL}/eval/evaluate_file_input",
                     files={"file": (file.filename or "capture.png", file_bytes, content_type)},
                     data={"mm": json.dumps({"metrics": png_metrics})}
                 ))
+                submission_types.append('png')
             if html_metrics and html_bytes is not None:
                 submissions.append(client.post(
                     f"{BACKEND_URL}/eval/evaluate_file_input",
                     files={"file": (html.filename or "capture.html", html_bytes, "text/html")},
                     data={"mm": json.dumps({"metrics": html_metrics})}
                 ))
+                submission_types.append('html')
 
             responses = await asyncio.gather(*submissions)
             for response in responses:
                 response.raise_for_status()
             response_json = [response.json() for response in responses]
-            backend_ids = [
-                response["result_id"] for response in response_json if response.get("result_id")
+            backend_jobs = [
+                (response.get("result_id"), artifact_type)
+                for response, artifact_type in zip(response_json, submission_types)
             ]
-            if not backend_ids:
+            if any(backend_id is None for backend_id, _ in backend_jobs):
                 raise ValueError("UIQLab backend did not return a result_id")
 
             # The first ID remains the public tracking ID; result polling merges
@@ -566,7 +658,7 @@ async def evaluate_with_artifacts(
             resp_json = response_json[0]
             if run_id:
                 await update_assessment_run(
-                    run_id, backend_id=backend_ids[0], backend_ids=backend_ids
+                    run_id, backend_jobs=backend_jobs
                 )
             return resp_json
         except Exception as exc:
@@ -588,9 +680,15 @@ async def get_eval_result(wui_id: str):
     try:
         run = await conn.fetchrow(
             '''
-            SELECT id, "metricsCount", status, "backendResultIds"
-            FROM assessment_run
-            WHERE "backendResultId" = $1
+            SELECT ar.id, ar."metricsCount", ar.status,
+                   ARRAY_AGG(job.backend_result_id ORDER BY job.ordinal) AS backend_result_ids
+            FROM assessment_run ar
+            JOIN assessment_backend_job requested_job
+              ON requested_job.assessment_run_id = ar.id
+            JOIN assessment_backend_job job
+              ON job.assessment_run_id = ar.id
+            WHERE requested_job.backend_result_id = $1
+            GROUP BY ar.id
             ''',
             wui_id
         )
@@ -673,16 +771,13 @@ def decode_backend_result_ids(value) -> List[str]:
 
 
 def backend_result_ids_for_run(run, fallback_id: Optional[str] = None) -> List[str]:
-    """Return all backend jobs for a run, with legacy single-ID fallback."""
-    backend_ids = decode_backend_result_ids(run['backendResultIds']) if run else []
-    if backend_ids:
-        return backend_ids
+    """Return the ordered backend jobs loaded for an assessment run."""
     try:
-        primary_id = run['backendResultId'] if run else None
+        backend_ids = run['backend_result_ids'] if run else None
     except KeyError:
-        primary_id = None
-    if primary_id:
-        return [primary_id]
+        backend_ids = None
+    if backend_ids:
+        return list(backend_ids)
     return [fallback_id] if fallback_id else []
 
 
@@ -739,10 +834,16 @@ async def get_eval_result_history(wui_id: str):
     try:
         current = await conn.fetchrow(
             '''
-            SELECT id, project_id, "assessedTarget", "backendResultId", "backendResultIds", status,
-                   "screenshotWidth", "screenshotHeight"
-            FROM assessment_run
-            WHERE "backendResultId" = $1
+            SELECT ar.id, ar.project_id, ar."assessedTarget", ar.status,
+                   ar."screenshotWidth", ar."screenshotHeight",
+                   ARRAY_AGG(job.backend_result_id ORDER BY job.ordinal) AS backend_result_ids
+            FROM assessment_run ar
+            JOIN assessment_backend_job requested_job
+              ON requested_job.assessment_run_id = ar.id
+            JOIN assessment_backend_job job
+              ON job.assessment_run_id = ar.id
+            WHERE requested_job.backend_result_id = $1
+            GROUP BY ar.id
             ''',
             wui_id
         )
@@ -773,18 +874,22 @@ async def get_eval_result_history(wui_id: str):
 
         previous_runs = await conn.fetch(
             '''
-            SELECT id, "backendResultId", "backendResultIds", "createdAt"
-            FROM assessment_run
-            WHERE project_id = $1
-              AND "assessedTarget" = $2
-              AND status = 'COMPLETED'
-              AND "screenshotWidth" = $4
-              AND "screenshotHeight" = $5
-              AND id <> $3
-              AND ("createdAt", id) < (
+            SELECT ar.id, ar."createdAt",
+                   ARRAY_AGG(job.backend_result_id ORDER BY job.ordinal) AS backend_result_ids
+            FROM assessment_run ar
+            JOIN assessment_backend_job job
+              ON job.assessment_run_id = ar.id
+            WHERE ar.project_id = $1
+              AND ar."assessedTarget" = $2
+              AND ar.status = 'COMPLETED'
+              AND ar."screenshotWidth" = $4
+              AND ar."screenshotHeight" = $5
+              AND ar.id <> $3
+              AND (ar."createdAt", ar.id) < (
                   SELECT "createdAt", id FROM assessment_run WHERE id = $3
               )
-            ORDER BY "createdAt" DESC, id DESC
+            GROUP BY ar.id
+            ORDER BY ar."createdAt" DESC, ar.id DESC
             LIMIT 50
             ''',
             current['project_id'], current['assessedTarget'], current['id'],

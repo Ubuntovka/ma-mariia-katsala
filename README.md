@@ -1,5 +1,9 @@
 # Orchestrator and PostgreSQL Docker Setup
 
+See [LLM-Based Assessment Explanations](docs/llm-explanation-integration.md)
+for the implementation architecture, configuration, security model, and
+troubleshooting guide.
+
 This setup allows you to run the Orchestrator application and a PostgreSQL database using Docker Compose.
 
 ## Prerequisites

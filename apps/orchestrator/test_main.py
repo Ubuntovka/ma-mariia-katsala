@@ -42,7 +42,7 @@ class MetricResultIndexTests(unittest.TestCase):
 
 
 class FileMetricRoutingTests(unittest.TestCase):
-    def test_decodes_jsonb_backend_ids_returned_by_asyncpg(self):
+    def test_decodes_legacy_jsonb_backend_ids_for_migration(self):
         self.assertEqual(
             decode_backend_result_ids('["png-id", "html-id"]'),
             ['png-id', 'html-id']
@@ -51,19 +51,15 @@ class FileMetricRoutingTests(unittest.TestCase):
     def test_history_uses_every_backend_job_for_split_artifacts(self):
         self.assertEqual(
             backend_result_ids_for_run({
-                'backendResultId': 'png-id',
-                'backendResultIds': '["png-id", "html-id"]',
+                'backend_result_ids': ['png-id', 'html-id'],
             }),
             ['png-id', 'html-id']
         )
 
-    def test_history_falls_back_to_legacy_single_backend_job(self):
+    def test_unknown_run_falls_back_to_requested_backend_job(self):
         self.assertEqual(
-            backend_result_ids_for_run({
-                'backendResultId': 'legacy-id',
-                'backendResultIds': None,
-            }),
-            ['legacy-id']
+            backend_result_ids_for_run(None, 'requested-id'),
+            ['requested-id']
         )
 
     def test_routes_word_count_to_html_and_keeps_visual_metrics_on_png(self):
