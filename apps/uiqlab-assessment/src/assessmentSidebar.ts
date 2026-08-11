@@ -12,7 +12,15 @@ interface RunMessage {
 	dataSource: 'deployment-url' | 'local-url';
 	url: string;
 	shareDeployment: boolean;
+	useLlmExplanation: boolean;
 }
+
+interface LlmPreferenceMessage {
+	type: 'setLlmExplanation';
+	value: boolean;
+}
+
+type SidebarMessage = RunMessage | LlmPreferenceMessage;
 
 export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'uiqlab-assessment.sidebar';
@@ -20,7 +28,11 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 
 	constructor(
 		private readonly context: vscode.ExtensionContext,
-		private readonly runAssessment: (request: AssessmentRunRequest, shareDeployment: boolean) => Promise<void>,
+		private readonly runAssessment: (
+			request: AssessmentRunRequest,
+			shareDeployment: boolean,
+			useLlmExplanation: boolean,
+		) => Promise<void>,
 	) { }
 
 	public async resolveWebviewView(view: vscode.WebviewView): Promise<void> {
@@ -28,7 +40,12 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 		view.webview.options = { enableScripts: true };
 		view.webview.html = this.render(await fetchAvailableAssessments());
 
-		view.webview.onDidReceiveMessage(async (message: RunMessage) => {
+		view.webview.onDidReceiveMessage(async (message: SidebarMessage) => {
+			if (message.type === 'setLlmExplanation') {
+				await this.context.workspaceState.update('uiqlab.useLlmExplanation', Boolean(message.value));
+				return;
+			}
+
 			if (message.type !== 'runAssessment') {
 				return;
 			}
@@ -56,7 +73,11 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 
 			view.webview.postMessage({ type: 'running', value: true });
 			try {
-				await this.runAssessment(request, Boolean(message.shareDeployment));
+				await this.runAssessment(
+					request,
+					Boolean(message.shareDeployment),
+					Boolean(message.useLlmExplanation),
+				);
 			} finally {
 				view.webview.postMessage({ type: 'running', value: false });
 			}
@@ -70,6 +91,7 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	private render(assessments: AssessmentName[]): string {
 		const nonce = getNonce();
 		const lastUrl = this.context.workspaceState.get<string>('uiqlab.lastUrl', '');
+		const useLlmExplanation = this.context.workspaceState.get<boolean>('uiqlab.useLlmExplanation', true);
 		const metricRows = assessments.map((name, index) => {
 			const definition = getMetricDefinition(name);
 			const id = definition?.id ?? `metric-${index + 1}`;
@@ -99,6 +121,17 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	input[type="url"] { width: 100%; border: 1px solid var(--vscode-input-border, transparent); background: var(--vscode-input-background); color: var(--vscode-input-foreground); padding: 7px 8px; outline: none; }
 	input[type="url"]:focus { border-color: var(--vscode-focusBorder); }
 	.share { display: flex; gap: 7px; align-items: flex-start; margin-top: 10px; color: var(--vscode-descriptionForeground); font-size: 12px; }
+	.preference { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
+	.preference-copy { min-width: 0; }
+	.preference-title { display: block; font-weight: 600; line-height: 1.35; }
+	.preference-description { display: block; margin-top: 2px; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.4; }
+	.switch { position: relative; display: inline-block; flex: 0 0 auto; width: 34px; height: 18px; }
+	.switch input { width: 1px; height: 1px; opacity: 0; }
+	.slider { position: absolute; inset: 0; border: 1px solid var(--vscode-input-border, var(--vscode-widget-border)); border-radius: 9px; background: var(--vscode-input-background); cursor: pointer; transition: background .15s; }
+	.slider::before { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--vscode-descriptionForeground); transition: transform .15s, background .15s; }
+	.switch input:checked + .slider { border-color: var(--vscode-focusBorder); background: var(--vscode-button-background); }
+	.switch input:checked + .slider::before { transform: translateX(16px); background: var(--vscode-button-foreground); }
+	.switch input:focus-visible + .slider { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
 	.section-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
 	.section-row legend { margin: 0; }
 	.link-button { border: 0; padding: 0; color: var(--vscode-textLink-foreground); background: none; font: inherit; font-size: 11px; cursor: pointer; }
@@ -121,6 +154,10 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 			<label class="source-option"><input type="radio" name="source" value="local-url">Local URL</label>
 		</div><label for="url" id="url-label">Deployment URL</label><input id="url" type="url" required placeholder="https://example.com" value="${escapeHtml(lastUrl)}">
 			<label class="share" id="share-row"><input id="share" type="checkbox" required checked><span>Allow this URL and the selected metrics to be sent to the evaluation service (required to run).</span></label></fieldset>
+		<fieldset><legend>Explanation</legend><div class="preference">
+			<div class="preference-copy"><label class="preference-title" for="llm-explanation">Use LLM explanation</label><span class="preference-description">Generate a plain-language interpretation of the results.</span></div>
+			<label class="switch" aria-label="Use LLM explanation"><input id="llm-explanation" type="checkbox"${useLlmExplanation ? ' checked' : ''}><span class="slider"></span></label>
+		</div></fieldset>
 		<fieldset><div class="section-row"><legend>Metrics</legend><span><button class="link-button" id="select-all" type="button">All</button> · <button class="link-button" id="select-none" type="button">None</button></span></div>${metricRows}</fieldset>
 		<p class="error" id="error" role="alert"></p><button class="run" id="run" type="submit">Run assessment</button>
 	</form>
@@ -132,13 +169,14 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	if (saved.url) url.value = saved.url;
 	if (Array.isArray(saved.metrics)) document.querySelectorAll('input[name="metric"]').forEach(i => i.checked = saved.metrics.includes(i.value));
 	if (typeof saved.share === 'boolean') document.getElementById('share').checked = saved.share;
+	if (typeof saved.useLlmExplanation === 'boolean') document.getElementById('llm-explanation').checked = saved.useLlmExplanation;
 	function source() { return document.querySelector('input[name="source"]:checked').value; }
 	function updateSource() { const local = source() === 'local-url'; const share = document.getElementById('share'); document.getElementById('url-label').textContent = local ? 'Local URL' : 'Deployment URL'; url.placeholder = local ? 'http://localhost:3000' : 'https://example.com'; document.getElementById('share-row').style.display = local ? 'none' : 'flex'; share.required = !local; save(); }
-	function save() { vscode.setState({ source: source(), url: url.value, metrics: [...document.querySelectorAll('input[name="metric"]:checked')].map(i => i.value), share: document.getElementById('share').checked }); }
-	document.querySelectorAll('input').forEach(i => i.addEventListener('change', () => { if (i.name === 'source') updateSource(); else save(); })); url.addEventListener('input', save);
+	function save() { vscode.setState({ source: source(), url: url.value, metrics: [...document.querySelectorAll('input[name="metric"]:checked')].map(i => i.value), share: document.getElementById('share').checked, useLlmExplanation: document.getElementById('llm-explanation').checked }); }
+	document.querySelectorAll('input').forEach(i => i.addEventListener('change', () => { if (i.name === 'source') updateSource(); else { save(); if (i.id === 'llm-explanation') vscode.postMessage({ type: 'setLlmExplanation', value: i.checked }); } })); url.addEventListener('input', save);
 	document.getElementById('select-all').addEventListener('click', () => { document.querySelectorAll('input[name="metric"]').forEach(i => i.checked = true); save(); });
 	document.getElementById('select-none').addEventListener('click', () => { document.querySelectorAll('input[name="metric"]').forEach(i => i.checked = false); save(); });
-	form.addEventListener('submit', event => { event.preventDefault(); const metrics = [...document.querySelectorAll('input[name="metric"]:checked')].map(i => i.value); if (!metrics.length) { error.textContent = 'Select at least one metric.'; error.style.display = 'block'; return; } if (!url.checkValidity()) { error.textContent = 'Enter a valid URL.'; error.style.display = 'block'; return; } error.style.display = 'none'; save(); vscode.postMessage({ type: 'runAssessment', assessments: metrics, dataSource: source(), url: url.value, shareDeployment: document.getElementById('share').checked }); });
+	form.addEventListener('submit', event => { event.preventDefault(); const metrics = [...document.querySelectorAll('input[name="metric"]:checked')].map(i => i.value); if (!metrics.length) { error.textContent = 'Select at least one metric.'; error.style.display = 'block'; return; } if (!url.checkValidity()) { error.textContent = 'Enter a valid URL.'; error.style.display = 'block'; return; } error.style.display = 'none'; save(); vscode.postMessage({ type: 'runAssessment', assessments: metrics, dataSource: source(), url: url.value, shareDeployment: document.getElementById('share').checked, useLlmExplanation: document.getElementById('llm-explanation').checked }); });
 	window.addEventListener('message', event => { if (event.data.type === 'running') { run.disabled = event.data.value; run.textContent = event.data.value ? 'Assessment running…' : 'Run assessment'; } });
 	updateSource();
 </script></body></html>`;

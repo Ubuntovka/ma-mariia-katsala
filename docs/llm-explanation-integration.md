@@ -113,7 +113,11 @@ sent directly to `/v1` and the university web server returned HTTP 403.
 9. The webview escapes the returned text and displays it above the raw metric
    results.
 
-Both deployment-URL and local-URL assessment flows request an explanation.
+The extension sidebar includes a **Use LLM explanation** toggle. When enabled,
+both deployment-URL and local-URL assessment flows request an explanation. When
+disabled, no request is sent to the explanation endpoint and the results panel
+shows the raw metric results without an explanation block. The preference is
+stored per workspace and defaults to enabled to preserve the existing behavior.
 History is included only when the history endpoint finds a comparable previous
 run. Screenshot-based comparisons require matching screenshot dimensions.
 

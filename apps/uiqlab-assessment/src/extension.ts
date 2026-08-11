@@ -2319,7 +2319,11 @@ async function showHistoryComparison(
 }
 
 export function activate(context: vscode.ExtensionContext) {
-	const runConfiguredAssessment = async (request: AssessmentRunRequest, shareDeployment: boolean): Promise<void> => {
+	const runConfiguredAssessment = async (
+		request: AssessmentRunRequest,
+		shareDeployment: boolean,
+		useLlmExplanation: boolean,
+	): Promise<void> => {
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 		let projectConfig: ProjectConfig;
 		try {
@@ -2373,16 +2377,20 @@ export function activate(context: vscode.ExtensionContext) {
 						});
 
 						if (results.length > 0) {
-							progress.report({ message: 'Step 3 of 3: Explaining results' });
+							progress.report({ message: useLlmExplanation ? 'Step 3 of 3: Explaining results' : 'Step 3 of 3: Preparing results' });
 							if (!panel) {
 								panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
 							}
 							let history: AssessmentHistory | undefined;
-							let explanation: string | null = null;
+							let explanation: string | null | undefined;
 							let explanationError: string | undefined;
-							try { history = await fetchAssessmentHistory(wui_id); } catch { }
-							try { explanation = await fetchAssessmentExplanation(results, history); }
-							catch (error: any) { explanationError = error?.message; }
+							if (useLlmExplanation) {
+								try { history = await fetchAssessmentHistory(wui_id); } catch { }
+								try { explanation = await fetchAssessmentExplanation(results, history); }
+								catch (error: any) { explanationError = error?.message; }
+							} else {
+								explanation = undefined;
+							}
 							createResultsWebview(panel, results, deploymentUrl, true, explanation, explanationError);
 						}
 
@@ -2448,7 +2456,7 @@ export function activate(context: vscode.ExtensionContext) {
 					});
 
 					if (resultData && resultData.length > 0) {
-						progress.report({ message: 'Step 4 of 4: Explaining results' });
+						progress.report({ message: useLlmExplanation ? 'Step 4 of 4: Explaining results' : 'Step 4 of 4: Preparing results' });
 						if (!panel) {
 							panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
 						}
@@ -2462,10 +2470,14 @@ export function activate(context: vscode.ExtensionContext) {
 								history = await fetchAssessmentHistory(wui_id);
 							} catch { }
 						}
-						let explanation: string | null = null;
+						let explanation: string | null | undefined;
 						let explanationError: string | undefined;
-						try { explanation = await fetchAssessmentExplanation(resultData, history); }
-						catch (error: any) { explanationError = error?.message; }
+						if (useLlmExplanation) {
+							try { explanation = await fetchAssessmentExplanation(resultData, history); }
+							catch (error: any) { explanationError = error?.message; }
+						} else {
+							explanation = undefined;
+						}
 						createResultsWebview(panel, resultData, localUrl, true, explanation, explanationError);
 						if (history) {
 							await showHistoryComparison(resultData, history, localUrl, toMetricIds(request.assessments));
