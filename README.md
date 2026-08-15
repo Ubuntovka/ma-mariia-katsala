@@ -4,6 +4,10 @@ See [LLM-Based Assessment Explanations](docs/llm-explanation-integration.md)
 for the implementation architecture, configuration, security model, and
 troubleshooting guide.
 
+See [UIQLab CI client](apps/uiqlab-ci/README.md) to run assessments from GitLab
+CI, GitHub Actions, or another pipeline using branch-based conditions and a
+public preview URL.
+
 This setup allows you to run the Orchestrator application and a PostgreSQL database using Docker Compose.
 
 ## Prerequisites

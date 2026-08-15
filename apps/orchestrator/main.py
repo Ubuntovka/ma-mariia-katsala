@@ -238,14 +238,20 @@ async def init_db():
 
 
 def normalize_repo_url(url: str) -> str:
-    # Remove protocol and git@
-    normalized = re.sub(r'^(https?://|git@)', '', url)
-    # Replace : with / (for git@ format)
-    normalized = normalized.replace(':', '/')
-    # Remove .git suffix
+    value = url.strip()
+    scp_style = re.match(r'^[^@]+@([^:]+):(.+)$', value)
+    if scp_style:
+        normalized = f'{scp_style.group(1)}/{scp_style.group(2)}'
+    else:
+        parsed = urlsplit(value)
+        if parsed.scheme and parsed.netloc:
+            # Deliberately discard clone-URL credentials such as GitLab job tokens.
+            normalized = f'{parsed.hostname or ""}{parsed.path}'
+        else:
+            normalized = value
+    normalized = normalized.strip('/')
     if normalized.endswith('.git'):
         normalized = normalized[:-4]
-    # Remove trailing slashes and lowercase
     return normalized.lower().strip('/')
 
 
@@ -999,8 +1005,17 @@ def assessment_run_summary(run):
 
 
 @app.get("/eval/result/{wui_id}/history")
-async def get_eval_result_history(wui_id: str, baseline_run_id: Optional[int] = None):
+async def get_eval_result_history(
+    wui_id: str,
+    baseline_run_id: Optional[int] = None,
+    baseline_branch: Optional[str] = None,
+):
     """Return dimension-matched screenshot-metric history for the same project and page."""
+    if baseline_run_id is not None and baseline_branch is not None:
+        raise HTTPException(
+            status_code=400,
+            detail='Choose either baseline_run_id or baseline_branch, not both',
+        )
     conn = await asyncpg.connect(
         user=POSTGRES_USER,
         password=POSTGRES_PASSWORD,
@@ -1044,13 +1059,17 @@ async def get_eval_result_history(wui_id: str, baseline_run_id: Optional[int] = 
         if not outstanding_metric_ids:
             return {'metrics': {}}
 
-        baseline_filter = 'AND ar.id = $6' if baseline_run_id is not None else ''
+        baseline_filter = ''
         previous_run_args = [
             current['project_id'], current['assessedTarget'], current['id'],
             current['screenshotWidth'], current['screenshotHeight']
         ]
         if baseline_run_id is not None:
+            baseline_filter = 'AND ar.id = $6'
             previous_run_args.append(baseline_run_id)
+        elif baseline_branch is not None:
+            baseline_filter = 'AND ar.branch = $6'
+            previous_run_args.append(baseline_branch)
         previous_runs = await conn.fetch(
             f'''
             SELECT ar.id, ar.branch, ar."commitHash", ar."gitDirty",

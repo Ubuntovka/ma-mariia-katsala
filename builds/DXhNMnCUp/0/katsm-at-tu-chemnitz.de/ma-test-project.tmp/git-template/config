@@ -1,0 +1,10 @@
+[init]
+	defaultBranch = none
+[fetch]
+	recurseSubmodules = false
+[credential]
+	interactive = never
+[gc]
+	autoDetach = false
+[include]
+	path = /Users/mariiakatsala/Documents/Thesis/ma-mariia-katsala/builds/DXhNMnCUp/0/katsm-at-tu-chemnitz.de/ma-test-project.tmp/.gitlab-runner.ext.conf

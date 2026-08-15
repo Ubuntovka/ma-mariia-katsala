@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from fastapi import HTTPException
 
 from main import (
     assessment_run_summary,
@@ -11,9 +12,11 @@ from main import (
     merge_metric_results,
     metric_result_index,
     normalize_assessed_target,
+    normalize_repo_url,
     resolve_llm_chat_completions_url,
     select_comparison_findings,
     split_file_metrics,
+    get_eval_result_history,
 )
 
 
@@ -58,6 +61,27 @@ class AssessedTargetTests(unittest.TestCase):
 
     def test_existing_path_discards_query_and_fragment(self):
         self.assertEqual(normalize_assessed_target('/projects/?tab=active#top'), '/projects')
+
+
+class RepositoryUrlTests(unittest.TestCase):
+    def test_https_and_ssh_clone_urls_share_an_identity(self):
+        self.assertEqual(
+            normalize_repo_url('https://gitlab.example/team/project.git'),
+            normalize_repo_url('git@gitlab.example:team/project.git'),
+        )
+
+    def test_clone_credentials_are_not_stored(self):
+        self.assertEqual(
+            normalize_repo_url('https://gitlab-ci-token:secret@gitlab.example/team/project.git'),
+            'gitlab.example/team/project',
+        )
+
+
+class HistorySelectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rejects_run_and_branch_baselines_together(self):
+        with self.assertRaises(HTTPException) as raised:
+            await get_eval_result_history('backend-id', baseline_run_id=2, baseline_branch='main')
+        self.assertEqual(raised.exception.status_code, 400)
 
 
 class MetricResultIndexTests(unittest.TestCase):
