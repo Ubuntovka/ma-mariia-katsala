@@ -25,6 +25,12 @@ try:
     LLM_TIMEOUT_SECONDS = max(10.0, float(os.getenv("LLM_TIMEOUT_SECONDS", "180")))
 except ValueError:
     LLM_TIMEOUT_SECONDS = 180.0
+try:
+    UIQLAB_RESULT_READ_TIMEOUT_SECONDS = max(
+        10.0, float(os.getenv("UIQLAB_RESULT_READ_TIMEOUT_SECONDS", "300"))
+    )
+except ValueError:
+    UIQLAB_RESULT_READ_TIMEOUT_SECONDS = 300.0
 
 METRIC_EXPLANATIONS = {
     "m1": "PNG screenshot file size. A change can suggest changed visual complexity; lower is not always better.",
@@ -864,8 +870,20 @@ async def get_eval_result(wui_id: str):
 
     backend_ids = backend_result_ids_for_run(run, wui_id)
 
-    async with httpx.AsyncClient() as client:
-        results = await fetch_merged_backend_results(client, backend_ids)
+    timeout = httpx.Timeout(
+        connect=10.0,
+        read=UIQLAB_RESULT_READ_TIMEOUT_SECONDS,
+        write=30.0,
+        pool=10.0,
+    )
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            results = await fetch_merged_backend_results(client, backend_ids)
+        except httpx.TimeoutException:
+            # UIQLab can keep the result request open while expensive metrics
+            # (notably M14) are processing. An empty list is the endpoint's
+            # normal pending response, so callers should continue polling.
+            return []
 
         # Update database with status/success if finished
         conn = await asyncpg.connect(

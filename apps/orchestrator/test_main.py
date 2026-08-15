@@ -1,6 +1,9 @@
 import unittest
 from datetime import datetime, timezone
 from fastapi import HTTPException
+from unittest.mock import AsyncMock, patch
+
+import httpx
 
 from main import (
     assessment_run_summary,
@@ -16,6 +19,7 @@ from main import (
     resolve_llm_chat_completions_url,
     select_comparison_findings,
     split_file_metrics,
+    get_eval_result,
     get_eval_result_history,
 )
 
@@ -161,6 +165,32 @@ class HistoryBackendResultTests(unittest.IsolatedAsyncioTestCase):
             {'metric_id': 'm1_png_file_size', 'results': [123]},
             {'metric_id': 'm8_word_count', 'results': [17]},
         ])
+
+
+class EvaluationResultTimeoutTests(unittest.IsolatedAsyncioTestCase):
+    async def test_backend_read_timeout_returns_pending_response(self):
+        connection = AsyncMock()
+        connection.fetchrow.return_value = {
+            'id': 1,
+            'metricsCount': 14,
+            'status': 'PENDING',
+            'backend_result_ids': ['backend-id'],
+        }
+
+        async def timed_out_fetch(client, backend_ids):
+            self.assertEqual(client.timeout.read, 321.0)
+            self.assertEqual(backend_ids, ['backend-id'])
+            raise httpx.ReadTimeout('UIQLab is still processing')
+
+        with patch('main.UIQLAB_RESULT_READ_TIMEOUT_SECONDS', 321.0), patch(
+            'main.asyncpg.connect', AsyncMock(return_value=connection)
+        ), patch(
+            'main.fetch_merged_backend_results', side_effect=timed_out_fetch
+        ):
+            result = await get_eval_result('backend-id')
+
+        self.assertEqual(result, [])
+        connection.close.assert_awaited_once()
 
 
 class LlmExplanationTests(unittest.TestCase):

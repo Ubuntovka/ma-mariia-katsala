@@ -2,7 +2,9 @@
 import { writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { loadConfig, matchesBranch } from './config.js';
-import { buildReport, formatSummary, type AssessmentHistory, type MetricResult } from './report.js';
+import { buildReport, formatSummary, type AssessmentHistory } from './report.js';
+import { jsonRequest } from './http.js';
+import { pollEvaluationResult } from './poll.js';
 
 interface GitMetadata {
   branch?: string;
@@ -32,17 +34,6 @@ function safeRepositoryUrl(value: string | undefined): string | undefined {
   }
 }
 
-async function jsonRequest<T>(url: string, options: RequestInit = {}): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 130_000);
-  try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    const body = await response.text();
-    if (!response.ok) throw new Error(`HTTP ${response.status} from ${url}: ${body.slice(0, 500)}`);
-    try { return JSON.parse(body) as T; } catch { throw new Error(`Invalid JSON from ${url}`); }
-  } finally { clearTimeout(timer); }
-}
-
 function metadata(): GitMetadata {
   const githubRepositoryUrl = process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY
     ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}.git`
@@ -57,29 +48,6 @@ function metadata(): GitMetadata {
   if (repositoryUrl) result.repositoryUrl = repositoryUrl;
   if (mergeRequestId) result.mergeRequestId = mergeRequestId;
   return result;
-}
-
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-function isMetricResult(value: unknown): value is MetricResult {
-  if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as Partial<MetricResult>;
-  return typeof candidate.metric_id === 'string' && Array.isArray(candidate.results);
-}
-
-async function poll(baseUrl: string, resultId: string, metricCount: number, timeoutMs: number, intervalMs: number): Promise<MetricResult[]> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const response = await jsonRequest<unknown>(`${baseUrl}/eval/result/${encodeURIComponent(resultId)}`);
-    if (!Array.isArray(response)) throw new Error('Orchestrator result response must be an array.');
-    const results = response.filter(isMetricResult);
-    const families = new Set(results.map((item) => item.metric_id.split('_', 1)[0]));
-    if (families.size >= metricCount) return results;
-    await sleep(intervalMs);
-  }
-  throw new Error(`Assessment did not complete within ${Math.round(timeoutMs / 1000)} seconds.`);
 }
 
 async function main(): Promise<void> {
@@ -106,7 +74,7 @@ async function main(): Promise<void> {
     body: JSON.stringify({ url: target, metrics: config.metrics, projectKey: config.projectKey, projectName: config.projectName, repositoryUrl: meta.repositoryUrl, source: 'ci/cd', branch: meta.branch, commitHash: meta.commitHash, gitDirty: false, mergeRequestId: meta.mergeRequestId }),
   });
   if (typeof submission.result_id !== 'string') throw new Error('Orchestrator response did not contain result_id.');
-  const results = await poll(baseUrl, submission.result_id, config.metrics.length, config.timeoutMs, config.pollIntervalMs);
+  const results = await pollEvaluationResult(baseUrl, submission.result_id, config.metrics.length, config.timeoutMs, config.pollIntervalMs);
   const failedMetrics = results.filter((item) => item.results.length === 0);
   if (failedMetrics.length) throw new Error(`Assessment failed technically for: ${failedMetrics.map((item) => item.metric_id).join(', ')}`);
   const query = new URLSearchParams({ baseline_branch: config.baselineBranch });
