@@ -1,3 +1,5 @@
+import { classifyProfiles, evaluateQualityGate, qualityGateExitCode, type ProfileOutcome, type QualityGateMode, type QualityGateResult } from './qualityGate.js';
+
 export interface MetricResult {
   metric_id: string;
   results: unknown[];
@@ -21,6 +23,8 @@ export interface ReportMetric {
   previous?: number;
   delta?: number;
   relativeDeltaPercent?: number;
+  meaningfulChange?: boolean;
+  materialityRule?: { absoluteChangeAtLeast: number; relativeChangePercentAtLeast?: number };
   raw: unknown[];
 }
 
@@ -32,6 +36,9 @@ export interface AssessmentReport {
   branch: string;
   commitHash?: string;
   resultId: string;
+  assessment: { mode: 'custom' } | { mode: 'profiles'; profiles: Array<{ id: string; direction: string }> };
+  profileOutcomes: ProfileOutcome[];
+  qualityGate: QualityGateResult;
   comparison: { kind: 'latest-from-branch'; branch: string; run: AssessmentRunSummary } | null;
   metrics: ReportMetric[];
   rawResults: MetricResult[];
@@ -56,6 +63,23 @@ const VALUE_KEYS: Record<string, readonly string[]> = {
   m11: ['subbandentropy', 'entropy', 'score', 'value'],
   m12: ['shannoninformationentropy', 'shannonentropy', 'entropy', 'score', 'value'],
   m14: ['mean', 'meanscore', 'nimascore', 'score'],
+};
+
+// Keep these thresholds identical to the orchestrator's deterministic
+// comparison selection. Accessibility uses the IDE's existing issue-count
+// comparison, where one added or resolved issue is meaningful.
+const MATERIALITY_RULES: Record<string, { absolute: number; relative?: number }> = {
+  m1: { absolute: 1024, relative: 10 },
+  m2: { absolute: 1024, relative: 10 },
+  m3: { absolute: 5, relative: 10 },
+  m5: { absolute: 0.03, relative: 10 },
+  m8: { absolute: 20, relative: 10 },
+  m9: { absolute: 0.02, relative: 10 },
+  m10: { absolute: 0.5, relative: 10 },
+  m11: { absolute: 0.1, relative: 10 },
+  m12: { absolute: 0.1, relative: 10 },
+  m13: { absolute: 1 },
+  m14: { absolute: 0.25, relative: 5 },
 };
 
 function finiteNumber(value: unknown): number | undefined {
@@ -131,6 +155,8 @@ interface BuildReportInput {
   baselineBranch: string;
   results: MetricResult[];
   history: AssessmentHistory;
+  assessment?: AssessmentReport['assessment'];
+  qualityGateMode?: QualityGateMode;
 }
 
 export function buildReport(input: BuildReportInput): AssessmentReport {
@@ -153,9 +179,33 @@ export function buildReport(input: BuildReportInput): AssessmentReport {
       if (previous !== undefined && previous !== 0) {
         metric.relativeDeltaPercent = (delta / Math.abs(previous)) * 100;
       }
+      const rule = MATERIALITY_RULES[family];
+      if (rule) {
+        metric.meaningfulChange = Math.abs(delta) >= rule.absolute
+          || (rule.relative !== undefined && metric.relativeDeltaPercent !== undefined && Math.abs(metric.relativeDeltaPercent) >= rule.relative);
+        metric.materialityRule = {
+          absoluteChangeAtLeast: rule.absolute,
+          ...(rule.relative !== undefined ? { relativeChangePercentAtLeast: rule.relative } : {}),
+        };
+      }
     }
     return metric;
   });
+  const assessment = input.assessment ?? { mode: 'custom' };
+  const profileOutcomes = assessment.mode === 'profiles'
+    ? classifyProfiles(
+      assessment.profiles,
+      metrics.map((metric) => ({
+        id: metric.id.split('_', 1)[0] ?? metric.id,
+        ...(metric.current !== undefined ? { current: metric.current } : {}),
+        ...(metric.previous !== undefined ? { previous: metric.previous } : {}),
+        ...(metric.delta !== undefined ? { delta: metric.delta } : {}),
+        ...(metric.meaningfulChange !== undefined ? { meaningfulChange: metric.meaningfulChange } : {}),
+      })),
+      Boolean(input.history.baselineRun),
+    )
+    : [];
+  const qualityGate = evaluateQualityGate(input.qualityGateMode ?? 'warn', profileOutcomes);
   const report: AssessmentReport = {
     schemaVersion: 1,
     status: 'completed',
@@ -163,6 +213,9 @@ export function buildReport(input: BuildReportInput): AssessmentReport {
     source: 'ci/cd',
     branch: input.branch,
     resultId: input.resultId,
+    assessment,
+    profileOutcomes,
+    qualityGate,
     comparison: input.history.baselineRun
       ? { kind: 'latest-from-branch', branch: input.baselineBranch, run: input.history.baselineRun }
       : null,
@@ -174,12 +227,35 @@ export function buildReport(input: BuildReportInput): AssessmentReport {
 }
 
 export function formatSummary(report: AssessmentReport, baselineBranch: string): string {
+  const gateDecision = report.qualityGate.status === 'fail'
+    ? 'Blocking failure: enforce mode fails when any profile is opposed.'
+    : report.qualityGate.status === 'warning'
+      ? `Non-blocking warning: ${report.qualityGate.mode} mode warns when a profile is mixed or opposed.`
+      : 'Passed: no profile outcome triggers the configured gate mode.';
   const lines = [
-    'Web UI Assessment', '', 'Assessment completed successfully.',
+    'Web UI Assessment', '', `Quality gate: ${report.qualityGate.status.toUpperCase()} (${report.qualityGate.mode})`,
+    `Decision: ${gateDecision}`,
+    `Exit code: ${qualityGateExitCode(report.qualityGate)}`,
     `Target: ${report.target}`,
     report.comparison ? `Compared with: latest assessment from ${baselineBranch}` : `Compared with: no previous assessment from ${baselineBranch} was available`,
-    '', 'Metrics:',
   ];
+  if (report.profileOutcomes.length > 0) {
+    lines.push('', 'Profiles:');
+    for (const profile of report.profileOutcomes) {
+      lines.push(`- ${profile.id}`, `  Expected direction: ${profile.direction}`, `  Outcome: ${profile.outcome.toUpperCase()}`, `  Reason: ${profile.reason}`);
+      if (profile.meaningfulMetrics.length > 0) {
+        lines.push('  Meaningful changes:');
+        for (const metricId of profile.meaningfulMetrics) {
+          const metric = report.metrics.find((candidate) => candidate.id.split('_', 1)[0] === metricId);
+          if (!metric || metric.current === undefined || metric.previous === undefined || metric.delta === undefined) continue;
+          const relationship = profile.alignedMetrics.includes(metricId) ? 'aligned with' : 'opposed to';
+          const movement = metric.delta > 0 ? 'increased' : 'decreased';
+          lines.push(`    - ${metric.name} ${movement}: ${formatMetricComparison({ ...metric, current: metric.current, previous: metric.previous, delta: metric.delta })} — ${relationship} the profile goal`);
+        }
+      }
+    }
+  }
+  lines.push('', 'Metrics:');
   for (const metric of report.metrics) {
     if (metric.current === undefined) {
       lines.push(`- ${metric.name}: result available in JSON report`);

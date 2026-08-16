@@ -2454,6 +2454,12 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.window.showErrorMessage(`Could not load the UIQLab project configuration: ${err?.message ?? err}`);
 			return;
 		}
+		if (projectConfig.assessment) {
+			request = { ...request, assessments: projectConfig.assessment.metrics };
+		}
+		const assessmentSelection = projectConfig.assessment?.mode === 'profiles'
+			? { mode: 'profiles' as const, profiles: projectConfig.assessment.profiles }
+			: { mode: 'custom' as const };
 
 		void vscode.window.showInformationMessage(formatAssessmentRunSummary(request));
 
@@ -2475,7 +2481,7 @@ export function activate(context: vscode.ExtensionContext) {
 					}, async (progress, token) => {
 						progress.report({ message: 'Step 1 of 3: Submitting the page' });
 						const gitInfo = getGitInfo(workspaceRoot, projectConfig);
-						const resp: any = await submitUrlForEvaluation(deploymentUrl, request.assessments, gitInfo);
+						const resp: any = await submitUrlForEvaluation(deploymentUrl, request.assessments, gitInfo, assessmentSelection);
 						const wui_id = resp?.result_id;
 
 						if (!wui_id) {
@@ -2556,7 +2562,8 @@ export function activate(context: vscode.ExtensionContext) {
 						gitInfo,
 						localUrl,
 						result.screenshotDimensions,
-						result.html
+						result.html,
+						assessmentSelection
 					);
 					const wui_id = resp?.result_id;
 					if (!wui_id) {

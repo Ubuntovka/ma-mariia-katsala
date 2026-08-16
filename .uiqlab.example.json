@@ -1,13 +1,24 @@
 {
   "projectKey": "123e4567-e89b-12d3-a456-426614174000",
   "name": "example-web-app",
+  "assessment": {
+    "mode": "profiles",
+    "profiles": [
+      {
+        "id": "visual-complexity",
+        "direction": "decrease"
+      }
+    ]
+  },
+  "qualityGate": {
+    "mode": "warn"
+  },
   "ci": {
     "branches": [
       "main",
       "feature/ui-*",
       "redesign/**"
     ],
-    "baselineBranch": "main",
-    "metrics": ["m8", "m10", "m13", "m14"]
+    "baselineBranch": "main"
   }
 }

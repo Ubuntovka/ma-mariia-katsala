@@ -36,6 +36,10 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             'assessedTarget': '/dashboard',
             'screenshotWidth': 1440,
             'screenshotHeight': 900,
+            'assessment': {
+                'mode': 'profiles',
+                'profiles': [{'id': 'visual-complexity', 'direction': 'decrease'}],
+            },
         })
 
         self.assertEqual(summary, {
@@ -46,6 +50,10 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             'branch': 'main',
             'assessedTarget': '/dashboard',
             'screenshotDimensions': {'width': 1440, 'height': 900},
+            'assessment': {
+                'mode': 'profiles',
+                'profiles': [{'id': 'visual-complexity', 'direction': 'decrease'}],
+            },
         })
 
 

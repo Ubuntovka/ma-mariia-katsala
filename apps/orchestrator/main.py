@@ -97,6 +97,7 @@ async def init_db():
                 "metricsCount" INTEGER,
                 "screenshotWidth" INTEGER,
                 "screenshotHeight" INTEGER,
+                assessment JSONB,
                 "createdAt" TIMESTAMPTZ DEFAULT NOW()
             );
         ''')
@@ -107,6 +108,7 @@ async def init_db():
             ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS "metricsCount" INTEGER;
             ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS "screenshotWidth" INTEGER;
             ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS "screenshotHeight" INTEGER;
+            ALTER TABLE assessment_run ADD COLUMN IF NOT EXISTS assessment JSONB;
             ALTER TABLE assessment_run DROP COLUMN IF EXISTS results;
         ''')
         await conn.execute('''
@@ -345,6 +347,7 @@ async def get_eval_mm():
 class EvaluateURLInput(BaseModel):
     url: str
     metrics: List[str]
+    assessment: Optional[dict] = None
     projectKey: UUID
     projectName: Optional[str] = None
     repositoryUrl: str
@@ -683,11 +686,12 @@ async def post_evaluate_url_input_test(payload: EvaluateURLInput):
         run_id = await conn.fetchval(
             '''
             INSERT INTO assessment_run (
-                project_id, source, branch, "commitHash", "gitDirty", "mergeRequestId", "assessedTarget", "metricsCount"
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id
+                project_id, source, branch, "commitHash", "gitDirty", "mergeRequestId", "assessedTarget", "metricsCount", assessment
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb) RETURNING id
             ''',
             project_id, payload.source, payload.branch, payload.commitHash,
-            payload.gitDirty, payload.mergeRequestId, normalize_assessed_target(payload.url), len(payload.metrics)
+            payload.gitDirty, payload.mergeRequestId, normalize_assessed_target(payload.url), len(payload.metrics),
+            json.dumps(payload.assessment) if payload.assessment is not None else None
         )
     finally:
         await conn.close()
@@ -729,6 +733,7 @@ async def evaluate_with_artifacts(
     file: UploadFile = File(...),
     html: Optional[UploadFile] = File(None),
     mm: List[str] = Form(...),
+    assessment: Optional[str] = Form(None),
     projectKey: UUID = Form(...),
     projectName: Optional[str] = Form(None),
     repositoryUrl: str = Form(...),
@@ -747,6 +752,14 @@ async def evaluate_with_artifacts(
         raise HTTPException(status_code=400, detail="Both screenshot dimensions must be provided together")
     if screenshotWidth is not None and (screenshotWidth <= 0 or screenshotHeight <= 0):
         raise HTTPException(status_code=400, detail="Screenshot dimensions must be positive integers")
+    assessment_value = None
+    if assessment is not None:
+        try:
+            assessment_value = json.loads(assessment)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="assessment must be valid JSON")
+        if not isinstance(assessment_value, dict):
+            raise HTTPException(status_code=400, detail="assessment must be a JSON object")
 
     png_metrics, html_metrics = split_file_metrics(mm)
     if html_metrics and html is None:
@@ -769,11 +782,13 @@ async def evaluate_with_artifacts(
             INSERT INTO assessment_run (
                 project_id, source, branch, "commitHash", "gitDirty", "mergeRequestId", "assessedTarget",
                 "metricsCount", "screenshotWidth", "screenshotHeight"
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id
+                , assessment
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb) RETURNING id
             ''',
             project_id, source, branch, commitHash, gitDirty, mergeRequestId,
             normalize_assessed_target(assessedTarget) if assessedTarget else file.filename,
-            len(mm), screenshotWidth, screenshotHeight
+            len(mm), screenshotWidth, screenshotHeight,
+            json.dumps(assessment_value) if assessment_value is not None else None
         )
     finally:
         await conn.close()
@@ -1011,7 +1026,7 @@ def assessment_run_summary(run):
     dimensions = None
     if run['screenshotWidth'] is not None and run['screenshotHeight'] is not None:
         dimensions = {'width': run['screenshotWidth'], 'height': run['screenshotHeight']}
-    return {
+    summary = {
         'id': run['id'],
         'createdAt': run['createdAt'].isoformat(),
         'commitHash': run['commitHash'],
@@ -1020,6 +1035,10 @@ def assessment_run_summary(run):
         'assessedTarget': run['assessedTarget'],
         'screenshotDimensions': dimensions,
     }
+    assessment = run.get('assessment')
+    if assessment is not None:
+        summary['assessment'] = assessment
+    return summary
 
 
 @app.get("/eval/result/{wui_id}/history")
@@ -1045,7 +1064,7 @@ async def get_eval_result_history(
             '''
             SELECT ar.id, ar.project_id, ar.branch, ar."commitHash", ar."gitDirty",
                    ar."assessedTarget", ar."createdAt", ar.status,
-                   ar."screenshotWidth", ar."screenshotHeight",
+                   ar."screenshotWidth", ar."screenshotHeight", ar.assessment,
                    ARRAY_AGG(job.backend_result_id ORDER BY job.ordinal) AS backend_result_ids
             FROM assessment_run ar
             JOIN assessment_backend_job requested_job
@@ -1092,7 +1111,7 @@ async def get_eval_result_history(
             f'''
             SELECT ar.id, ar.branch, ar."commitHash", ar."gitDirty",
                    ar."assessedTarget", ar."screenshotWidth", ar."screenshotHeight",
-                   ar."createdAt",
+                   ar."createdAt", ar.assessment,
                    ARRAY_AGG(job.backend_result_id ORDER BY job.ordinal) AS backend_result_ids
             FROM assessment_run ar
             JOIN assessment_backend_job job
@@ -1163,7 +1182,7 @@ async def get_project_assessment_runs(project_key: UUID):
     try:
         runs = await conn.fetch('''
             SELECT ar.id, ar.branch, ar."commitHash", ar."gitDirty", ar."assessedTarget",
-                   ar."screenshotWidth", ar."screenshotHeight", ar."createdAt"
+                   ar."screenshotWidth", ar."screenshotHeight", ar."createdAt", ar.assessment
             FROM assessment_run ar
             JOIN project p ON p.id = ar.project_id
             WHERE p.project_key = $1 AND ar.status = 'COMPLETED'
@@ -1186,7 +1205,7 @@ async def get_assessment_run_comparison(current_run_id: int, baseline_run_id: in
         rows = await conn.fetch('''
             SELECT ar.id, ar.project_id, ar.branch, ar."commitHash", ar."gitDirty",
                    ar."assessedTarget", ar."screenshotWidth", ar."screenshotHeight",
-                   ar."createdAt", ar.status,
+                   ar."createdAt", ar.status, ar.assessment,
                    ARRAY_AGG(job.backend_result_id ORDER BY job.ordinal) AS backend_result_ids
             FROM assessment_run ar
             JOIN assessment_backend_job job ON job.assessment_run_id = ar.id

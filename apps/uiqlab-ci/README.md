@@ -5,10 +5,10 @@ a public preview URL to the orchestrator, waits for all selected metrics, compar
 them with the latest compatible assessment from the configured baseline branch,
 prints a short job summary, and writes the complete `uiqlab-report.json` artifact.
 
-Metric values are informational. The client has no quality thresholds and never
-fails because a metric increased or decreased. Its exit code is non-zero only for
-a technical problem such as invalid configuration, an unreachable service, a
-timeout, malformed responses, or a metric that did not execute successfully.
+For profile-based assessments, the client deterministically classifies material
+metric changes against each selected direction. The configurable quality gate
+can report, warn, or block based on those outcomes without creating an overall
+quality score.
 
 ## Project configuration
 
@@ -19,10 +19,16 @@ extension and add `ci` settings:
 {
   "projectKey": "your-existing-project-uuid",
   "name": "your-project",
+  "assessment": {
+    "mode": "profiles",
+    "profiles": [{ "id": "visual-complexity", "direction": "decrease" }]
+  },
+  "qualityGate": {
+    "mode": "warn"
+  },
   "ci": {
     "branches": ["main", "feature/ui-*", "redesign/**"],
-    "baselineBranch": "main",
-    "metrics": ["m8", "m10", "m13", "m14"]
+    "baselineBranch": "main"
   }
 }
 ```
@@ -30,6 +36,11 @@ extension and add `ci` settings:
 `branches` accepts exact names plus `*`, `**`, and `?` globs. The CLI exits
 successfully with a skipped report when the current branch does not match. See
 the repository's `.uiqlab.example.json` for a complete example.
+
+Quality-gate modes are `report`, `warn`, and `enforce`; `warn` is the default.
+The CLI uses exit code `0` for a pass, `1` for a blocking gate or technical
+failure, and `2` for a non-blocking warning. A first run without a compatible
+baseline passes and establishes the baseline.
 
 ## Required pipeline inputs
 
@@ -83,6 +94,9 @@ web-ui-assessment:
     - npm ci --prefix apps/uiqlab-ci
     - npm run build --prefix apps/uiqlab-ci
     - node apps/uiqlab-ci/dist/src/cli.js
+  allow_failure:
+    exit_codes:
+      - 2
   artifacts:
     when: always
     paths:
@@ -119,4 +133,5 @@ non-matching branches, mirror those patterns in GitLab `rules`.
 ```
 
 The console output is suitable for the pipeline log. The JSON report contains
-raw evaluator results and normalized scalar comparisons for machine processing.
+raw evaluator results, normalized scalar comparisons, profile outcomes, and the
+final quality-gate status for machine processing.

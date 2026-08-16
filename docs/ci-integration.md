@@ -7,10 +7,9 @@ commit. It submits the preview URL to the orchestrator, waits for the configured
 metrics, compares the results with the latest compatible assessment from the
 baseline branch, and writes a machine-readable `uiqlab-report.json` artifact.
 
-Metric changes are informational. The client does not apply quality thresholds
-and does not fail a job because a metric increased or decreased. It returns a
-non-zero exit code only when the assessment cannot be completed because of a
-technical or configuration problem.
+For profile-based assessments, the client classifies meaningful metric changes
+against the selected directions and applies the configured quality-gate mode.
+It reuses fixed comparison tolerances and does not calculate an overall score.
 
 ## When the assessment runs
 
@@ -41,10 +40,16 @@ The extension and CI client share the repository-root `.uiqlab.json` file:
 {
   "projectKey": "123e4567-e89b-12d3-a456-426614174000",
   "name": "example-web-app",
+  "assessment": {
+    "mode": "profiles",
+    "profiles": [{ "id": "visual-complexity", "direction": "decrease" }]
+  },
+  "qualityGate": {
+    "mode": "warn"
+  },
   "ci": {
     "branches": ["main", "feature/ui-*", "redesign/**"],
     "baselineBranch": "main",
-    "metrics": ["m8", "m10", "m13", "m14"],
     "timeoutMs": 300000,
     "pollIntervalMs": 2000
   }
@@ -55,9 +60,11 @@ The extension and CI client share the repository-root `.uiqlab.json` file:
 | --- | --- | --- |
 | `projectKey` | Yes | UUID shared with the UIQLab extension. |
 | `name` | No | Human-readable project name. |
+| `assessment` | No | Profile selections or custom metrics. See `assessment-profiles.md`. |
+| `qualityGate.mode` | No | `report`, `warn`, or `enforce`. Defaults to `warn`. |
 | `ci.branches` | Yes | Branches eligible for assessment. Exact names and `*`, `**`, and `?` globs are supported. |
 | `ci.baselineBranch` | No | Branch used for the historical comparison. Defaults to `main`. |
-| `ci.metrics` | No | Metric IDs from `m1` through `m14`. Defaults to `m8`, `m10`, `m13`, and `m14`. |
+| `ci.metrics` | No | Legacy manual metric IDs from `m1` through `m14`; treated as custom mode and not allowed with profiles. |
 | `ci.timeoutMs` | No | Maximum time to wait for all metrics. Defaults to 300,000 ms. |
 | `ci.pollIntervalMs` | No | Delay between result requests. Defaults to 2,000 ms. |
 
@@ -114,6 +121,9 @@ web-ui-assessment:
     - npm ci --prefix apps/uiqlab-ci
     - npm run build --prefix apps/uiqlab-ci
     - node apps/uiqlab-ci/dist/src/cli.js
+  allow_failure:
+    exit_codes:
+      - 2
   artifacts:
     when: always
     paths:
@@ -194,13 +204,14 @@ requests may need to skip the assessment or use a separately secured workflow.
 
 ### Successful assessment
 
-The job exits with code `0`, prints a metric summary, and writes a completed
-JSON report. A missing baseline does not fail the assessment; the summary states
-that no previous assessment from the baseline branch was available.
+The job exits with code `0` when the gate passes, prints profile outcomes and
+metric comparisons, and writes a completed JSON report. A missing baseline does
+not fail the assessment; the run establishes the baseline and is classified as
+`not-comparable`.
 
-Metric regressions also do not fail the job. The report contains current values,
-available baseline values, and calculated differences without assigning warning
-or failure levels.
+Exit code `2` is a non-blocking warning produced by `warn` mode for `mixed` or
+`opposed` outcomes and by `enforce` mode for `mixed` outcomes. Exit code `1`
+represents either an enforced `opposed` outcome or a technical failure.
 
 ### Skipped assessment
 
@@ -225,17 +236,19 @@ include:
 Dependency installation, application build, preview deployment, and artifact
 upload can also fail independently of the UIQLab client.
 
-By default, a non-zero UIQLab job exit makes the pipeline fail. To show a
-GitLab warning while allowing the rest of the pipeline to pass, add:
+Exit code `2` represents a non-blocking quality warning. Configure GitLab to
+allow that code while keeping exit code `1` blocking:
 
 ```yaml
 web-ui-assessment:
-  allow_failure: true
+  allow_failure:
+    exit_codes:
+      - 2
 ```
 
-This changes only GitLab's treatment of the failed job. It does not turn metric
-changes into warnings, and the underlying technical error remains visible in
-the job log.
+Technical errors and enforced opposed outcomes use exit code `1` and continue
+to block the job. Artifacts use `when: always`, so `uiqlab-report.json` is
+uploaded for passes, warnings, and failures.
 
 ## Running the client manually
 
@@ -273,4 +286,3 @@ working but legitimately need more time.
 Confirm that `ci.baselineBranch` names the intended branch and that at least one
 compatible assessment has completed on it. This condition does not fail the
 job.
-

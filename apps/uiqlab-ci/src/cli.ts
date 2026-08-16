@@ -2,7 +2,8 @@
 import { writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { loadConfig, matchesBranch } from './config.js';
-import { buildReport, formatSummary, type AssessmentHistory } from './report.js';
+import { buildReport, formatSummary, type AssessmentHistory, type AssessmentReport } from './report.js';
+import { qualityGateExitCode, type QualityGateMode } from './qualityGate.js';
 import { jsonRequest } from './http.js';
 import { pollEvaluationResult } from './poll.js';
 
@@ -12,6 +13,10 @@ interface GitMetadata {
   repositoryUrl?: string;
   mergeRequestId?: string;
 }
+
+let activeReportPath = 'uiqlab-report.json';
+let activeQualityGateMode: QualityGateMode = 'warn';
+let activeAssessment: AssessmentReport['assessment'] | undefined;
 
 function argument(name: string, fallback?: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -53,13 +58,16 @@ function metadata(): GitMetadata {
 async function main(): Promise<void> {
   const configPath = argument('--config', process.env.UIQLAB_CONFIG ?? '.uiqlab.json') ?? '.uiqlab.json';
   const reportPath = argument('--report', process.env.UIQLAB_REPORT ?? 'uiqlab-report.json') ?? 'uiqlab-report.json';
+  activeReportPath = reportPath;
   const baseUrl = argument('--orchestrator-url', process.env.UIQLAB_ORCHESTRATOR_URL)?.replace(/\/$/, '');
   const target = argument('--url', process.env.UIQLAB_PREVIEW_URL);
   const config = await loadConfig(configPath);
+  activeQualityGateMode = config.qualityGateMode;
+  activeAssessment = config.assessment;
   const meta = metadata();
   if (!meta.branch) throw new Error('Could not determine the CI branch. Set UIQLAB_BRANCH.');
   if (!matchesBranch(meta.branch, config.branches)) {
-    await writeFile(reportPath, `${JSON.stringify({ schemaVersion: 1, status: 'skipped', reason: `Branch ${meta.branch} does not match ci.branches.`, branch: meta.branch, source: 'ci/cd' }, null, 2)}\n`);
+    await writeFile(reportPath, `${JSON.stringify({ schemaVersion: 1, status: 'skipped', reason: `Branch ${meta.branch} does not match ci.branches.`, branch: meta.branch, source: 'ci/cd', assessment: config.assessment, profileOutcomes: [], qualityGate: { mode: config.qualityGateMode, status: 'pass', reason: 'The branch trigger skipped this assessment.' } }, null, 2)}\n`);
     console.log(`Web UI Assessment\n\nSkipped: branch "${meta.branch}" does not match ci.branches.`);
     return;
   }
@@ -71,7 +79,7 @@ async function main(): Promise<void> {
   const submission = await jsonRequest<{ result_id?: unknown }>(`${baseUrl}/eval/evaluate_url_input_test`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ url: target, metrics: config.metrics, projectKey: config.projectKey, projectName: config.projectName, repositoryUrl: meta.repositoryUrl, source: 'ci/cd', branch: meta.branch, commitHash: meta.commitHash, gitDirty: false, mergeRequestId: meta.mergeRequestId }),
+    body: JSON.stringify({ url: target, metrics: config.metrics, assessment: config.assessment, projectKey: config.projectKey, projectName: config.projectName, repositoryUrl: meta.repositoryUrl, source: 'ci/cd', branch: meta.branch, commitHash: meta.commitHash, gitDirty: false, mergeRequestId: meta.mergeRequestId }),
   });
   if (typeof submission.result_id !== 'string') throw new Error('Orchestrator response did not contain result_id.');
   const results = await pollEvaluationResult(baseUrl, submission.result_id, config.metrics.length, config.timeoutMs, config.pollIntervalMs);
@@ -79,13 +87,28 @@ async function main(): Promise<void> {
   if (failedMetrics.length) throw new Error(`Assessment failed technically for: ${failedMetrics.map((item) => item.metric_id).join(', ')}`);
   const query = new URLSearchParams({ baseline_branch: config.baselineBranch });
   const history = await jsonRequest<AssessmentHistory>(`${baseUrl}/eval/result/${encodeURIComponent(submission.result_id)}/history?${query}`);
-  const report = buildReport({ target, branch: meta.branch, ...(meta.commitHash ? { commitHash: meta.commitHash } : {}), resultId: submission.result_id, baselineBranch: config.baselineBranch, results, history });
+  const report = buildReport({ target, branch: meta.branch, ...(meta.commitHash ? { commitHash: meta.commitHash } : {}), resultId: submission.result_id, baselineBranch: config.baselineBranch, results, history, assessment: config.assessment, qualityGateMode: config.qualityGateMode });
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   console.log(formatSummary(report, config.baselineBranch));
+  process.exitCode = qualityGateExitCode(report.qualityGate);
 }
 
-main().catch((error: unknown) => {
+main().catch(async (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`Web UI Assessment\n\nAssessment failed because of a technical error.\n${message}`);
+  const failureReport = {
+    schemaVersion: 1,
+    status: 'failed',
+    source: 'ci/cd',
+    reason: message,
+    ...(activeAssessment ? { assessment: activeAssessment } : {}),
+    profileOutcomes: [],
+    qualityGate: { mode: activeQualityGateMode, status: 'fail', reason: 'A technical error prevented the assessment from completing.' },
+  };
+  try {
+    await writeFile(activeReportPath, `${JSON.stringify(failureReport, null, 2)}\n`);
+  } catch (reportError) {
+    console.error(`Could not write ${activeReportPath}: ${reportError instanceof Error ? reportError.message : String(reportError)}`);
+  }
   process.exitCode = 1;
 });

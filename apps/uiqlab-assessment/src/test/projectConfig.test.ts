@@ -36,4 +36,42 @@ suite('Project configuration', () => {
 			await fs.rm(workspaceRoot, { recursive: true, force: true });
 		}
 	});
+
+	test('resolves configured profiles to unique metric IDs', async () => {
+		const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'uiqlab-config-'));
+		try {
+			await fs.writeFile(path.join(workspaceRoot, PROJECT_CONFIG_FILENAME), JSON.stringify({
+				projectKey: '123e4567-e89b-12d3-a456-426614174000', name: 'Demo',
+				assessment: { mode: 'profiles', profiles: [
+					{ id: 'visual-complexity', direction: 'decrease' },
+					{ id: 'content-density', direction: 'preserve' },
+				] },
+			}));
+			const config = await getOrCreateProjectConfig(workspaceRoot);
+			assert.deepStrictEqual(config.assessment, {
+				mode: 'profiles',
+				profiles: [
+					{ id: 'visual-complexity', direction: 'decrease' },
+					{ id: 'content-density', direction: 'preserve' },
+				],
+				metrics: ['m9', 'm10', 'm11', 'm12', 'm8', 'm5'],
+			});
+		} finally {
+			await fs.rm(workspaceRoot, { recursive: true, force: true });
+		}
+	});
+
+	test('rejects invalid profile direction and mixed manual metrics', async () => {
+		const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'uiqlab-config-'));
+		const filename = path.join(workspaceRoot, PROJECT_CONFIG_FILENAME);
+		const base = { projectKey: '123e4567-e89b-12d3-a456-426614174000', name: 'Demo' };
+		try {
+			await fs.writeFile(filename, JSON.stringify({ ...base, assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'increase' }] } }));
+			await assert.rejects(getOrCreateProjectConfig(workspaceRoot), /direction for "accessibility"/);
+			await fs.writeFile(filename, JSON.stringify({ ...base, assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'observe' }] }, ci: { metrics: ['m13'] } }));
+			await assert.rejects(getOrCreateProjectConfig(workspaceRoot), /cannot combine assessment profiles with manual metrics/);
+		} finally {
+			await fs.rm(workspaceRoot, { recursive: true, force: true });
+		}
+	});
 });
