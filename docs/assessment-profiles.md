@@ -1,9 +1,38 @@
 # Assessment profiles
 
-UIQLab supports predefined assessment profiles in the repository-level
-`.uiqlab.json` file. A profile selects a related group of metrics and records the
+UIQLab supports predefined assessment profiles in both the CI/CD client and the
+IDE extension. A profile selects a related group of metrics and records the
 intended direction of the assessment. The direction is metadata only: it does
 not currently affect metric execution or interpretation.
+
+## IDE sidebar selection
+
+The **UIQLab Assessment** sidebar offers two mutually exclusive modes:
+
+- **Profiles** lists the six specific profiles and excludes `general-review`.
+  Select one or more profiles and choose one allowed direction for every
+  selected profile.
+- **Custom metrics** lists `m1` through `m14`. Any combination can be selected,
+  **All** and **None** controls are available, and every metric retains its
+  expandable **What does this measure?** description.
+
+When an assessment starts, the extension validates the active selection in the
+extension host. Profile mode resolves profiles to metric IDs, removes overlaps,
+and submits the profile metadata. Custom mode submits exactly the selected
+metric IDs with `{ "mode": "custom" }` metadata. Switching modes clears the
+inactive selection so previously checked profiles cannot affect a custom run,
+and previously checked metrics cannot affect a profile run.
+
+The assessment selection in `.uiqlab.json` initializes the corresponding
+sidebar mode. A configured `general-review` selection initializes custom mode
+with all 14 metrics because General review is deliberately absent from the
+sidebar profile list. Without configured assessment settings, profile mode
+opens without a preselected profile. Changes in the sidebar affect the
+interactive run only and do not modify `.uiqlab.json`.
+
+No profile-specific explanation or direction-based interpretation is generated
+by this feature. Existing result and optional LLM explanation behavior remains
+unchanged.
 
 ## Profile configuration
 
@@ -124,7 +153,8 @@ Configuration loading fails with a descriptive error when:
 - profile selection is combined with manual metrics;
 - custom metrics are missing, duplicated, or outside `m1` through `m14`.
 
-Both the CI client and IDE extension validate the configuration before starting
+Both the CI client and IDE extension validate configuration selections. The IDE
+extension also validates selections submitted from the sidebar before starting
 an assessment.
 
 ## Assessment results and reports
@@ -184,6 +214,7 @@ LLM explanations remain outside the quality-gate flow.
 - `apps/uiqlab-ci/src/qualityGate.ts`: deterministic profile classification and gate decisions.
 - `apps/uiqlab-ci/src/report.ts`: profile metadata in CI reports.
 - `apps/uiqlab-assessment/src/assessmentProfiles.ts`: IDE profile catalog and resolver.
+- `apps/uiqlab-assessment/src/assessmentSidebar.ts`: multi-profile and direction selection in the IDE sidebar.
 - `apps/uiqlab-assessment/src/projectConfig.ts`: IDE configuration parsing and validation.
 - `apps/orchestrator/main.py`: assessment metadata persistence and run summaries.
 - `.uiqlab.example.json`: example profile configuration.

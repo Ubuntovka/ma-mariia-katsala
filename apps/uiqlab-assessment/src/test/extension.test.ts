@@ -126,6 +126,26 @@ suite('Run Assessment flow', () => {
 		);
 	});
 
+	test('formats selected profiles and their directions', () => {
+		assert.strictEqual(
+			formatAssessmentRunSummary({
+				assessments: ['m3', 'm4', 'm13'],
+				assessment: {
+					mode: 'profiles',
+					profiles: [
+						{ id: 'colour-expression', direction: 'more-vivid' },
+						{ id: 'accessibility', direction: 'reduce-issues' },
+					],
+				},
+				dataSource: {
+					kind: 'local-url',
+					localUrl: 'http://localhost:3000',
+				},
+			}),
+			'Selected profiles: colour-expression (more-vivid), accessibility (reduce-issues). Local URL: http://localhost:3000.',
+		);
+	});
+
 	test('calculates absolute and relative M1 PNG size deltas', () => {
 		assert.deepStrictEqual(calculateM1SizeComparison(1250, 1000), {
 			currentBytes: 1250,

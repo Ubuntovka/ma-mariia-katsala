@@ -28,9 +28,12 @@ How to run an assessment:
 
 - Open the **UIQLab Assessment** icon in the Activity Bar (or run **Run Assessment** from the Command Palette to reveal it).
 - Choose **Deployment** or **Local URL** and enter the page URL in the persistent sidebar form.
-- Select one or more metrics. Expand **What does this measure?** below any metric to read its definition and learn how to interpret its output.
+- Choose **Profiles** to select one or more of the six specific assessment profiles and one direction for each selected profile. General review is not shown in this list.
+- Alternatively, choose **Custom metrics** to select any combination of the 14 metrics. Use **All** or **None** to change the complete metric selection at once, and expand **What does this measure?** to read a short description of any metric.
+- Profile mode runs the ordered, de-duplicated union of metrics assigned to the selected profiles. Custom mode runs exactly the checked metrics.
+- Switching modes clears the inactive selection, so earlier profile choices cannot leak into a custom metric run or vice versa.
 - Choose **Current state vs latest assessment**, **Current state vs selected assessment**, or **Two previous assessments**. Historical assessments are selected in the sidebar before the action starts.
-- Select **Run and compare** for a current-state mode, or **Compare assessments** for two historical runs. The sidebar hides page and metric controls when no new assessment is required.
+- Select **Run and compare** for a current-state mode, or **Compare assessments** for two historical runs. The sidebar hides page and profile controls when no new assessment is required.
 - Local URLs (for example `http://localhost:3000`) are captured with Playwright.
 - For a local URL, the extension opens a headless Chromium, waits for page load, waits until document.readyState === "complete", waits an extra 5s, disables animations, captures a fixed-viewport PNG and rendered HTML, then uploads the screenshot to the orchestrator.
 
@@ -42,12 +45,25 @@ VSIX packaging limitation:
 Use the **UIQLab Assessment** sidebar to:
 
 * keep all assessment inputs available in one persistent view
-* choose one or more of the 14 available assessments and read what each metric measures
+* choose any combination of the six specific CI/CD assessment profiles (General review is excluded)
+* choose one of the CI/CD directions supported by each selected profile
+* evaluate exactly the metrics assigned to the selected profiles, with overlapping metrics run once
+* alternatively choose any or all of the 14 metrics directly
 * choose how to get the page data:
   * Deployment URL
-  * Take from my current code
+  * Local URL
 
 The command then summarizes the selections and is ready to plug into the assessment runner.
+
+The sidebar initially uses the profile or custom metric selection configured in
+the workspace `.uiqlab.json`. Because General review is not a sidebar profile,
+a configured **General review / observe** selection initializes custom mode with
+all 14 metrics checked. Sidebar changes apply to the interactive IDE run and do
+not rewrite `.uiqlab.json`.
+
+Profile directions are currently stored as assessment intent. The extension
+does not add profile-specific explanations or use a direction to alter a
+profile's metric set.
 
 For example if there is an image subfolder under your extension project workspace:
 

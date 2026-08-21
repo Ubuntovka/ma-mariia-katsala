@@ -1,4 +1,5 @@
 import { getMetricDefinition } from './metricCatalog';
+import type { AssessmentProfileSelection } from './assessmentProfiles';
 
 export const ASSESSMENTS = [
 	'PNG file size',
@@ -37,6 +38,7 @@ export interface LocalUrlDataSource {
 
 export interface AssessmentRunRequest {
 	assessments: AssessmentName[];
+	assessment?: AssessmentSelection;
 	dataSource: DeploymentUrlDataSource | LocalUrlDataSource;
 	comparison?:
 		| { kind: 'latest' }
@@ -54,7 +56,7 @@ export interface GitInfo {
 	mergeRequestId?: string;
 }
 
-export type AssessmentSelection = { mode: 'custom' } | { mode: 'profiles'; profiles: Array<{ id: string; direction: string }> };
+export type AssessmentSelection = { mode: 'custom' } | { mode: 'profiles'; profiles: AssessmentProfileSelection[] };
 
 export interface HistoricalMetricResult {
 	results: any;
@@ -568,8 +570,11 @@ export function formatAssessmentRunSummary(request: AssessmentRunRequest): strin
 	const dataSourceText = request.dataSource.kind === 'deployment-url'
 		? `Deployment URL: ${request.dataSource.deploymentUrl}`
 		: `Local URL: ${request.dataSource.localUrl}`;
+	const selectionText = request.assessment?.mode === 'profiles'
+		? `Selected profiles: ${request.assessment.profiles.map((profile) => `${profile.id} (${profile.direction})`).join(', ')}`
+		: `Selected assessments: ${request.assessments.join(', ')}`;
 
-	return `Selected assessments: ${request.assessments.join(', ')}. ${dataSourceText}.`;
+	return `${selectionText}. ${dataSourceText}.`;
 }
 
 function isValidUrl(value: string): boolean {

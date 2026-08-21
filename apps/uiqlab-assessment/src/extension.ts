@@ -18,7 +18,8 @@ import {
 import { execSync } from 'child_process';
 import { PNG } from 'pngjs';
 import { getOrCreateProjectConfig, ProjectConfig } from './projectConfig';
-import { AssessmentSidebarProvider } from './assessmentSidebar';
+import { AssessmentSidebarProvider, type SidebarInitialSelection } from './assessmentSidebar';
+import { ASSESSMENT_PROFILES } from './assessmentProfiles';
 
 function getGitInfo(workspaceRoot: string, projectConfig: ProjectConfig): GitInfo {
 	let repositoryUrl = '';
@@ -2454,12 +2455,10 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.window.showErrorMessage(`Could not load the UIQLab project configuration: ${err?.message ?? err}`);
 			return;
 		}
-		if (projectConfig.assessment) {
-			request = { ...request, assessments: projectConfig.assessment.metrics };
-		}
-		const assessmentSelection = projectConfig.assessment?.mode === 'profiles'
-			? { mode: 'profiles' as const, profiles: projectConfig.assessment.profiles }
-			: { mode: 'custom' as const };
+		const assessmentSelection = request.assessment
+			?? (projectConfig.assessment?.mode === 'profiles'
+				? { mode: 'profiles' as const, profiles: projectConfig.assessment.profiles }
+				: { mode: 'custom' as const });
 
 		void vscode.window.showInformationMessage(formatAssessmentRunSummary(request));
 
@@ -2628,6 +2627,20 @@ export function activate(context: vscode.ExtensionContext) {
 		const projectConfig = await getOrCreateProjectConfig(workspaceRoot);
 		return await fetchProjectAssessmentRuns(projectConfig.projectKey);
 	};
+	const loadInitialSelection = async (): Promise<SidebarInitialSelection | undefined> => {
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+		const projectConfig = await getOrCreateProjectConfig(workspaceRoot);
+		if (projectConfig.assessment?.mode === 'custom') {
+			return { mode: 'custom', metrics: projectConfig.assessment.metrics };
+		}
+		if (projectConfig.assessment?.mode === 'profiles') {
+			if (projectConfig.assessment.profiles.some((profile) => profile.id === 'general-review')) {
+				return { mode: 'custom', metrics: [...ASSESSMENT_PROFILES['general-review'].metrics] };
+			}
+			return { mode: 'profiles', profiles: projectConfig.assessment.profiles };
+		}
+		return undefined;
+	};
 	const compareSelectedRuns = async (currentRunId: number, baselineRunId: number): Promise<void> => {
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 		const projectConfig = await getOrCreateProjectConfig(workspaceRoot);
@@ -2637,6 +2650,7 @@ export function activate(context: vscode.ExtensionContext) {
 		context,
 		runConfiguredAssessment,
 		loadAssessmentRuns,
+		loadInitialSelection,
 		compareSelectedRuns,
 	);
 	context.subscriptions.push(
