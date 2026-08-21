@@ -28,6 +28,10 @@ import {
 	normalizeUiedElements,
 	getColorfulnessInterpretation,
 	renderExplanationHtml,
+	renderProfileAssessmentOverview,
+	renderRequestedHistoryMetricSections,
+	renderUnavailableHistoryMetricSection,
+	requestedHistoryMetricIds,
 } from '../extension';
 import { getPngDimensions } from '../playwrightCapture';
 import { PNG } from 'pngjs';
@@ -58,6 +62,64 @@ suite('Run Assessment flow', () => {
 	test('escapes HTML in LLM explanations before adding safe formatting', () => {
 		const html = renderExplanationHtml('**Safe** <script>alert("x")</script>');
 		assert.strictEqual(html, '<p><strong>Safe</strong> &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;</p>');
+	});
+
+	test('renders profile goal feedback as a visual status dashboard', () => {
+		const html = renderProfileAssessmentOverview({
+			status: 'achieved',
+			title: 'Profile goal achieved',
+			description: 'The goal was achieved.',
+			outcomes: [{
+				id: 'visual-complexity',
+				direction: 'decrease',
+				outcome: 'aligned',
+				goalStatus: 'achieved',
+				reason: 'All meaningful changes follow the chosen direction.',
+				comparableMetrics: ['m9', 'm10'],
+				meaningfulMetrics: ['m9', 'm10'],
+				alignedMetrics: ['m9', 'm10'],
+				opposedMetrics: [],
+			}],
+		});
+		assert.match(html, /profile-overview status-achieved/);
+		assert.match(html, /Profile goal achieved/);
+		assert.match(html, /outcome-track/);
+		assert.match(html, /2 aligned/);
+		assert.match(html, /Chosen direction: <strong>decrease<\/strong>/);
+	});
+
+	test('keeps every requested metric in history comparison when only some have baselines', () => {
+		const requested = requestedHistoryMetricIds(
+			Array.from({ length: 14 }, (_, index) => `m${index + 1}`),
+			[],
+		);
+		const html = renderRequestedHistoryMetricSections(
+			requested,
+			{
+				m9: '<section class="metric-section">Comparable M9</section>',
+				m10: '<section class="metric-section">Comparable M10</section>',
+			},
+			['m9_edge_density', 'm10_feature_congestion'],
+		);
+		assert.strictEqual(requested.length, 14);
+		assert.strictEqual((html.match(/<section class="metric-section/g) ?? []).length, 14);
+		assert.match(html, /M1 · PNG file size/);
+		assert.match(html, /M14 · NIMA \(Neural IMage Assessment\)/);
+		assert.match(html, /Comparable M9/);
+		assert.match(html, /No baseline available/);
+	});
+
+	test('does not duplicate a current value in a no-baseline placeholder', () => {
+		const html = renderUnavailableHistoryMetricSection('m8', false);
+		assert.match(html, /M8 · Word count/);
+		assert.match(html, /No baseline available/);
+		assert.doesNotMatch(html, /Current value|current value|<span class="value">/);
+	});
+
+	test('distinguishes an unusable baseline from a missing baseline', () => {
+		const html = renderUnavailableHistoryMetricSection('m6', true);
+		assert.match(html, /Comparison unavailable/);
+		assert.doesNotMatch(html, /No baseline available/);
 	});
 
 	test('uses catalog names for backend metrics so sidebar definitions resolve by ID', () => {

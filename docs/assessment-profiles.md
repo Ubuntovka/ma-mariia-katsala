@@ -30,9 +30,41 @@ sidebar profile list. Without configured assessment settings, profile mode
 opens without a preselected profile. Changes in the sidebar affect the
 interactive run only and do not modify `.uiqlab.json`.
 
-No profile-specific explanation or direction-based interpretation is generated
-by this feature. Existing result and optional LLM explanation behavior remains
-unchanged.
+## IDE profile goal feedback
+
+For a profile-based run with a compatible historical baseline, the IDE history
+comparison starts with a visual profile-goal dashboard. The dashboard contains:
+
+- an overall result such as **Profile goals achieved**, **Profile goals not
+  achieved**, **Partially achieved**, or **Not enough comparison data**;
+- one status card per selected profile, including its chosen direction;
+- a horizontal change bar showing how many comparable primary metrics followed
+  the direction, remained within the materiality threshold, or opposed it;
+- a short deterministic reason for each outcome.
+
+The existing detailed metric comparison remains directly below the dashboard.
+Custom metric comparisons do not render the profile dashboard and keep their
+current overview unchanged.
+
+The history comparison lists every metric requested by the current assessment,
+not only metrics shared with the baseline. A requested metric without a
+compatible historical result is shown by name with **No baseline available**.
+Its current value is intentionally not repeated because it is already available
+in **Evaluation Results**. If a stored baseline exists but cannot be compared,
+the metric instead shows **Comparison unavailable**.
+
+The dashboard is shown in the **Assessment History Comparison** editor opened
+beside the raw **Evaluation Results** editor. After rebuilding the extension,
+reload the Extension Development Host so it loads the new `dist/extension.js`.
+If the orchestrator is running from Docker, restart that service after changing
+the orchestrator source.
+
+The IDE uses the same primary scalar extraction, materiality thresholds, and
+direction mappings as the CI/CD quality-gate classification. `preserve` is
+achieved when no meaningful change is detected. `observe` is presented as an
+observation rather than as a pass/fail goal. Metrics without a deterministic
+primary scalar remain visible in the detailed comparison but do not decide a
+profile outcome.
 
 ## Profile configuration
 
@@ -215,6 +247,7 @@ LLM explanations remain outside the quality-gate flow.
 - `apps/uiqlab-ci/src/report.ts`: profile metadata in CI reports.
 - `apps/uiqlab-assessment/src/assessmentProfiles.ts`: IDE profile catalog and resolver.
 - `apps/uiqlab-assessment/src/assessmentSidebar.ts`: multi-profile and direction selection in the IDE sidebar.
+- `apps/uiqlab-assessment/src/profileAssessment.ts`: deterministic IDE profile outcome and overall-goal classification.
 - `apps/uiqlab-assessment/src/projectConfig.ts`: IDE configuration parsing and validation.
 - `apps/orchestrator/main.py`: assessment metadata persistence and run summaries.
 - `.uiqlab.example.json`: example profile configuration.

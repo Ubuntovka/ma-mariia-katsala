@@ -20,6 +20,14 @@ import { PNG } from 'pngjs';
 import { getOrCreateProjectConfig, ProjectConfig } from './projectConfig';
 import { AssessmentSidebarProvider, type SidebarInitialSelection } from './assessmentSidebar';
 import { ASSESSMENT_PROFILES } from './assessmentProfiles';
+import { getMetricDefinition } from './metricCatalog';
+import {
+	assessProfilesAgainstHistory,
+	normalizeProfileAssessmentSelection,
+	type ProfileAssessmentSummary,
+	type ProfileGoalStatus,
+	type ProfileOutcome,
+} from './profileAssessment';
 
 function getGitInfo(workspaceRoot: string, projectConfig: ProjectConfig): GitInfo {
 	let repositoryUrl = '';
@@ -1938,16 +1946,127 @@ function comparisonRunText(run: AssessmentRunSummary): string {
 	return `${commit}${dirty} · ${new Date(run.createdAt).toLocaleString()}`;
 }
 
+function baseMetricId(metricId: string): string {
+	return metricId.split('_')[0].toLowerCase();
+}
+
+export function requestedHistoryMetricIds(selectedMetricIds: readonly string[], currentResults: readonly any[]): string[] {
+	const candidates = selectedMetricIds.length > 0
+		? selectedMetricIds
+		: currentResults
+			.map((result) => result?.metric_id)
+			.filter((metricId): metricId is string => typeof metricId === 'string');
+	return [...new Set(candidates
+		.map(baseMetricId)
+		.filter((metricId) => Boolean(getMetricDefinition(metricId))))];
+}
+
+export function renderUnavailableHistoryMetricSection(metricId: string, baselineExists: boolean): string {
+	const definition = getMetricDefinition(metricId);
+	const name = definition?.name ?? metricId.toUpperCase();
+	const status = baselineExists ? 'Comparison unavailable' : 'No baseline available';
+	const detail = baselineExists
+		? 'A historical result exists, but its values could not be compared with this run.'
+		: 'This requested metric has no compatible historical result. See Evaluation Results for this run’s output.';
+	return `<section class="metric-section metric-unavailable">
+		<h2>${escapeHtml(metricId.toUpperCase())} · ${escapeHtml(name)}</h2>
+		<div class="baseline-empty"><span class="baseline-empty-icon" aria-hidden="true">—</span><div><strong>${status}</strong><p>${detail}</p></div></div>
+	</section>`;
+}
+
+export function renderRequestedHistoryMetricSections(
+	requestedMetricIds: readonly string[],
+	comparableSections: Readonly<Partial<Record<string, string>>>,
+	historyMetricIds: readonly string[],
+): string {
+	const baselineFamilies = new Set(historyMetricIds.map(baseMetricId));
+	return requestedMetricIds.map((metricId) =>
+		comparableSections[metricId]
+			|| renderUnavailableHistoryMetricSection(metricId, baselineFamilies.has(metricId))
+	).join('');
+}
+
+function profileDisplayName(id: string): string {
+	const words = id.replace(/-/g, ' ');
+	return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function goalStatusPresentation(status: ProfileGoalStatus): { label: string; icon: string } {
+	switch (status) {
+		case 'achieved': return { label: 'Goal achieved', icon: '✓' };
+		case 'not-achieved': return { label: 'Goal not achieved', icon: '×' };
+		case 'partial': return { label: 'Partially achieved', icon: '◐' };
+		case 'observed': return { label: 'Change observed', icon: '↕' };
+		case 'unchanged': return { label: 'No meaningful change', icon: '—' };
+		case 'not-comparable': return { label: 'Not comparable', icon: '?' };
+	}
+}
+
+function renderProfileOutcomeTrack(outcome: ProfileOutcome): string {
+	if (outcome.comparableMetrics.length === 0) {
+		return '<div class="outcome-track"><span class="track-neutral" style="width:100%"></span></div>';
+	}
+	const total = outcome.comparableMetrics.length;
+	const alignedWidth = (outcome.alignedMetrics.length / total) * 100;
+	const opposedWidth = (outcome.opposedMetrics.length / total) * 100;
+	const unchangedWidth = Math.max(0, 100 - alignedWidth - opposedWidth);
+	return `<div class="outcome-track" aria-label="${outcome.alignedMetrics.length} aligned, ${outcome.opposedMetrics.length} opposed, ${total - outcome.meaningfulMetrics.length} unchanged">
+		${alignedWidth > 0 ? `<span class="track-aligned" style="width:${alignedWidth}%"></span>` : ''}
+		${unchangedWidth > 0 ? `<span class="track-unchanged" style="width:${unchangedWidth}%"></span>` : ''}
+		${opposedWidth > 0 ? `<span class="track-opposed" style="width:${opposedWidth}%"></span>` : ''}
+	</div>`;
+}
+
+export function renderProfileAssessmentOverview(summary: ProfileAssessmentSummary): string {
+	const overall = goalStatusPresentation(summary.status);
+	const outcomeCards = summary.outcomes.map((outcome) => {
+		const presentation = goalStatusPresentation(outcome.goalStatus);
+		const metricLegend = outcome.comparableMetrics.length > 0
+			? `<div class="outcome-legend"><span><i class="legend-aligned"></i>${outcome.alignedMetrics.length} aligned</span><span><i class="legend-unchanged"></i>${outcome.comparableMetrics.length - outcome.meaningfulMetrics.length} unchanged</span><span><i class="legend-opposed"></i>${outcome.opposedMetrics.length} opposed</span></div>`
+			: '<div class="outcome-legend"><span>No comparable primary metrics</span></div>';
+		return `<article class="profile-card status-${outcome.goalStatus}">
+			<div class="profile-card-heading"><div><h3>${escapeHtml(profileDisplayName(outcome.id))}</h3><p class="profile-direction">Chosen direction: <strong>${escapeHtml(outcome.direction)}</strong></p></div><span class="status-pill"><span aria-hidden="true">${presentation.icon}</span> ${presentation.label}</span></div>
+			${renderProfileOutcomeTrack(outcome)}
+			${metricLegend}
+			<p class="profile-reason">${escapeHtml(outcome.reason)}</p>
+		</article>`;
+	}).join('');
+
+	return `<section class="profile-overview status-${summary.status}" aria-labelledby="profile-goal-title">
+		<div class="goal-summary">
+			<div class="goal-icon" aria-hidden="true">${overall.icon}</div>
+			<div><span class="eyebrow">Profile goal assessment</span><h2 id="profile-goal-title">${escapeHtml(summary.title)}</h2><p>${escapeHtml(summary.description)}</p></div>
+		</div>
+		<div class="profile-summary-grid">${outcomeCards}</div>
+		<div class="track-key"><span><i class="legend-aligned"></i>Follows direction</span><span><i class="legend-unchanged"></i>No meaningful change</span><span><i class="legend-opposed"></i>Opposes direction</span></div>
+	</section>`;
+}
+
 async function showHistoryComparison(
 	currentResults: any[],
 	history: AssessmentHistory,
 	url: string,
-	selectedMetricIds: string[] = []
+	selectedMetricIds: string[] = [],
+	assessmentSelection?: unknown,
 ): Promise<boolean> {
+	const requestedMetricIds = requestedHistoryMetricIds(selectedMetricIds, currentResults);
+	const historyMetricIds = Object.keys(history.metrics);
+	const historyMetricFamilies = new Set(historyMetricIds.map(baseMetricId));
+	const selectedProfiles = normalizeProfileAssessmentSelection(
+		assessmentSelection ?? history.currentRun?.assessment,
+	);
+	const profileOverview = selectedProfiles
+		? renderProfileAssessmentOverview(assessProfilesAgainstHistory(
+			selectedProfiles,
+			currentResults,
+			history.metrics,
+			Boolean(history.baselineRun),
+		))
+		: '';
 	const currentM4Result = currentResults.find(
 		(result: any) => typeof result?.metric_id === 'string' && result.metric_id.split('_')[0] === 'm4'
 	);
-	const selectedM4MetricId = selectedMetricIds.find((metricId) => metricId.split('_')[0] === 'm4');
+	const selectedM4MetricId = requestedMetricIds.find((metricId) => metricId === 'm4');
 	const m4WasSelected = Boolean(currentM4Result || selectedM4MetricId);
 	const m4MetricId = currentM4Result?.metric_id ?? selectedM4MetricId;
 	const historicalM4Result = m4MetricId ? history.metrics[m4MetricId] : undefined;
@@ -1968,7 +2087,7 @@ async function showHistoryComparison(
 	const m8Match = findM8HistoryComparison(currentResults, history);
 	const m9Match = await findM9HistoryComparison(currentResults, history);
 	const m10Match = await findM10HistoryComparison(currentResults, history);
-	if (!m1Match && !m2Match && !m3Match && !m4Match && !m4WasSelected && !m5Match && !m6Match && !m7Match && !m8Match && !m9Match && !m10Match && !m11Match && !m12Match && !m13Match && !m14Match) {
+	if (!profileOverview && requestedMetricIds.length === 0) {
 		return false;
 	}
 	const runContext = history.currentRun || history.baselineRun
@@ -2317,6 +2436,26 @@ async function showHistoryComparison(
 			<p class="variation-summary">${m14SpreadDirection}</p>
 			<div class="explanation"><p>NIMA predicts a distribution of aesthetic image ratings. The mean and standard deviation are compared independently. A higher mean normally indicates better predicted image quality or aesthetics. Standard deviation measures disagreement or spread among predicted ratings and is not itself a quality score.</p></div>
 		</section>` : '';
+	const requestedMetricSections = renderRequestedHistoryMetricSections(
+		requestedMetricIds,
+		{
+			m1: m1Section,
+			m2: m2Section,
+			m3: m3Section,
+			m4: m4Section || (historyMetricFamilies.has('m4') ? m4UnavailableSection : ''),
+			m5: m5Section,
+			m6: m6Section,
+			m7: m7Section,
+			m8: m8Section,
+			m9: m9Section,
+			m10: m10Section,
+			m11: m11Section,
+			m12: m12Section,
+			m13: m13Section,
+			m14: m14Section,
+		},
+		historyMetricIds,
+	);
 
 	const panel = vscode.window.createWebviewPanel(
 		'historyComparison',
@@ -2374,27 +2513,48 @@ async function showHistoryComparison(
 		.explanation p { margin: 0; }
 		.comparison-warning { margin-bottom: 18px; padding: 14px 16px; border-left: 4px solid var(--vscode-editorWarning-foreground); background: var(--vscode-textBlockQuote-background); line-height: 1.5; }
 		.comparison-warning p { margin: 0; }
+		.metric-unavailable h2 { margin-bottom: 14px; }
+		.baseline-empty { display: flex; align-items: center; gap: 14px; padding: 16px; border: 1px dashed var(--vscode-widget-border); border-radius: 8px; background: var(--vscode-sideBar-background); }
+		.baseline-empty-icon { display: grid; flex: 0 0 34px; width: 34px; height: 34px; place-items: center; border: 1px solid var(--vscode-descriptionForeground); border-radius: 50%; color: var(--vscode-descriptionForeground); font-size: 20px; }
+		.baseline-empty strong { display: block; margin-bottom: 3px; font-size: 15px; }
+		.baseline-empty p { margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.45; }
+		.profile-overview { --goal-color: var(--vscode-descriptionForeground); margin: 0 0 28px; padding: 22px; border: 1px solid var(--goal-color); border-radius: 12px; background: var(--vscode-sideBar-background); }
+		.profile-overview.status-achieved, .profile-card.status-achieved { --goal-color: var(--vscode-testing-iconPassed, #2ea043); }
+		.profile-overview.status-not-achieved, .profile-card.status-not-achieved { --goal-color: var(--vscode-testing-iconFailed, #f85149); }
+		.profile-overview.status-partial, .profile-card.status-partial { --goal-color: var(--vscode-editorWarning-foreground, #d29922); }
+		.profile-overview.status-observed, .profile-card.status-observed { --goal-color: var(--vscode-charts-blue, #58a6ff); }
+		.profile-overview.status-unchanged, .profile-card.status-unchanged { --goal-color: var(--vscode-charts-blue, #58a6ff); }
+		.profile-overview.status-not-comparable, .profile-card.status-not-comparable { --goal-color: var(--vscode-descriptionForeground); }
+		.goal-summary { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 20px; }
+		.goal-icon { display: grid; flex: 0 0 48px; width: 48px; height: 48px; place-items: center; border: 2px solid var(--goal-color); border-radius: 50%; color: var(--goal-color); font-size: 28px; font-weight: 700; }
+		.eyebrow { display: block; margin-bottom: 4px; color: var(--goal-color); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+		.goal-summary h2 { margin-bottom: 5px; }
+		.goal-summary p { margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.5; }
+		.profile-summary-grid { display: grid; gap: 12px; }
+		.profile-card { --goal-color: var(--vscode-descriptionForeground); padding: 16px; border: 1px solid var(--vscode-widget-border); border-left: 4px solid var(--goal-color); border-radius: 8px; background: var(--vscode-editor-background); }
+		.profile-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+		.profile-card h3 { margin: 0 0 3px; font-size: 16px; }
+		.profile-direction { margin: 0; color: var(--vscode-descriptionForeground); font-size: 12px; }
+		.status-pill { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--goal-color); border-radius: 999px; color: var(--goal-color); font-size: 11px; font-weight: 700; }
+		.outcome-track { display: flex; width: 100%; height: 9px; margin: 15px 0 8px; overflow: hidden; border-radius: 999px; background: var(--vscode-widget-border); }
+		.outcome-track span { min-width: 2px; }
+		.track-aligned, .legend-aligned { background: var(--vscode-testing-iconPassed, #2ea043); }
+		.track-unchanged, .legend-unchanged { background: var(--vscode-descriptionForeground); }
+		.track-opposed, .legend-opposed { background: var(--vscode-testing-iconFailed, #f85149); }
+		.track-neutral { background: var(--vscode-descriptionForeground); opacity: .5; }
+		.outcome-legend, .track-key { display: flex; flex-wrap: wrap; gap: 8px 14px; color: var(--vscode-descriptionForeground); font-size: 11px; }
+		.outcome-legend i, .track-key i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; }
+		.profile-reason { margin: 12px 0 0; line-height: 1.45; }
+		.track-key { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--vscode-widget-border); }
+		@media (max-width: 560px) { .profile-card-heading { display: block; } .status-pill { display: inline-block; margin-top: 10px; } }
 	</style>
 </head>
 <body>
 	<main>
 		<h1>Assessment history comparison</h1>
 		<p class="context"><span class="path">${escapeHtml(url)}</span><br>${dimensions ? `${dimensions.width} × ${dimensions.height} px · only completed runs with identical screenshot dimensions are compared` : 'Screenshot dimensions unavailable'}${runContext}</p>
-		${m1Section}
-		${m2Section}
-		${m3Section}
-		${m4Section}
-		${m4UnavailableSection}
-		${m5Section}
-		${m6Section}
-		${m7Section}
-		${m8Section}
-		${m9Section}
-		${m10Section}
-		${m11Section}
-		${m12Section}
-		${m13Section}
-		${m14Section}
+		${profileOverview}
+		${requestedMetricSections}
 	</main>
 </body>
 </html>`;
@@ -2409,12 +2569,7 @@ async function chooseHistoryForCurrentRun(
 		try { return await fetchAssessmentHistory(wuiId); } catch { return undefined; }
 	}
 	try {
-		const history = await fetchAssessmentHistory(wuiId, comparison.baselineRunId);
-		if (Object.keys(history.metrics).length === 0) {
-			void vscode.window.showInformationMessage('The selected assessment is not compatible or has no metrics in common with the current run.');
-			return undefined;
-		}
-		return history;
+		return await fetchAssessmentHistory(wuiId, comparison.baselineRunId);
 	} catch (error: any) {
 		void vscode.window.showErrorMessage(`Could not load the selected assessment: ${error?.message ?? error}`);
 		return undefined;
@@ -2432,6 +2587,8 @@ async function compareAssessmentRuns(
 			comparison.currentResults,
 			comparison.history,
 			comparison.current.assessedTarget ?? projectConfig.name,
+			[],
+			comparison.current.assessment,
 		);
 		if (!shown) {
 			void vscode.window.showInformationMessage('The selected assessments do not contain any comparable metrics.');
@@ -2520,7 +2677,7 @@ export function activate(context: vscode.ExtensionContext) {
 							}
 							createResultsWebview(panel, results, deploymentUrl, true, explanation, explanationError);
 							if (history) {
-								await showHistoryComparison(results, history, deploymentUrl, toMetricIds(request.assessments));
+								await showHistoryComparison(results, history, deploymentUrl, toMetricIds(request.assessments), request.assessment);
 							}
 						}
 
@@ -2609,7 +2766,7 @@ export function activate(context: vscode.ExtensionContext) {
 						}
 						createResultsWebview(panel, resultData, localUrl, true, explanation, explanationError);
 						if (history) {
-							await showHistoryComparison(resultData, history, localUrl, toMetricIds(request.assessments));
+							await showHistoryComparison(resultData, history, localUrl, toMetricIds(request.assessments), request.assessment);
 						}
 						vscode.window.showInformationMessage('UIQLab assessment complete. Results are ready.');
 					} else {

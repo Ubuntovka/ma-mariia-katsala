@@ -56,6 +56,25 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             },
         })
 
+    def test_decodes_jsonb_assessment_strings_returned_by_asyncpg(self):
+        created_at = datetime(2026, 8, 11, 12, 30, tzinfo=timezone.utc)
+        summary = assessment_run_summary({
+            'id': 18,
+            'createdAt': created_at,
+            'commitHash': None,
+            'gitDirty': False,
+            'branch': 'main',
+            'assessedTarget': '/',
+            'screenshotWidth': None,
+            'screenshotHeight': None,
+            'assessment': '{"mode":"profiles","profiles":[{"id":"accessibility","direction":"reduce-issues"}]}',
+        })
+
+        self.assertEqual(summary['assessment'], {
+            'mode': 'profiles',
+            'profiles': [{'id': 'accessibility', 'direction': 'reduce-issues'}],
+        })
+
 
 class AssessedTargetTests(unittest.TestCase):
     def test_full_url_is_reduced_to_page_path(self):

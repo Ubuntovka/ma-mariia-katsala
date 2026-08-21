@@ -62,8 +62,14 @@ all 14 metrics checked. Sidebar changes apply to the interactive IDE run and do
 not rewrite `.uiqlab.json`.
 
 Profile directions are currently stored as assessment intent. The extension
-does not add profile-specific explanations or use a direction to alter a
-profile's metric set.
+does not use a direction to alter a profile's metric set. When a profile-based
+run is compared with compatible history, the comparison view adds a visual goal
+summary above the existing metric details. It shows whether each chosen
+direction was achieved, opposed, partially achieved, unchanged, observed, or
+not comparable. Custom metric comparisons retain the existing overview without
+this profile summary. For both modes, every requested metric remains listed in
+history comparison; metrics without compatible history show **No baseline
+available** without duplicating their current value.
 
 For example if there is an image subfolder under your extension project workspace:
 

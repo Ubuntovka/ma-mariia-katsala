@@ -1036,6 +1036,11 @@ def assessment_run_summary(run):
         'screenshotDimensions': dimensions,
     }
     assessment = run.get('assessment')
+    if isinstance(assessment, str):
+        try:
+            assessment = json.loads(assessment)
+        except json.JSONDecodeError:
+            assessment = None
     if assessment is not None:
         summary['assessment'] = assessment
     return summary
