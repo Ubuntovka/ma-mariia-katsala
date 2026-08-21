@@ -291,7 +291,7 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 			<div class="section-row"><strong>Metrics</strong><span><button class="link-button" id="select-all-metrics" type="button">All</button> · <button class="link-button" id="select-no-metrics" type="button">None</button></span></div>${metricRows}
 		</div></fieldset>
 		<fieldset><legend>Explanation</legend><div class="preference">
-			<div class="preference-copy"><label class="preference-title" for="llm-explanation">Use LLM explanation</label><span class="preference-description">Generate a plain-language interpretation of the results.</span></div>
+			<div class="preference-copy"><label class="preference-title" for="llm-explanation">Use LLM explanation</label><span class="preference-description">Generate a structured technical interpretation and practical implementation steps.</span></div>
 			<label class="switch" aria-label="Use LLM explanation"><input id="llm-explanation" type="checkbox"${useLlmExplanation ? ' checked' : ''}><span class="slider"></span></label>
 		</div><div class="preference" id="source-sharing-row">
 			<div class="preference-copy"><label class="preference-title" for="share-source-code">Allow LLM to use source code <span class="demo-badge">Demo</span></label><span class="preference-description">Experimental feature for profile-based assessments only. Allows up to 10 relevant frontend files (100 KiB total) to be sent to the configured LLM provider and used to provide more precise, project-specific suggestions. When off, suggestions use metrics only.</span></div>

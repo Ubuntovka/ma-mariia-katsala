@@ -29,6 +29,7 @@ import {
 	getColorfulnessInterpretation,
 	generateResultsHtml,
 	renderExplanationHtml,
+	renderCustomMetricLlmFeedback,
 	renderProfileLlmFeedback,
 	renderProfileAssessmentOverview,
 	renderRequestedHistoryMetricSections,
@@ -88,6 +89,31 @@ suite('Run Assessment flow', () => {
 		assert.match(html, /src\/pages\/home\.tsx/);
 		assert.doesNotMatch(html, /<script>/);
 		assert.match(html, /&lt;script&gt;content&lt;\/script&gt;/);
+	});
+
+	test('renders structured custom-metric analysis as evidence-to-action cards', () => {
+		const html = renderCustomMetricLlmFeedback({
+			summary: 'Two independent clutter indicators increased relative to the baseline.',
+			analysisMode: 'comparison',
+			materialChangeCount: 2,
+			findings: [{
+				title: 'Corroborating visual-density measurements',
+				metricIds: ['M9', 'M10'],
+				observation: 'Edge density and feature congestion increased.',
+				interpretation: 'The measurements indicate increased visual information density.',
+				recommendation: 'Isolate one layout change and repeat both measurements. <script>alert(1)</script>',
+			}],
+		});
+
+		assert.match(html, /custom-ai-feedback/);
+		assert.match(html, /Baseline comparison · 2 material changes/);
+		assert.match(html, /Measured evidence/);
+		assert.match(html, /Technical interpretation/);
+		assert.match(html, /Practical next step/);
+		assert.match(html, /Practical action/);
+		assert.match(html, /M9/);
+		assert.doesNotMatch(html, /<script>/);
+		assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 	});
 
 	test('shows an LLM request error instead of hiding the explanation section', () => {

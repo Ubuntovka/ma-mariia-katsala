@@ -15,6 +15,7 @@ import {
 	AssessmentHistory,
 	AssessmentRunSummary,
 	AssessmentSelection,
+	CustomMetricLlmFeedback,
 	ProfileLlmFeedback,
 } from './runAssessment';
 import { execSync } from 'child_process';
@@ -73,8 +74,9 @@ function createResultsWebview(
 	explanation?: string | null,
 	explanationError?: string,
 	profileFeedback?: ProfileLlmFeedback,
+	customFeedback?: CustomMetricLlmFeedback,
 ): void {
-	const html = generateResultsHtml(results, url, isComplete, explanation, explanationError, profileFeedback);
+	const html = generateResultsHtml(results, url, isComplete, explanation, explanationError, profileFeedback, customFeedback);
 	panel.webview.html = html;
 }
 
@@ -1350,6 +1352,55 @@ export function renderProfileLlmFeedback(feedback: ProfileLlmFeedback): string {
 	</section>`;
 }
 
+/** Render validated custom-metric analysis as an evidence-to-action sequence. */
+export function renderCustomMetricLlmFeedback(feedback: CustomMetricLlmFeedback): string {
+	const findings = Array.isArray(feedback.findings)
+		? feedback.findings.filter((item) => item
+			&& typeof item.title === 'string'
+			&& typeof item.observation === 'string'
+			&& typeof item.interpretation === 'string'
+			&& typeof item.recommendation === 'string').slice(0, 6)
+		: [];
+	const materialChangeCount = Number.isInteger(feedback.materialChangeCount) && feedback.materialChangeCount >= 0
+		? feedback.materialChangeCount
+		: 0;
+	const modeLabel = feedback.analysisMode === 'comparison'
+		? `Baseline comparison · ${materialChangeCount} material change${materialChangeCount === 1 ? '' : 's'}`
+		: 'Current-state analysis';
+	const findingCards = findings.length > 0
+		? `<div class="custom-finding-list">${findings.map((finding, index) => {
+			const metricIds = Array.isArray(finding.metricIds)
+				? finding.metricIds.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 6)
+				: [];
+			return `<article class="custom-finding-card">
+				<div class="custom-finding-index" aria-hidden="true">${index + 1}</div>
+				<div class="custom-finding-content">
+					<div class="custom-finding-heading"><h3>${escapeHtml(finding.title)}</h3>${metricIds.length > 0 ? `<div class="metric-chips">${metricIds.map((metricId) => `<span>${escapeHtml(metricId)}</span>`).join('')}</div>` : ''}</div>
+					<div class="analysis-step evidence-step"><span class="analysis-step-label">Measured evidence</span><p>${escapeHtml(finding.observation)}</p></div>
+					<div class="analysis-connector" aria-hidden="true">↓</div>
+					<div class="analysis-step interpretation-step"><span class="analysis-step-label">Technical interpretation</span><p>${escapeHtml(finding.interpretation)}</p></div>
+					<div class="analysis-connector" aria-hidden="true">↓</div>
+					<div class="analysis-step recommendation-step"><span class="analysis-step-label">Practical next step</span><p>${escapeHtml(finding.recommendation)}</p></div>
+				</div>
+			</article>`;
+		}).join('')}</div>`
+		: feedback.analysisMode === 'comparison'
+			? `<div class="custom-no-findings"><strong>No material metric changes identified</strong><p>The comparison did not meet the fixed reporting thresholds. Review the metric results below if smaller changes are relevant to the current engineering objective.</p></div>`
+			: `<div class="custom-no-findings"><strong>No structured findings returned</strong><p>This assessment has no compatible baseline. Use the current metric values below as the reference point for a subsequent comparison.</p></div>`;
+
+	return `<section class="custom-ai-feedback" aria-labelledby="custom-ai-title">
+		<div class="custom-ai-heading">
+			<div class="custom-ai-icon" aria-hidden="true">AI</div>
+			<div><span class="custom-eyebrow">AI custom-metric analysis</span><h2 id="custom-ai-title">Technical assessment interpretation</h2></div>
+			<span class="analysis-mode-badge">${modeLabel}</span>
+		</div>
+		<p class="custom-ai-summary">${escapeHtml(feedback.summary)}</p>
+		<div class="custom-analysis-key"><span><i class="key-evidence"></i>Observation</span><span><i class="key-interpretation"></i>Interpretation</span><span><i class="key-recommendation"></i>Practical action</span></div>
+		${findingCards}
+		<p class="ai-note">AI-generated technical analysis. Confirm implemented changes against the metric values and project requirements.</p>
+	</section>`;
+}
+
 export function generateResultsHtml(
 	results: any[],
 	url: string,
@@ -1357,6 +1408,7 @@ export function generateResultsHtml(
 	explanation?: string | null,
 	explanationError?: string,
 	profileFeedback?: ProfileLlmFeedback,
+	customFeedback?: CustomMetricLlmFeedback,
 ): string {
 	// Filter out results that are completely empty, but keep them if they are the only ones for a metric
 	const filteredResults = results.filter((r, i) => {
@@ -1399,11 +1451,13 @@ export function generateResultsHtml(
 	}).join('');
 	const explanationHtml = profileFeedback
 		? renderProfileLlmFeedback(profileFeedback)
-		: explanationError
-			? `<section class="ai-explanation unavailable"><h2>AI explanation unavailable</h2><p>${escapeHtml(explanationError)} The assessment results are still shown below.</p></section>`
-		: explanation === undefined ? '' : explanation
-		? `<section class="ai-explanation"><h2>Plain-language explanation</h2>${renderExplanationHtml(explanation)}<p class="ai-note">AI-generated interpretation. Verify important decisions against the metric values below.</p></section>`
-		: `<section class="ai-explanation unavailable"><h2>Plain-language explanation</h2><p>${escapeHtml(explanationError || 'The AI explanation is unavailable.')} The assessment results are still shown below.</p></section>`;
+		: customFeedback
+			? renderCustomMetricLlmFeedback(customFeedback)
+			: explanationError
+				? `<section class="ai-explanation unavailable"><h2>AI explanation unavailable</h2><p>${escapeHtml(explanationError)} The assessment results are still shown below.</p></section>`
+				: explanation === undefined ? '' : explanation
+					? `<section class="ai-explanation"><h2>Plain-language explanation</h2>${renderExplanationHtml(explanation)}<p class="ai-note">AI-generated interpretation. Verify important decisions against the metric values below.</p></section>`
+					: `<section class="ai-explanation unavailable"><h2>Plain-language explanation</h2><p>${escapeHtml(explanationError || 'The AI explanation is unavailable.')} The assessment results are still shown below.</p></section>`;
 
 	return `<!DOCTYPE html>
 <html>
@@ -1511,10 +1565,48 @@ export function generateResultsHtml(
 		.file-chips code { max-width: 100%; overflow: hidden; padding: 3px 6px; border-radius: 4px; background: #f1f2f7; color: #4e5673; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 		.no-suggestions { margin-bottom: 14px; color: #687080; font-size: 13px; }
 		.profile-ai-feedback .ai-note { margin-top: 4px; }
+		.custom-ai-feedback { margin-bottom: 26px; padding: 22px; border: 1px solid #cdd5e1; border-top: 5px solid #4058b8; border-radius: 10px; background: linear-gradient(180deg, #f7f9ff 0%, #fff 100%); }
+		.custom-ai-heading { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
+		.custom-ai-icon { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 9px; background: #4058b8; color: #fff; font-size: 12px; font-weight: 800; letter-spacing: .04em; }
+		.custom-eyebrow { color: #4058b8; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+		.custom-ai-heading h2 { margin-top: 3px; color: #24315f; font-size: 20px; }
+		.analysis-mode-badge { padding: 5px 9px; border-radius: 999px; background: #e7ebfa; color: #34498f; font-size: 12px; font-weight: 700; white-space: nowrap; }
+		.custom-ai-summary { margin: 18px 0 14px; color: #30364f; font-size: 16px; line-height: 1.55; }
+		.custom-analysis-key { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 14px; padding: 9px 11px; border-radius: 6px; background: #eef1f7; color: #5d6574; font-size: 11px; }
+		.custom-analysis-key i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; }
+		.key-evidence { background: #4058b8; }
+		.key-interpretation { background: #8a5a21; }
+		.key-recommendation { background: #177253; }
+		.custom-finding-list { display: grid; gap: 12px; margin-bottom: 14px; }
+		.custom-finding-card { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 16px; border: 1px solid #dfe4ec; border-radius: 9px; background: #fff; }
+		.custom-finding-index { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 7px; background: #4058b8; color: #fff; font-size: 12px; font-weight: 700; }
+		.custom-finding-content { min-width: 0; }
+		.custom-finding-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin: 2px 0 12px; }
+		.custom-finding-heading h3 { color: #29376d; font-size: 15px; line-height: 1.35; }
+		.metric-chips { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+		.metric-chips span { padding: 3px 6px; border: 1px solid #cdd5ee; border-radius: 4px; background: #f2f4fc; color: #40518c; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 10px; font-weight: 700; }
+		.analysis-step { padding: 10px 12px; border-left: 3px solid; border-radius: 5px; }
+		.analysis-step-label { display: block; margin-bottom: 4px; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+		.analysis-step p { color: #343945; font-size: 13px; line-height: 1.5; }
+		.evidence-step { border-color: #4058b8; background: #f3f5fc; }
+		.evidence-step .analysis-step-label { color: #4058b8; }
+		.interpretation-step { border-color: #a26a29; background: #fcf7ef; }
+		.interpretation-step .analysis-step-label { color: #89571f; }
+		.recommendation-step { border-color: #208361; background: #eff9f5; }
+		.recommendation-step .analysis-step-label { color: #177253; }
+		.analysis-connector { height: 17px; padding-left: 14px; color: #8b93a1; font-size: 13px; line-height: 17px; }
+		.custom-no-findings { margin-bottom: 14px; padding: 14px; border: 1px solid #dfe4ec; border-radius: 7px; background: #f6f7f9; }
+		.custom-no-findings strong { display: block; margin-bottom: 4px; color: #35405a; font-size: 14px; }
+		.custom-no-findings p { color: #687080; font-size: 13px; line-height: 1.45; }
+		.custom-ai-feedback .ai-note { margin-top: 4px; }
 		@media (max-width: 620px) {
 			.profile-ai-heading { grid-template-columns: auto 1fr; }
 			.profile-ai-status { grid-column: 1 / -1; width: fit-content; }
 			.suggestions-heading { align-items: flex-start; flex-direction: column; }
+			.custom-ai-heading { grid-template-columns: auto 1fr; }
+			.analysis-mode-badge { grid-column: 1 / -1; width: fit-content; }
+			.custom-finding-heading { align-items: flex-start; flex-direction: column; }
+			.metric-chips { justify-content: flex-start; }
 		}
 		.metric-result {
 			background: #f8f9fa;
@@ -2803,6 +2895,7 @@ export function activate(context: vscode.ExtensionContext) {
 							let history: AssessmentHistory | undefined;
 							let explanation: string | null | undefined;
 							let profileFeedback: ProfileLlmFeedback | undefined;
+							let customFeedback: CustomMetricLlmFeedback | undefined;
 							let explanationError: string | undefined;
 							history = await chooseHistoryForCurrentRun(wui_id, request.comparison);
 							if (useLlmExplanation) {
@@ -2813,12 +2906,13 @@ export function activate(context: vscode.ExtensionContext) {
 									const response = await fetchAssessmentExplanation(results, history, explanationContext);
 									explanation = response.explanation;
 									profileFeedback = response.profileFeedback;
+									customFeedback = response.customFeedback;
 								}
 								catch (error: any) { explanationError = error?.message; }
 							} else {
 								explanation = undefined;
 							}
-							createResultsWebview(panel, results, deploymentUrl, true, explanation, explanationError, profileFeedback);
+							createResultsWebview(panel, results, deploymentUrl, true, explanation, explanationError, profileFeedback, customFeedback);
 							if (history) {
 								await showHistoryComparison(results, history, deploymentUrl, toMetricIds(request.assessments), request.assessment);
 							}
@@ -2901,6 +2995,7 @@ export function activate(context: vscode.ExtensionContext) {
 						}
 						let explanation: string | null | undefined;
 						let profileFeedback: ProfileLlmFeedback | undefined;
+						let customFeedback: CustomMetricLlmFeedback | undefined;
 						let explanationError: string | undefined;
 						if (useLlmExplanation) {
 							try {
@@ -2910,12 +3005,13 @@ export function activate(context: vscode.ExtensionContext) {
 								const response = await fetchAssessmentExplanation(resultData, history, explanationContext);
 								explanation = response.explanation;
 								profileFeedback = response.profileFeedback;
+								customFeedback = response.customFeedback;
 							}
 							catch (error: any) { explanationError = error?.message; }
 						} else {
 							explanation = undefined;
 						}
-						createResultsWebview(panel, resultData, localUrl, true, explanation, explanationError, profileFeedback);
+						createResultsWebview(panel, resultData, localUrl, true, explanation, explanationError, profileFeedback, customFeedback);
 						if (history) {
 							await showHistoryComparison(resultData, history, localUrl, toMetricIds(request.assessments), request.assessment);
 						}

@@ -51,8 +51,9 @@ Results editor also shows structured **AI profile guidance**. The deterministic
 history outcome remains authoritative; the LLM briefly explains the measured
 movement and proposes two to four next-step experiments for the selected
 directions. This appears as a status header, compact change rows, and numbered
-suggestion cards rather than one prose block. Custom metric runs keep the
-existing plain-language explanation overview.
+suggestion cards rather than one prose block. Custom metric runs use a parallel
+structured analysis panel that separates measured evidence, technical
+interpretation, and practical implementation actions.
 
 The sidebar provides a separate **Allow LLM to use source code (Demo)** toggle.
 This experimental feature is available only for profile runs with LLM feedback,

@@ -91,6 +91,22 @@ export interface AssessmentRunComparison {
 export interface AssessmentExplanation {
 	explanation: string;
 	profileFeedback?: ProfileLlmFeedback;
+	customFeedback?: CustomMetricLlmFeedback;
+}
+
+export interface CustomMetricLlmFinding {
+	title: string;
+	metricIds: string[];
+	observation: string;
+	interpretation: string;
+	recommendation: string;
+}
+
+export interface CustomMetricLlmFeedback {
+	summary: string;
+	findings: CustomMetricLlmFinding[];
+	analysisMode: 'comparison' | 'current-state';
+	materialChangeCount: number;
 }
 
 export interface ProfileLlmSuggestion {

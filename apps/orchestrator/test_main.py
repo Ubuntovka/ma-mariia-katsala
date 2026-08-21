@@ -11,6 +11,7 @@ from main import (
     build_explanation_messages,
     compact_source_context,
     decode_backend_result_ids,
+    extract_custom_metric_llm_feedback,
     extract_llm_explanation,
     extract_profile_llm_feedback,
     fetch_merged_backend_results,
@@ -237,7 +238,7 @@ class LlmExplanationTests(unittest.TestCase):
             'https://provider.example/v1/chat/completions'
         )
 
-    def test_prompt_contains_current_history_and_plain_language_guidance(self):
+    def test_custom_prompt_contains_current_history_and_professional_guidance(self):
         messages = build_explanation_messages(
             [{'metric_id': 'm9_edge_density', 'results': [0.24]}],
             {'metrics': {
@@ -245,14 +246,57 @@ class LlmExplanationTests(unittest.TestCase):
             }},
         )
 
-        self.assertIn('non-technical reader', messages[0]['content'])
+        self.assertIn('software engineers', messages[0]['content'])
+        self.assertIn('Do not use slang', messages[0]['content'])
+        self.assertIn('Return JSON only', messages[0]['content'])
         self.assertIn('Edge density', messages[1]['content'])
         self.assertIn('0.24', messages[1]['content'])
         self.assertIn('0.18', messages[1]['content'])
         self.assertIn('deterministicComparisonSelection', messages[1]['content'])
         self.assertIn('every item', messages[0]['content'])
-        self.assertIn('Do not merely restate values', messages[0]['content'])
-        self.assertIn('concrete, feasible suggestions', messages[0]['content'])
+        self.assertIn('Do not merely repeat the displayed values', messages[0]['content'])
+        self.assertIn('what to change in the interface or implementation', messages[0]['content'])
+        self.assertIn('Retesting may confirm a change', messages[0]['content'])
+        self.assertIn('primary action is to analyze', messages[0]['content'])
+
+    def test_extracts_and_filters_structured_custom_metric_feedback(self):
+        feedback = extract_custom_metric_llm_feedback({
+            'choices': [{'message': {'content': '''```json
+            {
+              "summary": "The clutter indicators increased relative to the baseline.",
+              "findings": [{
+                "title": "Corroborating clutter measurements",
+                "metricIds": ["m9_edge_density", "m10", "m99"],
+                "observation": "Edge density and feature congestion increased.",
+                "interpretation": "The measurements indicate greater visual information density.",
+                "recommendation": "Isolate one layout change and repeat both measurements."
+              }]
+            }
+            ```'''}}]
+        }, ['m9', 'm10'])
+
+        self.assertEqual(feedback['summary'], 'The clutter indicators increased relative to the baseline.')
+        self.assertEqual(feedback['findings'][0]['metricIds'], ['M9', 'M10'])
+        self.assertNotIn('M99', feedback['findings'][0]['metricIds'])
+
+    def test_replaces_research_only_custom_recommendation_with_practical_action(self):
+        feedback = extract_custom_metric_llm_feedback({
+            'choices': [{'message': {'content': '''{
+              "summary": "Edge density increased.",
+              "findings": [{
+                "title": "Higher edge density",
+                "metricIds": ["m9"],
+                "observation": "M9 increased relative to the baseline.",
+                "interpretation": "The view may contain more competing visual boundaries.",
+                "recommendation": "Conduct additional analysis to determine the underlying cause."
+              }]
+            }'''}}]
+        }, ['m9'])
+
+        recommendation = feedback['findings'][0]['recommendation']
+        self.assertTrue(recommendation.startswith('Remove or simplify'))
+        self.assertIn('rerun the listed metrics', recommendation)
+        self.assertNotIn('Conduct additional analysis', recommendation)
 
     def test_deterministically_orders_all_material_findings(self):
         current = [

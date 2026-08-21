@@ -2,10 +2,13 @@
 
 ## Purpose
 
-The LLM integration turns raw Web UI Assessment metric results into a short,
-plain-language explanation. For profile assessments, it also explains the
-deterministic profile outcome and proposes practical code improvements that
-support the directions selected by the developer.
+The LLM integration turns raw Web UI Assessment metric results into a concise,
+structured explanation. Custom metric assessments use professional
+computer science and human-computer interaction terminology and separate
+measured evidence, technical interpretation, and practical implementation work.
+For profile assessments, the integration explains the deterministic profile
+outcome and proposes practical code improvements that support the directions
+selected by the developer.
 
 It explains:
 
@@ -119,10 +122,11 @@ sent directly to `/v1` and the university web server returned HTTP 403.
 7. It reduces and sanitizes the assessment payload, adds metric definitions,
    and builds system and user messages.
 8. It calls the provider using bearer authentication and the configured model.
-9. Custom runs return the existing plain explanation. Profile runs validate a
-   structured JSON response containing a summary, change observations, and
-   suggestions.
-10. The webview escapes every returned field and displays profile guidance as
+9. Custom runs validate structured JSON containing a summary and technical
+   findings. Profile runs validate structured JSON containing a summary, change
+   observations, and suggestions.
+10. The webview escapes every returned field. It displays custom analysis as
+    evidence, interpretation, and practical-action cards, and profile guidance as
     status, change, and suggestion cards above the raw metric results.
 
 The extension sidebar includes a **Use LLM explanation** toggle. When enabled,
@@ -209,7 +213,10 @@ with the original `currentResults` and `history` request.
 }
 ```
 
-Custom metric assessments continue to return only `explanation`.
+Custom metric assessments return `explanation` for compatibility and a
+`customFeedback` object containing `summary`, `analysisMode`,
+`materialChangeCount`, and up to six validated `findings`. Each finding contains
+`title`, `metricIds`, `observation`, `interpretation`, and `recommendation`.
 
 ### Important response codes
 
@@ -227,10 +234,13 @@ from client-facing errors.
 
 `build_explanation_messages()` creates two messages:
 
-- A system message tells the model to write for a non-technical reader, cover
-  every preselected comparison finding, combine overlaps into conclusions,
-  avoid repeating the displayed comparison values, and provide conditional,
-  goal-dependent improvement suggestions.
+- For custom metrics, a system message requires precise professional
+  computer-science and HCI language without slang or colloquialisms. It tells
+  the model to cover every preselected comparison finding, combine overlaps,
+  distinguish observations from interpretations, and provide concrete,
+  reversible interface or implementation changes. Recommendations cannot use
+  further analysis, auditing, monitoring, or research as their primary action;
+  measurement may only verify a proposed change.
 - A user message contains metric definitions, current results, and available
   previous results as JSON data. It also contains a deterministic comparison
   selection produced before the model is called.
@@ -246,7 +256,8 @@ as untrusted data rather than instructions.
 Source-free profile requests omit raw result artifacts and use the deterministic
 comparison values/deltas instead. Their response budget is 900 tokens, which is
 enough for the short structured summary while reducing provider latency. Custom
-metric explanations retain the 1,600-token response budget.
+metric explanations use a 1,800-token response budget for up to six structured
+finding cards.
 
 `METRIC_EXPLANATIONS` provides short domain descriptions for metrics M1–M14.
 This gives the model enough context to explain values such as edge density,

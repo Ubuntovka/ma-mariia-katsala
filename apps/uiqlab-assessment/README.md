@@ -32,7 +32,7 @@ How to run an assessment:
 - Alternatively, choose **Custom metrics** to select any combination of the 14 metrics. Use **All** or **None** to change the complete metric selection at once, and expand **What does this measure?** to read a short description of any metric.
 - Profile mode runs the ordered, de-duplicated union of metrics assigned to the selected profiles. Custom mode runs exactly the checked metrics.
 - Switching modes clears the inactive selection, so earlier profile choices cannot leak into a custom metric run or vice versa.
-- Enable **Use LLM explanation** to receive an explanation after the run. Profile runs show a structured goal summary and suggested next steps; custom metric runs retain the existing overview.
+- Enable **Use LLM explanation** to receive an explanation after the run. Profile runs show a structured goal summary and suggested next steps. Custom metric runs show structured technical findings that separate measured evidence, interpretation, and practical implementation actions.
 - **Allow LLM to use source code (Demo)** is an experimental, profile-only permission and is off by default. When enabled, the extension sends at most 10 relevant frontend source files (100 KiB total) to the configured LLM provider. These files are used to provide more precise, project-specific suggestions. Suggestions still use metrics when the feature is off. The LLM does not search the project itself and the captured page HTML is not used as suggestion context.
 - Choose **Current state vs latest assessment**, **Current state vs selected assessment**, or **Two previous assessments**. Historical assessments are selected in the sidebar before the action starts.
 - Select **Run and compare** for a current-state mode, or **Compare assessments** for two historical runs. The sidebar hides page and profile controls when no new assessment is required.
@@ -80,8 +80,9 @@ outcome as its fixed conclusion, summarizes the most relevant changes, and
 shows numbered improvement suggestions. With source permission enabled,
 suggestions may cite only the frontend files selected and supplied by the
 extension; without permission, suggestions are based on metrics and profile
-directions only. Custom metric assessments keep the existing plain-language
-explanation layout.
+directions only. Custom metric assessments use a parallel card layout with a
+professional technical summary and an evidence → interpretation → practical
+action sequence for each finding.
 
 For example if there is an image subfolder under your extension project workspace:
 
