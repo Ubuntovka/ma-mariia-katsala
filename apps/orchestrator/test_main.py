@@ -9,8 +9,11 @@ from main import (
     assessment_run_summary,
     backend_result_ids_for_run,
     build_explanation_messages,
+    compact_source_context,
     decode_backend_result_ids,
+    extract_custom_metric_llm_feedback,
     extract_llm_explanation,
+    extract_profile_llm_feedback,
     fetch_merged_backend_results,
     merge_metric_results,
     metric_result_index,
@@ -54,6 +57,25 @@ class AssessmentRunSummaryTests(unittest.TestCase):
                 'mode': 'profiles',
                 'profiles': [{'id': 'visual-complexity', 'direction': 'decrease'}],
             },
+        })
+
+    def test_decodes_jsonb_assessment_strings_returned_by_asyncpg(self):
+        created_at = datetime(2026, 8, 11, 12, 30, tzinfo=timezone.utc)
+        summary = assessment_run_summary({
+            'id': 18,
+            'createdAt': created_at,
+            'commitHash': None,
+            'gitDirty': False,
+            'branch': 'main',
+            'assessedTarget': '/',
+            'screenshotWidth': None,
+            'screenshotHeight': None,
+            'assessment': '{"mode":"profiles","profiles":[{"id":"accessibility","direction":"reduce-issues"}]}',
+        })
+
+        self.assertEqual(summary['assessment'], {
+            'mode': 'profiles',
+            'profiles': [{'id': 'accessibility', 'direction': 'reduce-issues'}],
         })
 
 
@@ -216,7 +238,7 @@ class LlmExplanationTests(unittest.TestCase):
             'https://provider.example/v1/chat/completions'
         )
 
-    def test_prompt_contains_current_history_and_plain_language_guidance(self):
+    def test_custom_prompt_contains_current_history_and_professional_guidance(self):
         messages = build_explanation_messages(
             [{'metric_id': 'm9_edge_density', 'results': [0.24]}],
             {'metrics': {
@@ -224,14 +246,57 @@ class LlmExplanationTests(unittest.TestCase):
             }},
         )
 
-        self.assertIn('non-technical reader', messages[0]['content'])
+        self.assertIn('software engineers', messages[0]['content'])
+        self.assertIn('Do not use slang', messages[0]['content'])
+        self.assertIn('Return JSON only', messages[0]['content'])
         self.assertIn('Edge density', messages[1]['content'])
         self.assertIn('0.24', messages[1]['content'])
         self.assertIn('0.18', messages[1]['content'])
         self.assertIn('deterministicComparisonSelection', messages[1]['content'])
         self.assertIn('every item', messages[0]['content'])
-        self.assertIn('Do not merely restate values', messages[0]['content'])
-        self.assertIn('concrete, feasible suggestions', messages[0]['content'])
+        self.assertIn('Do not merely repeat the displayed values', messages[0]['content'])
+        self.assertIn('what to change in the interface or implementation', messages[0]['content'])
+        self.assertIn('Retesting may confirm a change', messages[0]['content'])
+        self.assertIn('primary action is to analyze', messages[0]['content'])
+
+    def test_extracts_and_filters_structured_custom_metric_feedback(self):
+        feedback = extract_custom_metric_llm_feedback({
+            'choices': [{'message': {'content': '''```json
+            {
+              "summary": "The clutter indicators increased relative to the baseline.",
+              "findings": [{
+                "title": "Corroborating clutter measurements",
+                "metricIds": ["m9_edge_density", "m10", "m99"],
+                "observation": "Edge density and feature congestion increased.",
+                "interpretation": "The measurements indicate greater visual information density.",
+                "recommendation": "Isolate one layout change and repeat both measurements."
+              }]
+            }
+            ```'''}}]
+        }, ['m9', 'm10'])
+
+        self.assertEqual(feedback['summary'], 'The clutter indicators increased relative to the baseline.')
+        self.assertEqual(feedback['findings'][0]['metricIds'], ['M9', 'M10'])
+        self.assertNotIn('M99', feedback['findings'][0]['metricIds'])
+
+    def test_replaces_research_only_custom_recommendation_with_practical_action(self):
+        feedback = extract_custom_metric_llm_feedback({
+            'choices': [{'message': {'content': '''{
+              "summary": "Edge density increased.",
+              "findings": [{
+                "title": "Higher edge density",
+                "metricIds": ["m9"],
+                "observation": "M9 increased relative to the baseline.",
+                "interpretation": "The view may contain more competing visual boundaries.",
+                "recommendation": "Conduct additional analysis to determine the underlying cause."
+              }]
+            }'''}}]
+        }, ['m9'])
+
+        recommendation = feedback['findings'][0]['recommendation']
+        self.assertTrue(recommendation.startswith('Remove or simplify'))
+        self.assertIn('rerun the listed metrics', recommendation)
+        self.assertNotIn('Conduct additional analysis', recommendation)
 
     def test_deterministically_orders_all_material_findings(self):
         current = [
@@ -283,6 +348,84 @@ class LlmExplanationTests(unittest.TestCase):
             }),
             'The page became less cluttered.'
         )
+
+    def test_profile_prompt_uses_authoritative_outcome_and_opt_in_source(self):
+        messages = build_explanation_messages(
+            [{'metric_id': 'm9_edge_density', 'results': [0.16]}],
+            {'metrics': {'m9_edge_density': {'results': [0.24]}}},
+            {'mode': 'profiles', 'profiles': [
+                {'id': 'visual-complexity', 'direction': 'decrease'}
+            ]},
+            {
+                'status': 'achieved',
+                'title': 'Profile goal achieved',
+                'outcomes': [{'id': 'visual-complexity', 'goalStatus': 'achieved'}],
+            },
+            'http://localhost:3000/dashboard',
+            [{'path': 'src/pages/dashboard.tsx', 'content': '<main>Dashboard</main>'}],
+        )
+
+        self.assertIn('deterministicProfileOutcome is authoritative', messages[0]['content'])
+        self.assertIn('Return JSON only', messages[0]['content'])
+        self.assertIn('Profile goal achieved', messages[1]['content'])
+        self.assertIn('src/pages/dashboard.tsx', messages[1]['content'])
+        self.assertIn('<main>Dashboard</main>', messages[1]['content'])
+        self.assertIn('untrusted data', messages[0]['content'])
+
+    def test_source_free_profile_prompt_omits_raw_result_artifacts(self):
+        messages = build_explanation_messages(
+            [{'metric_id': 'm10_feature_congestion', 'results': [
+                {'score': 4.2, 'map': 'large-raw-artifact' * 1000}
+            ]}],
+            {'metrics': {'m10_feature_congestion': {'results': [{'score': 5.1}]}}},
+            {'mode': 'profiles', 'profiles': [
+                {'id': 'visual-complexity', 'direction': 'decrease'}
+            ]},
+            {'status': 'achieved', 'title': 'Profile goal achieved', 'outcomes': []},
+        )
+
+        self.assertNotIn('large-raw-artifact', messages[1]['content'])
+        self.assertIn('"sourceFiles": []', messages[1]['content'])
+        self.assertIn('deterministicComparisonSelection', messages[1]['content'])
+
+    def test_compacts_source_context_to_allowed_limits(self):
+        compacted = compact_source_context([
+            {'path': f'src/file-{index}.tsx', 'content': 'x' * (30 * 1024)}
+            for index in range(12)
+        ])
+
+        self.assertLessEqual(len(compacted), 10)
+        self.assertLessEqual(sum(len(item['content'].encode('utf-8')) for item in compacted), 100 * 1024)
+        self.assertTrue(all(len(item['content'].encode('utf-8')) <= 24 * 1024 for item in compacted))
+
+    def test_extracts_and_filters_structured_profile_feedback(self):
+        feedback = extract_profile_llm_feedback({
+            'choices': [{'message': {'content': '''```json
+            {
+              "summary": "The profile goal was achieved.",
+              "changes": ["Edge density decreased."],
+              "suggestions": [{
+                "title": "Keep the hierarchy",
+                "action": "Review the dashboard spacing after future changes.",
+                "rationale": "This helps preserve the selected direction.",
+                "files": ["src/dashboard.tsx", "invented.tsx"]
+              }]
+            }
+            ```'''}}]
+        }, ['src/dashboard.tsx'])
+
+        self.assertEqual(feedback['summary'], 'The profile goal was achieved.')
+        self.assertEqual(feedback['changes'], ['Edge density decreased.'])
+        self.assertEqual(feedback['suggestions'][0]['files'], ['src/dashboard.tsx'])
+
+    def test_accepts_provider_text_before_structured_profile_feedback(self):
+        feedback = extract_profile_llm_feedback({
+            'choices': [{'message': {'content': '''Here is the requested result:
+            {"summary":"Metrics moved toward the goal.","changes":[],"suggestions":[]}
+            '''}}]
+        })
+
+        self.assertEqual(feedback['summary'], 'Metrics moved toward the goal.')
 
 
 if __name__ == '__main__':

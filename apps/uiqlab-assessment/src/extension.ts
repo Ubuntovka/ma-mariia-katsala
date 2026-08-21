@@ -14,11 +14,24 @@ import {
 	AssessmentRunRequest,
 	AssessmentHistory,
 	AssessmentRunSummary,
+	AssessmentSelection,
+	CustomMetricLlmFeedback,
+	ProfileLlmFeedback,
 } from './runAssessment';
 import { execSync } from 'child_process';
 import { PNG } from 'pngjs';
 import { getOrCreateProjectConfig, ProjectConfig } from './projectConfig';
-import { AssessmentSidebarProvider } from './assessmentSidebar';
+import { AssessmentSidebarProvider, type SidebarInitialSelection } from './assessmentSidebar';
+import { ASSESSMENT_PROFILES } from './assessmentProfiles';
+import { getMetricDefinition } from './metricCatalog';
+import {
+	assessProfilesAgainstHistory,
+	normalizeProfileAssessmentSelection,
+	type ProfileAssessmentSummary,
+	type ProfileGoalStatus,
+	type ProfileOutcome,
+} from './profileAssessment';
+import { collectWorkspaceSourceContext } from './sourceContext';
 
 function getGitInfo(workspaceRoot: string, projectConfig: ProjectConfig): GitInfo {
 	let repositoryUrl = '';
@@ -59,10 +72,41 @@ function createResultsWebview(
 	url: string,
 	isComplete: boolean = true,
 	explanation?: string | null,
-	explanationError?: string
+	explanationError?: string,
+	profileFeedback?: ProfileLlmFeedback,
+	customFeedback?: CustomMetricLlmFeedback,
 ): void {
-	const html = generateResultsHtml(results, url, isComplete, explanation, explanationError);
+	const html = generateResultsHtml(results, url, isComplete, explanation, explanationError, profileFeedback, customFeedback);
 	panel.webview.html = html;
+}
+
+async function buildExplanationContext(
+	assessmentSelection: AssessmentSelection,
+	currentResults: any[],
+	history: AssessmentHistory | undefined,
+	target: string,
+	workspaceRoot: string,
+	shareSourceCode: boolean,
+) {
+	const selectedProfiles = normalizeProfileAssessmentSelection(assessmentSelection);
+	if (!selectedProfiles) {
+		return { assessment: assessmentSelection, target };
+	}
+	const profileAssessment = assessProfilesAgainstHistory(
+		selectedProfiles,
+		currentResults,
+		history?.metrics ?? {},
+		Boolean(history?.baselineRun),
+	);
+	const sourceContext = shareSourceCode
+		? await collectWorkspaceSourceContext(workspaceRoot, target)
+		: [];
+	return {
+		assessment: assessmentSelection,
+		profileAssessment,
+		target,
+		...(sourceContext.length > 0 ? { sourceContext } : {}),
+	};
 }
 
 export interface M1SizeComparison {
@@ -1253,12 +1297,118 @@ export function calculateM8Comparison(
 	};
 }
 
-function generateResultsHtml(
+function profileFeedbackStatus(status: string): { className: string; label: string; icon: string } {
+	switch (status) {
+		case 'achieved': return { className: 'achieved', label: 'Goal achieved', icon: '✓' };
+		case 'not-achieved': return { className: 'not-achieved', label: 'Goal not achieved', icon: '×' };
+		case 'partial': return { className: 'partial', label: 'Partially achieved', icon: '◐' };
+		case 'observed': return { className: 'observed', label: 'Change observed', icon: '↕' };
+		case 'unchanged': return { className: 'unchanged', label: 'No meaningful change', icon: '—' };
+		default: return { className: 'not-comparable', label: 'Not comparable', icon: '?' };
+	}
+}
+
+/** Render validated, structured profile guidance without interpreting model output as HTML. */
+export function renderProfileLlmFeedback(feedback: ProfileLlmFeedback): string {
+	const status = profileFeedbackStatus(feedback.goalStatus);
+	const changes = Array.isArray(feedback.changes)
+		? feedback.changes.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 3)
+		: [];
+	const suggestions = Array.isArray(feedback.suggestions)
+		? feedback.suggestions.filter((item) => item && typeof item.title === 'string' && typeof item.action === 'string').slice(0, 4)
+		: [];
+	const sourceFiles = Array.isArray(feedback.sourceFiles)
+		? feedback.sourceFiles.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 10)
+		: [];
+	const sourceLabel = feedback.sourceContextUsed && sourceFiles.length > 0
+		? `Metrics and ${sourceFiles.length} source file${sourceFiles.length === 1 ? '' : 's'}`
+		: 'Metrics only';
+	const changesHtml = changes.length > 0
+		? `<div class="feedback-changes">${changes.map((change) => `<div class="change-chip"><span aria-hidden="true">↳</span><span>${escapeHtml(change)}</span></div>`).join('')}</div>`
+		: '';
+	const suggestionsHtml = suggestions.length > 0
+		? `<div class="suggestion-grid">${suggestions.map((suggestion, index) => {
+			const files = Array.isArray(suggestion.files)
+				? suggestion.files.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 4)
+				: [];
+			return `<article class="suggestion-card">
+				<div class="suggestion-number">${index + 1}</div>
+				<div><h3>${escapeHtml(suggestion.title)}</h3><p class="suggestion-action">${escapeHtml(suggestion.action)}</p>${suggestion.rationale ? `<p class="suggestion-rationale">Why: ${escapeHtml(suggestion.rationale)}</p>` : ''}${files.length > 0 ? `<div class="file-chips">${files.map((file) => `<code>${escapeHtml(file)}</code>`).join('')}</div>` : ''}</div>
+			</article>`;
+		}).join('')}</div>`
+		: '<p class="no-suggestions">No code suggestions were returned for this assessment.</p>';
+
+	return `<section class="profile-ai-feedback status-${status.className}" aria-labelledby="profile-ai-title">
+		<div class="profile-ai-heading">
+			<div class="profile-ai-icon" aria-hidden="true">${status.icon}</div>
+			<div><span class="eyebrow">AI profile guidance</span><h2 id="profile-ai-title">${escapeHtml(feedback.goalTitle || 'Profile assessment')}</h2></div>
+			<span class="profile-ai-status">${status.label}</span>
+		</div>
+		<p class="profile-ai-summary">${escapeHtml(feedback.summary)}</p>
+		${changesHtml}
+		<div class="suggestions-heading"><h3>Suggested next steps</h3><span class="context-badge" title="Source context supplied to the configured LLM provider">${escapeHtml(sourceLabel)}</span></div>
+		${suggestionsHtml}
+		<p class="ai-note">AI-generated suggestions. Validate changes against the profile goal and metric results below.</p>
+	</section>`;
+}
+
+/** Render validated custom-metric analysis as an evidence-to-action sequence. */
+export function renderCustomMetricLlmFeedback(feedback: CustomMetricLlmFeedback): string {
+	const findings = Array.isArray(feedback.findings)
+		? feedback.findings.filter((item) => item
+			&& typeof item.title === 'string'
+			&& typeof item.observation === 'string'
+			&& typeof item.interpretation === 'string'
+			&& typeof item.recommendation === 'string').slice(0, 6)
+		: [];
+	const materialChangeCount = Number.isInteger(feedback.materialChangeCount) && feedback.materialChangeCount >= 0
+		? feedback.materialChangeCount
+		: 0;
+	const modeLabel = feedback.analysisMode === 'comparison'
+		? `Baseline comparison · ${materialChangeCount} material change${materialChangeCount === 1 ? '' : 's'}`
+		: 'Current-state analysis';
+	const findingCards = findings.length > 0
+		? `<div class="custom-finding-list">${findings.map((finding, index) => {
+			const metricIds = Array.isArray(finding.metricIds)
+				? finding.metricIds.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 6)
+				: [];
+			return `<article class="custom-finding-card">
+				<div class="custom-finding-index" aria-hidden="true">${index + 1}</div>
+				<div class="custom-finding-content">
+					<div class="custom-finding-heading"><h3>${escapeHtml(finding.title)}</h3>${metricIds.length > 0 ? `<div class="metric-chips">${metricIds.map((metricId) => `<span>${escapeHtml(metricId)}</span>`).join('')}</div>` : ''}</div>
+					<div class="analysis-step evidence-step"><span class="analysis-step-label">Measured evidence</span><p>${escapeHtml(finding.observation)}</p></div>
+					<div class="analysis-connector" aria-hidden="true">↓</div>
+					<div class="analysis-step interpretation-step"><span class="analysis-step-label">Technical interpretation</span><p>${escapeHtml(finding.interpretation)}</p></div>
+					<div class="analysis-connector" aria-hidden="true">↓</div>
+					<div class="analysis-step recommendation-step"><span class="analysis-step-label">Practical next step</span><p>${escapeHtml(finding.recommendation)}</p></div>
+				</div>
+			</article>`;
+		}).join('')}</div>`
+		: feedback.analysisMode === 'comparison'
+			? `<div class="custom-no-findings"><strong>No material metric changes identified</strong><p>The comparison did not meet the fixed reporting thresholds. Review the metric results below if smaller changes are relevant to the current engineering objective.</p></div>`
+			: `<div class="custom-no-findings"><strong>No structured findings returned</strong><p>This assessment has no compatible baseline. Use the current metric values below as the reference point for a subsequent comparison.</p></div>`;
+
+	return `<section class="custom-ai-feedback" aria-labelledby="custom-ai-title">
+		<div class="custom-ai-heading">
+			<div class="custom-ai-icon" aria-hidden="true">AI</div>
+			<div><span class="custom-eyebrow">AI custom-metric analysis</span><h2 id="custom-ai-title">Technical assessment interpretation</h2></div>
+			<span class="analysis-mode-badge">${modeLabel}</span>
+		</div>
+		<p class="custom-ai-summary">${escapeHtml(feedback.summary)}</p>
+		<div class="custom-analysis-key"><span><i class="key-evidence"></i>Observation</span><span><i class="key-interpretation"></i>Interpretation</span><span><i class="key-recommendation"></i>Practical action</span></div>
+		${findingCards}
+		<p class="ai-note">AI-generated technical analysis. Confirm implemented changes against the metric values and project requirements.</p>
+	</section>`;
+}
+
+export function generateResultsHtml(
 	results: any[],
 	url: string,
 	isComplete: boolean = true,
 	explanation?: string | null,
-	explanationError?: string
+	explanationError?: string,
+	profileFeedback?: ProfileLlmFeedback,
+	customFeedback?: CustomMetricLlmFeedback,
 ): string {
 	// Filter out results that are completely empty, but keep them if they are the only ones for a metric
 	const filteredResults = results.filter((r, i) => {
@@ -1299,9 +1449,15 @@ function generateResultsHtml(
 		</div>
 		`;
 	}).join('');
-	const explanationHtml = explanation === undefined ? '' : explanation
-		? `<section class="ai-explanation"><h2>Plain-language explanation</h2>${renderExplanationHtml(explanation)}<p class="ai-note">AI-generated interpretation. Verify important decisions against the metric values below.</p></section>`
-		: `<section class="ai-explanation unavailable"><h2>Plain-language explanation</h2><p>${escapeHtml(explanationError || 'The AI explanation is unavailable.')} The assessment results are still shown below.</p></section>`;
+	const explanationHtml = profileFeedback
+		? renderProfileLlmFeedback(profileFeedback)
+		: customFeedback
+			? renderCustomMetricLlmFeedback(customFeedback)
+			: explanationError
+				? `<section class="ai-explanation unavailable"><h2>AI explanation unavailable</h2><p>${escapeHtml(explanationError)} The assessment results are still shown below.</p></section>`
+				: explanation === undefined ? '' : explanation
+					? `<section class="ai-explanation"><h2>Plain-language explanation</h2>${renderExplanationHtml(explanation)}<p class="ai-note">AI-generated interpretation. Verify important decisions against the metric values below.</p></section>`
+					: `<section class="ai-explanation unavailable"><h2>Plain-language explanation</h2><p>${escapeHtml(explanationError || 'The AI explanation is unavailable.')} The assessment results are still shown below.</p></section>`;
 
 	return `<!DOCTYPE html>
 <html>
@@ -1373,6 +1529,85 @@ function generateResultsHtml(
 		.ai-explanation p:last-child { margin-bottom: 0; }
 		.ai-explanation.unavailable { background: #fff8e8; border-color: #d8a83e; }
 		.ai-note { color: #666; font-size: 12px; }
+		.profile-ai-feedback {
+			margin-bottom: 26px;
+			padding: 22px;
+			border: 1px solid #d8dcf7;
+			border-top: 5px solid #667eea;
+			border-radius: 10px;
+			background: linear-gradient(180deg, #f8f9ff 0%, #fff 100%);
+		}
+		.profile-ai-feedback.status-achieved { border-top-color: #16865a; }
+		.profile-ai-feedback.status-not-achieved { border-top-color: #c44848; }
+		.profile-ai-feedback.status-partial { border-top-color: #c68116; }
+		.profile-ai-heading { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
+		.profile-ai-heading .eyebrow { color: #667eea; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+		.profile-ai-heading h2 { margin-top: 3px; color: #27305e; font-size: 20px; }
+		.profile-ai-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: #667eea; color: white; font-size: 21px; font-weight: 700; }
+		.status-achieved .profile-ai-icon { background: #16865a; }
+		.status-not-achieved .profile-ai-icon { background: #c44848; }
+		.status-partial .profile-ai-icon { background: #c68116; }
+		.profile-ai-status, .context-badge { padding: 5px 9px; border-radius: 999px; background: #e8eafd; color: #414d9a; font-size: 12px; font-weight: 700; white-space: nowrap; }
+		.profile-ai-summary { margin: 18px 0 14px; font-size: 16px; line-height: 1.55; color: #30364f; }
+		.feedback-changes { display: grid; gap: 8px; margin-bottom: 20px; }
+		.change-chip { display: grid; grid-template-columns: auto 1fr; gap: 8px; padding: 9px 11px; border-radius: 6px; background: #f0f2fd; color: #3d4465; font-size: 13px; line-height: 1.45; }
+		.change-chip > span:first-child { color: #667eea; font-weight: 700; }
+		.suggestions-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 18px 0 10px; }
+		.suggestions-heading h3 { color: #27305e; font-size: 16px; }
+		.context-badge { background: #eef1f5; color: #5c6471; font-weight: 600; }
+		.suggestion-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 11px; margin-bottom: 14px; }
+		.suggestion-card { display: grid; grid-template-columns: auto 1fr; gap: 11px; padding: 14px; border: 1px solid #e0e3f2; border-radius: 8px; background: #fff; }
+		.suggestion-number { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: #667eea; color: white; font-size: 12px; font-weight: 700; }
+		.suggestion-card h3 { margin: 2px 0 6px; color: #35418b; font-size: 14px; }
+		.suggestion-action { color: #30343f; font-size: 13px; line-height: 1.45; }
+		.suggestion-rationale { margin-top: 7px; color: #687080; font-size: 12px; line-height: 1.4; }
+		.file-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+		.file-chips code { max-width: 100%; overflow: hidden; padding: 3px 6px; border-radius: 4px; background: #f1f2f7; color: #4e5673; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+		.no-suggestions { margin-bottom: 14px; color: #687080; font-size: 13px; }
+		.profile-ai-feedback .ai-note { margin-top: 4px; }
+		.custom-ai-feedback { margin-bottom: 26px; padding: 22px; border: 1px solid #cdd5e1; border-top: 5px solid #4058b8; border-radius: 10px; background: linear-gradient(180deg, #f7f9ff 0%, #fff 100%); }
+		.custom-ai-heading { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
+		.custom-ai-icon { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 9px; background: #4058b8; color: #fff; font-size: 12px; font-weight: 800; letter-spacing: .04em; }
+		.custom-eyebrow { color: #4058b8; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+		.custom-ai-heading h2 { margin-top: 3px; color: #24315f; font-size: 20px; }
+		.analysis-mode-badge { padding: 5px 9px; border-radius: 999px; background: #e7ebfa; color: #34498f; font-size: 12px; font-weight: 700; white-space: nowrap; }
+		.custom-ai-summary { margin: 18px 0 14px; color: #30364f; font-size: 16px; line-height: 1.55; }
+		.custom-analysis-key { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 14px; padding: 9px 11px; border-radius: 6px; background: #eef1f7; color: #5d6574; font-size: 11px; }
+		.custom-analysis-key i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; }
+		.key-evidence { background: #4058b8; }
+		.key-interpretation { background: #8a5a21; }
+		.key-recommendation { background: #177253; }
+		.custom-finding-list { display: grid; gap: 12px; margin-bottom: 14px; }
+		.custom-finding-card { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 16px; border: 1px solid #dfe4ec; border-radius: 9px; background: #fff; }
+		.custom-finding-index { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 7px; background: #4058b8; color: #fff; font-size: 12px; font-weight: 700; }
+		.custom-finding-content { min-width: 0; }
+		.custom-finding-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin: 2px 0 12px; }
+		.custom-finding-heading h3 { color: #29376d; font-size: 15px; line-height: 1.35; }
+		.metric-chips { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+		.metric-chips span { padding: 3px 6px; border: 1px solid #cdd5ee; border-radius: 4px; background: #f2f4fc; color: #40518c; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 10px; font-weight: 700; }
+		.analysis-step { padding: 10px 12px; border-left: 3px solid; border-radius: 5px; }
+		.analysis-step-label { display: block; margin-bottom: 4px; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+		.analysis-step p { color: #343945; font-size: 13px; line-height: 1.5; }
+		.evidence-step { border-color: #4058b8; background: #f3f5fc; }
+		.evidence-step .analysis-step-label { color: #4058b8; }
+		.interpretation-step { border-color: #a26a29; background: #fcf7ef; }
+		.interpretation-step .analysis-step-label { color: #89571f; }
+		.recommendation-step { border-color: #208361; background: #eff9f5; }
+		.recommendation-step .analysis-step-label { color: #177253; }
+		.analysis-connector { height: 17px; padding-left: 14px; color: #8b93a1; font-size: 13px; line-height: 17px; }
+		.custom-no-findings { margin-bottom: 14px; padding: 14px; border: 1px solid #dfe4ec; border-radius: 7px; background: #f6f7f9; }
+		.custom-no-findings strong { display: block; margin-bottom: 4px; color: #35405a; font-size: 14px; }
+		.custom-no-findings p { color: #687080; font-size: 13px; line-height: 1.45; }
+		.custom-ai-feedback .ai-note { margin-top: 4px; }
+		@media (max-width: 620px) {
+			.profile-ai-heading { grid-template-columns: auto 1fr; }
+			.profile-ai-status { grid-column: 1 / -1; width: fit-content; }
+			.suggestions-heading { align-items: flex-start; flex-direction: column; }
+			.custom-ai-heading { grid-template-columns: auto 1fr; }
+			.analysis-mode-badge { grid-column: 1 / -1; width: fit-content; }
+			.custom-finding-heading { align-items: flex-start; flex-direction: column; }
+			.metric-chips { justify-content: flex-start; }
+		}
 		.metric-result {
 			background: #f8f9fa;
 			border-left: 4px solid #667eea;
@@ -1937,16 +2172,127 @@ function comparisonRunText(run: AssessmentRunSummary): string {
 	return `${commit}${dirty} · ${new Date(run.createdAt).toLocaleString()}`;
 }
 
+function baseMetricId(metricId: string): string {
+	return metricId.split('_')[0].toLowerCase();
+}
+
+export function requestedHistoryMetricIds(selectedMetricIds: readonly string[], currentResults: readonly any[]): string[] {
+	const candidates = selectedMetricIds.length > 0
+		? selectedMetricIds
+		: currentResults
+			.map((result) => result?.metric_id)
+			.filter((metricId): metricId is string => typeof metricId === 'string');
+	return [...new Set(candidates
+		.map(baseMetricId)
+		.filter((metricId) => Boolean(getMetricDefinition(metricId))))];
+}
+
+export function renderUnavailableHistoryMetricSection(metricId: string, baselineExists: boolean): string {
+	const definition = getMetricDefinition(metricId);
+	const name = definition?.name ?? metricId.toUpperCase();
+	const status = baselineExists ? 'Comparison unavailable' : 'No baseline available';
+	const detail = baselineExists
+		? 'A historical result exists, but its values could not be compared with this run.'
+		: 'This requested metric has no compatible historical result. See Evaluation Results for this run’s output.';
+	return `<section class="metric-section metric-unavailable">
+		<h2>${escapeHtml(metricId.toUpperCase())} · ${escapeHtml(name)}</h2>
+		<div class="baseline-empty"><span class="baseline-empty-icon" aria-hidden="true">—</span><div><strong>${status}</strong><p>${detail}</p></div></div>
+	</section>`;
+}
+
+export function renderRequestedHistoryMetricSections(
+	requestedMetricIds: readonly string[],
+	comparableSections: Readonly<Partial<Record<string, string>>>,
+	historyMetricIds: readonly string[],
+): string {
+	const baselineFamilies = new Set(historyMetricIds.map(baseMetricId));
+	return requestedMetricIds.map((metricId) =>
+		comparableSections[metricId]
+			|| renderUnavailableHistoryMetricSection(metricId, baselineFamilies.has(metricId))
+	).join('');
+}
+
+function profileDisplayName(id: string): string {
+	const words = id.replace(/-/g, ' ');
+	return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function goalStatusPresentation(status: ProfileGoalStatus): { label: string; icon: string } {
+	switch (status) {
+		case 'achieved': return { label: 'Goal achieved', icon: '✓' };
+		case 'not-achieved': return { label: 'Goal not achieved', icon: '×' };
+		case 'partial': return { label: 'Partially achieved', icon: '◐' };
+		case 'observed': return { label: 'Change observed', icon: '↕' };
+		case 'unchanged': return { label: 'No meaningful change', icon: '—' };
+		case 'not-comparable': return { label: 'Not comparable', icon: '?' };
+	}
+}
+
+function renderProfileOutcomeTrack(outcome: ProfileOutcome): string {
+	if (outcome.comparableMetrics.length === 0) {
+		return '<div class="outcome-track"><span class="track-neutral" style="width:100%"></span></div>';
+	}
+	const total = outcome.comparableMetrics.length;
+	const alignedWidth = (outcome.alignedMetrics.length / total) * 100;
+	const opposedWidth = (outcome.opposedMetrics.length / total) * 100;
+	const unchangedWidth = Math.max(0, 100 - alignedWidth - opposedWidth);
+	return `<div class="outcome-track" aria-label="${outcome.alignedMetrics.length} aligned, ${outcome.opposedMetrics.length} opposed, ${total - outcome.meaningfulMetrics.length} unchanged">
+		${alignedWidth > 0 ? `<span class="track-aligned" style="width:${alignedWidth}%"></span>` : ''}
+		${unchangedWidth > 0 ? `<span class="track-unchanged" style="width:${unchangedWidth}%"></span>` : ''}
+		${opposedWidth > 0 ? `<span class="track-opposed" style="width:${opposedWidth}%"></span>` : ''}
+	</div>`;
+}
+
+export function renderProfileAssessmentOverview(summary: ProfileAssessmentSummary): string {
+	const overall = goalStatusPresentation(summary.status);
+	const outcomeCards = summary.outcomes.map((outcome) => {
+		const presentation = goalStatusPresentation(outcome.goalStatus);
+		const metricLegend = outcome.comparableMetrics.length > 0
+			? `<div class="outcome-legend"><span><i class="legend-aligned"></i>${outcome.alignedMetrics.length} aligned</span><span><i class="legend-unchanged"></i>${outcome.comparableMetrics.length - outcome.meaningfulMetrics.length} unchanged</span><span><i class="legend-opposed"></i>${outcome.opposedMetrics.length} opposed</span></div>`
+			: '<div class="outcome-legend"><span>No comparable primary metrics</span></div>';
+		return `<article class="profile-card status-${outcome.goalStatus}">
+			<div class="profile-card-heading"><div><h3>${escapeHtml(profileDisplayName(outcome.id))}</h3><p class="profile-direction">Chosen direction: <strong>${escapeHtml(outcome.direction)}</strong></p></div><span class="status-pill"><span aria-hidden="true">${presentation.icon}</span> ${presentation.label}</span></div>
+			${renderProfileOutcomeTrack(outcome)}
+			${metricLegend}
+			<p class="profile-reason">${escapeHtml(outcome.reason)}</p>
+		</article>`;
+	}).join('');
+
+	return `<section class="profile-overview status-${summary.status}" aria-labelledby="profile-goal-title">
+		<div class="goal-summary">
+			<div class="goal-icon" aria-hidden="true">${overall.icon}</div>
+			<div><span class="eyebrow">Profile goal assessment</span><h2 id="profile-goal-title">${escapeHtml(summary.title)}</h2><p>${escapeHtml(summary.description)}</p></div>
+		</div>
+		<div class="profile-summary-grid">${outcomeCards}</div>
+		<div class="track-key"><span><i class="legend-aligned"></i>Follows direction</span><span><i class="legend-unchanged"></i>No meaningful change</span><span><i class="legend-opposed"></i>Opposes direction</span></div>
+	</section>`;
+}
+
 async function showHistoryComparison(
 	currentResults: any[],
 	history: AssessmentHistory,
 	url: string,
-	selectedMetricIds: string[] = []
+	selectedMetricIds: string[] = [],
+	assessmentSelection?: unknown,
 ): Promise<boolean> {
+	const requestedMetricIds = requestedHistoryMetricIds(selectedMetricIds, currentResults);
+	const historyMetricIds = Object.keys(history.metrics);
+	const historyMetricFamilies = new Set(historyMetricIds.map(baseMetricId));
+	const selectedProfiles = normalizeProfileAssessmentSelection(
+		assessmentSelection ?? history.currentRun?.assessment,
+	);
+	const profileOverview = selectedProfiles
+		? renderProfileAssessmentOverview(assessProfilesAgainstHistory(
+			selectedProfiles,
+			currentResults,
+			history.metrics,
+			Boolean(history.baselineRun),
+		))
+		: '';
 	const currentM4Result = currentResults.find(
 		(result: any) => typeof result?.metric_id === 'string' && result.metric_id.split('_')[0] === 'm4'
 	);
-	const selectedM4MetricId = selectedMetricIds.find((metricId) => metricId.split('_')[0] === 'm4');
+	const selectedM4MetricId = requestedMetricIds.find((metricId) => metricId === 'm4');
 	const m4WasSelected = Boolean(currentM4Result || selectedM4MetricId);
 	const m4MetricId = currentM4Result?.metric_id ?? selectedM4MetricId;
 	const historicalM4Result = m4MetricId ? history.metrics[m4MetricId] : undefined;
@@ -1967,7 +2313,7 @@ async function showHistoryComparison(
 	const m8Match = findM8HistoryComparison(currentResults, history);
 	const m9Match = await findM9HistoryComparison(currentResults, history);
 	const m10Match = await findM10HistoryComparison(currentResults, history);
-	if (!m1Match && !m2Match && !m3Match && !m4Match && !m4WasSelected && !m5Match && !m6Match && !m7Match && !m8Match && !m9Match && !m10Match && !m11Match && !m12Match && !m13Match && !m14Match) {
+	if (!profileOverview && requestedMetricIds.length === 0) {
 		return false;
 	}
 	const runContext = history.currentRun || history.baselineRun
@@ -2316,6 +2662,26 @@ async function showHistoryComparison(
 			<p class="variation-summary">${m14SpreadDirection}</p>
 			<div class="explanation"><p>NIMA predicts a distribution of aesthetic image ratings. The mean and standard deviation are compared independently. A higher mean normally indicates better predicted image quality or aesthetics. Standard deviation measures disagreement or spread among predicted ratings and is not itself a quality score.</p></div>
 		</section>` : '';
+	const requestedMetricSections = renderRequestedHistoryMetricSections(
+		requestedMetricIds,
+		{
+			m1: m1Section,
+			m2: m2Section,
+			m3: m3Section,
+			m4: m4Section || (historyMetricFamilies.has('m4') ? m4UnavailableSection : ''),
+			m5: m5Section,
+			m6: m6Section,
+			m7: m7Section,
+			m8: m8Section,
+			m9: m9Section,
+			m10: m10Section,
+			m11: m11Section,
+			m12: m12Section,
+			m13: m13Section,
+			m14: m14Section,
+		},
+		historyMetricIds,
+	);
 
 	const panel = vscode.window.createWebviewPanel(
 		'historyComparison',
@@ -2373,27 +2739,48 @@ async function showHistoryComparison(
 		.explanation p { margin: 0; }
 		.comparison-warning { margin-bottom: 18px; padding: 14px 16px; border-left: 4px solid var(--vscode-editorWarning-foreground); background: var(--vscode-textBlockQuote-background); line-height: 1.5; }
 		.comparison-warning p { margin: 0; }
+		.metric-unavailable h2 { margin-bottom: 14px; }
+		.baseline-empty { display: flex; align-items: center; gap: 14px; padding: 16px; border: 1px dashed var(--vscode-widget-border); border-radius: 8px; background: var(--vscode-sideBar-background); }
+		.baseline-empty-icon { display: grid; flex: 0 0 34px; width: 34px; height: 34px; place-items: center; border: 1px solid var(--vscode-descriptionForeground); border-radius: 50%; color: var(--vscode-descriptionForeground); font-size: 20px; }
+		.baseline-empty strong { display: block; margin-bottom: 3px; font-size: 15px; }
+		.baseline-empty p { margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.45; }
+		.profile-overview { --goal-color: var(--vscode-descriptionForeground); margin: 0 0 28px; padding: 22px; border: 1px solid var(--goal-color); border-radius: 12px; background: var(--vscode-sideBar-background); }
+		.profile-overview.status-achieved, .profile-card.status-achieved { --goal-color: var(--vscode-testing-iconPassed, #2ea043); }
+		.profile-overview.status-not-achieved, .profile-card.status-not-achieved { --goal-color: var(--vscode-testing-iconFailed, #f85149); }
+		.profile-overview.status-partial, .profile-card.status-partial { --goal-color: var(--vscode-editorWarning-foreground, #d29922); }
+		.profile-overview.status-observed, .profile-card.status-observed { --goal-color: var(--vscode-charts-blue, #58a6ff); }
+		.profile-overview.status-unchanged, .profile-card.status-unchanged { --goal-color: var(--vscode-charts-blue, #58a6ff); }
+		.profile-overview.status-not-comparable, .profile-card.status-not-comparable { --goal-color: var(--vscode-descriptionForeground); }
+		.goal-summary { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 20px; }
+		.goal-icon { display: grid; flex: 0 0 48px; width: 48px; height: 48px; place-items: center; border: 2px solid var(--goal-color); border-radius: 50%; color: var(--goal-color); font-size: 28px; font-weight: 700; }
+		.eyebrow { display: block; margin-bottom: 4px; color: var(--goal-color); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+		.goal-summary h2 { margin-bottom: 5px; }
+		.goal-summary p { margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.5; }
+		.profile-summary-grid { display: grid; gap: 12px; }
+		.profile-card { --goal-color: var(--vscode-descriptionForeground); padding: 16px; border: 1px solid var(--vscode-widget-border); border-left: 4px solid var(--goal-color); border-radius: 8px; background: var(--vscode-editor-background); }
+		.profile-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+		.profile-card h3 { margin: 0 0 3px; font-size: 16px; }
+		.profile-direction { margin: 0; color: var(--vscode-descriptionForeground); font-size: 12px; }
+		.status-pill { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--goal-color); border-radius: 999px; color: var(--goal-color); font-size: 11px; font-weight: 700; }
+		.outcome-track { display: flex; width: 100%; height: 9px; margin: 15px 0 8px; overflow: hidden; border-radius: 999px; background: var(--vscode-widget-border); }
+		.outcome-track span { min-width: 2px; }
+		.track-aligned, .legend-aligned { background: var(--vscode-testing-iconPassed, #2ea043); }
+		.track-unchanged, .legend-unchanged { background: var(--vscode-descriptionForeground); }
+		.track-opposed, .legend-opposed { background: var(--vscode-testing-iconFailed, #f85149); }
+		.track-neutral { background: var(--vscode-descriptionForeground); opacity: .5; }
+		.outcome-legend, .track-key { display: flex; flex-wrap: wrap; gap: 8px 14px; color: var(--vscode-descriptionForeground); font-size: 11px; }
+		.outcome-legend i, .track-key i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; }
+		.profile-reason { margin: 12px 0 0; line-height: 1.45; }
+		.track-key { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--vscode-widget-border); }
+		@media (max-width: 560px) { .profile-card-heading { display: block; } .status-pill { display: inline-block; margin-top: 10px; } }
 	</style>
 </head>
 <body>
 	<main>
 		<h1>Assessment history comparison</h1>
 		<p class="context"><span class="path">${escapeHtml(url)}</span><br>${dimensions ? `${dimensions.width} × ${dimensions.height} px · only completed runs with identical screenshot dimensions are compared` : 'Screenshot dimensions unavailable'}${runContext}</p>
-		${m1Section}
-		${m2Section}
-		${m3Section}
-		${m4Section}
-		${m4UnavailableSection}
-		${m5Section}
-		${m6Section}
-		${m7Section}
-		${m8Section}
-		${m9Section}
-		${m10Section}
-		${m11Section}
-		${m12Section}
-		${m13Section}
-		${m14Section}
+		${profileOverview}
+		${requestedMetricSections}
 	</main>
 </body>
 </html>`;
@@ -2408,12 +2795,7 @@ async function chooseHistoryForCurrentRun(
 		try { return await fetchAssessmentHistory(wuiId); } catch { return undefined; }
 	}
 	try {
-		const history = await fetchAssessmentHistory(wuiId, comparison.baselineRunId);
-		if (Object.keys(history.metrics).length === 0) {
-			void vscode.window.showInformationMessage('The selected assessment is not compatible or has no metrics in common with the current run.');
-			return undefined;
-		}
-		return history;
+		return await fetchAssessmentHistory(wuiId, comparison.baselineRunId);
 	} catch (error: any) {
 		void vscode.window.showErrorMessage(`Could not load the selected assessment: ${error?.message ?? error}`);
 		return undefined;
@@ -2431,6 +2813,8 @@ async function compareAssessmentRuns(
 			comparison.currentResults,
 			comparison.history,
 			comparison.current.assessedTarget ?? projectConfig.name,
+			[],
+			comparison.current.assessment,
 		);
 		if (!shown) {
 			void vscode.window.showInformationMessage('The selected assessments do not contain any comparable metrics.');
@@ -2445,6 +2829,7 @@ export function activate(context: vscode.ExtensionContext) {
 		request: AssessmentRunRequest,
 		shareDeployment: boolean,
 		useLlmExplanation: boolean,
+		shareSourceCode: boolean,
 	): Promise<void> => {
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 		let projectConfig: ProjectConfig;
@@ -2454,12 +2839,10 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.window.showErrorMessage(`Could not load the UIQLab project configuration: ${err?.message ?? err}`);
 			return;
 		}
-		if (projectConfig.assessment) {
-			request = { ...request, assessments: projectConfig.assessment.metrics };
-		}
-		const assessmentSelection = projectConfig.assessment?.mode === 'profiles'
-			? { mode: 'profiles' as const, profiles: projectConfig.assessment.profiles }
-			: { mode: 'custom' as const };
+		const assessmentSelection = request.assessment
+			?? (projectConfig.assessment?.mode === 'profiles'
+				? { mode: 'profiles' as const, profiles: projectConfig.assessment.profiles }
+				: { mode: 'custom' as const });
 
 		void vscode.window.showInformationMessage(formatAssessmentRunSummary(request));
 
@@ -2511,17 +2894,27 @@ export function activate(context: vscode.ExtensionContext) {
 							}
 							let history: AssessmentHistory | undefined;
 							let explanation: string | null | undefined;
+							let profileFeedback: ProfileLlmFeedback | undefined;
+							let customFeedback: CustomMetricLlmFeedback | undefined;
 							let explanationError: string | undefined;
 							history = await chooseHistoryForCurrentRun(wui_id, request.comparison);
 							if (useLlmExplanation) {
-								try { explanation = await fetchAssessmentExplanation(results, history); }
+								try {
+									const explanationContext = await buildExplanationContext(
+										assessmentSelection, results, history, deploymentUrl, workspaceRoot, shareSourceCode,
+									);
+									const response = await fetchAssessmentExplanation(results, history, explanationContext);
+									explanation = response.explanation;
+									profileFeedback = response.profileFeedback;
+									customFeedback = response.customFeedback;
+								}
 								catch (error: any) { explanationError = error?.message; }
 							} else {
 								explanation = undefined;
 							}
-							createResultsWebview(panel, results, deploymentUrl, true, explanation, explanationError);
+							createResultsWebview(panel, results, deploymentUrl, true, explanation, explanationError, profileFeedback, customFeedback);
 							if (history) {
-								await showHistoryComparison(results, history, deploymentUrl, toMetricIds(request.assessments));
+								await showHistoryComparison(results, history, deploymentUrl, toMetricIds(request.assessments), request.assessment);
 							}
 						}
 
@@ -2601,16 +2994,26 @@ export function activate(context: vscode.ExtensionContext) {
 							history = await chooseHistoryForCurrentRun(wui_id, request.comparison);
 						}
 						let explanation: string | null | undefined;
+						let profileFeedback: ProfileLlmFeedback | undefined;
+						let customFeedback: CustomMetricLlmFeedback | undefined;
 						let explanationError: string | undefined;
 						if (useLlmExplanation) {
-							try { explanation = await fetchAssessmentExplanation(resultData, history); }
+							try {
+								const explanationContext = await buildExplanationContext(
+									assessmentSelection, resultData, history, localUrl, workspaceRoot, shareSourceCode,
+								);
+								const response = await fetchAssessmentExplanation(resultData, history, explanationContext);
+								explanation = response.explanation;
+								profileFeedback = response.profileFeedback;
+								customFeedback = response.customFeedback;
+							}
 							catch (error: any) { explanationError = error?.message; }
 						} else {
 							explanation = undefined;
 						}
-						createResultsWebview(panel, resultData, localUrl, true, explanation, explanationError);
+						createResultsWebview(panel, resultData, localUrl, true, explanation, explanationError, profileFeedback, customFeedback);
 						if (history) {
-							await showHistoryComparison(resultData, history, localUrl, toMetricIds(request.assessments));
+							await showHistoryComparison(resultData, history, localUrl, toMetricIds(request.assessments), request.assessment);
 						}
 						vscode.window.showInformationMessage('UIQLab assessment complete. Results are ready.');
 					} else {
@@ -2628,6 +3031,20 @@ export function activate(context: vscode.ExtensionContext) {
 		const projectConfig = await getOrCreateProjectConfig(workspaceRoot);
 		return await fetchProjectAssessmentRuns(projectConfig.projectKey);
 	};
+	const loadInitialSelection = async (): Promise<SidebarInitialSelection | undefined> => {
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+		const projectConfig = await getOrCreateProjectConfig(workspaceRoot);
+		if (projectConfig.assessment?.mode === 'custom') {
+			return { mode: 'custom', metrics: projectConfig.assessment.metrics };
+		}
+		if (projectConfig.assessment?.mode === 'profiles') {
+			if (projectConfig.assessment.profiles.some((profile) => profile.id === 'general-review')) {
+				return { mode: 'custom', metrics: [...ASSESSMENT_PROFILES['general-review'].metrics] };
+			}
+			return { mode: 'profiles', profiles: projectConfig.assessment.profiles };
+		}
+		return undefined;
+	};
 	const compareSelectedRuns = async (currentRunId: number, baselineRunId: number): Promise<void> => {
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 		const projectConfig = await getOrCreateProjectConfig(workspaceRoot);
@@ -2637,6 +3054,7 @@ export function activate(context: vscode.ExtensionContext) {
 		context,
 		runConfiguredAssessment,
 		loadAssessmentRuns,
+		loadInitialSelection,
 		compareSelectedRuns,
 	);
 	context.subscriptions.push(

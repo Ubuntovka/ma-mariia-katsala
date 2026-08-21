@@ -2,8 +2,13 @@
 
 ## Purpose
 
-The LLM integration turns raw Web UI Assessment metric results into a short,
-plain-language explanation for people who do not know the UIQLab metrics.
+The LLM integration turns raw Web UI Assessment metric results into a concise,
+structured explanation. Custom metric assessments use professional
+computer science and human-computer interaction terminology and separate
+measured evidence, technical interpretation, and practical implementation work.
+For profile assessments, the integration explains the deterministic profile
+outcome and proposes practical code improvements that support the directions
+selected by the developer.
 
 It explains:
 
@@ -27,7 +32,8 @@ VS Code webview
 VS Code extension
       |
       | POST /eval/explanation
-      | current results + available history
+      | current results + available history + profile outcome
+      | optionally: bounded frontend source selected by the extension
       v
 Orchestrator (FastAPI)
       |
@@ -36,6 +42,11 @@ Orchestrator (FastAPI)
       v
 University/OpenAI-compatible LLM provider
 ```
+
+The LLM cannot browse or search the workspace itself. When source sharing is
+permitted, the extension explicitly discovers and reads a bounded set of
+relevant frontend files and includes their contents in this request. It does
+not send the captured/rendered page HTML as profile-suggestion context.
 
 The provider URL and API key exist only in the root `.env` file and the
 orchestrator container environment. They are not compiled into the extension,
@@ -100,18 +111,23 @@ sent directly to `/v1` and the university web server returned HTTP 403.
    are available.
 2. It requests matching assessment history from
    `GET /eval/result/{result_id}/history`.
-3. It calls `fetchAssessmentExplanation()` with the current metric results and
-   any returned history.
-4. `fetchAssessmentExplanation()` sends the data to
+3. For a profile run, it calculates the same deterministic profile outcome
+   shown in the history dashboard. If source sharing was enabled, it also
+   selects relevant frontend source files from the workspace.
+4. It calls `fetchAssessmentExplanation()` with the current metric results,
+   returned history, assessment selection, and profile context.
+5. `fetchAssessmentExplanation()` sends the data to
    `POST /eval/explanation` on the orchestrator.
-5. The orchestrator validates that LLM configuration and current results exist.
-6. It reduces and sanitizes the assessment payload, adds metric definitions,
+6. The orchestrator validates that LLM configuration and current results exist.
+7. It reduces and sanitizes the assessment payload, adds metric definitions,
    and builds system and user messages.
-7. It calls the provider using bearer authentication and the configured model.
-8. It extracts `choices[0].message.content` from the OpenAI-compatible response
-   and returns `{ "explanation": "..." }` to the extension.
-9. The webview escapes the returned text and displays it above the raw metric
-   results.
+8. It calls the provider using bearer authentication and the configured model.
+9. Custom runs validate structured JSON containing a summary and technical
+   findings. Profile runs validate structured JSON containing a summary, change
+   observations, and suggestions.
+10. The webview escapes every returned field. It displays custom analysis as
+    evidence, interpretation, and practical-action cards, and profile guidance as
+    status, change, and suggestion cards above the raw metric results.
 
 The extension sidebar includes a **Use LLM explanation** toggle. When enabled,
 both deployment-URL and local-URL assessment flows request an explanation. When
@@ -120,6 +136,14 @@ shows the raw metric results without an explanation block. The preference is
 stored per workspace and defaults to enabled to preserve the existing behavior.
 History is included only when the history endpoint finds a comparable previous
 run. Screenshot-based comparisons require matching screenshot dimensions.
+
+Profile mode additionally shows **Allow LLM to use source code (Demo)**. This
+experimental feature is an independent permission, is off by default, and is
+disabled outside profile mode or when LLM explanations are disabled. Turning it
+on permits selected source files to leave the developer's machine and reach the
+configured LLM provider. The files are used to produce more precise,
+project-specific suggestions. Profile guidance still works with metric/history
+data when it is off; suggestions then use metrics only.
 
 ## Orchestrator API contract
 
@@ -145,17 +169,54 @@ Content-Type: application/json
         "createdAt": "2026-01-01T12:00:00Z"
       }
     }
-  }
+  },
+  "assessment": {
+    "mode": "profiles",
+    "profiles": [{ "id": "visual-complexity", "direction": "decrease" }]
+  },
+  "profileAssessment": {
+    "status": "achieved",
+    "title": "Profile goal achieved",
+    "description": "Every evaluated profile moved in its chosen direction.",
+    "outcomes": []
+  },
+  "target": "http://localhost:3000/dashboard",
+  "sourceContext": [
+    { "path": "src/pages/dashboard.tsx", "content": "export function Dashboard() { ... }" }
+  ]
 }
 ```
+
+`assessment`, `profileAssessment`, `target`, and `sourceContext` are optional.
+They are supplied for profile guidance; custom metric calls remain compatible
+with the original `currentResults` and `history` request.
 
 ### Successful response
 
 ```json
 {
-  "explanation": "The page contains more detected edges than in the previous run..."
+  "explanation": "Visual complexity moved in the selected direction.",
+  "profileFeedback": {
+    "goalStatus": "achieved",
+    "goalTitle": "Profile goal achieved",
+    "summary": "Visual complexity moved in the selected direction.",
+    "changes": ["The comparable complexity metrics decreased."],
+    "suggestions": [{
+      "title": "Preserve the simpler hierarchy",
+      "action": "Keep secondary elements visually subordinate and retest after changes.",
+      "rationale": "This supports the selected decrease direction.",
+      "files": ["src/pages/dashboard.tsx"]
+    }],
+    "sourceContextUsed": true,
+    "sourceFiles": ["src/pages/dashboard.tsx"]
+  }
 }
 ```
+
+Custom metric assessments return `explanation` for compatibility and a
+`customFeedback` object containing `summary`, `analysisMode`,
+`materialChangeCount`, and up to six validated `findings`. Each finding contains
+`title`, `metricIds`, `observation`, `interpretation`, and `recommendation`.
 
 ### Important response codes
 
@@ -173,13 +234,30 @@ from client-facing errors.
 
 `build_explanation_messages()` creates two messages:
 
-- A system message tells the model to write for a non-technical reader, cover
-  every preselected comparison finding, combine overlaps into conclusions,
-  avoid repeating the displayed comparison values, and provide conditional,
-  goal-dependent improvement suggestions.
+- For custom metrics, a system message requires precise professional
+  computer-science and HCI language without slang or colloquialisms. It tells
+  the model to cover every preselected comparison finding, combine overlaps,
+  distinguish observations from interpretations, and provide concrete,
+  reversible interface or implementation changes. Recommendations cannot use
+  further analysis, auditing, monitoring, or research as their primary action;
+  measurement may only verify a proposed change.
 - A user message contains metric definitions, current results, and available
   previous results as JSON data. It also contains a deterministic comparison
   selection produced before the model is called.
+
+For profile mode, the prompt treats the deterministic profile outcome as
+authoritative and asks for compact JSON rather than Markdown. The LLM may
+explain that outcome but cannot redefine whether the goal was achieved. It must
+relate suggestions to the chosen profile directions. When source is supplied,
+it may cite only actual supplied paths; the orchestrator removes invented paths
+from the response. Source contents and assessment values are explicitly marked
+as untrusted data rather than instructions.
+
+Source-free profile requests omit raw result artifacts and use the deterministic
+comparison values/deltas instead. Their response budget is 900 tokens, which is
+enough for the short structured summary while reducing provider latency. Custom
+metric explanations use a 1,800-token response budget for up to six structured
+finding cards.
 
 `METRIC_EXPLANATIONS` provides short domain descriptions for metrics M1–M14.
 This gives the model enough context to explain values such as edge density,
@@ -212,7 +290,20 @@ basic limits:
 - strings are limited to 1,000 characters;
 - lists and dictionaries are limited to 50 entries at each level;
 - content nested deeper than six levels is omitted;
-- the final serialized assessment data is limited to 30,000 characters.
+- custom-mode serialized assessment data is limited to 30,000 characters;
+- profile-mode data has a 140,000-character ceiling to accommodate the
+  separately bounded opt-in source context.
+
+Opt-in source context has separate hard limits:
+
+- frontend source types only: HTML, CSS/preprocessor files, JavaScript,
+  TypeScript, JSX/TSX, Vue, and Svelte;
+- generated output, dependency directories, source maps, and minified
+  JavaScript are excluded;
+- no more than 10 files, 24 KiB per file, and 100 KiB total;
+- the active editor and files matching the assessed URL route are prioritized;
+- the orchestrator reapplies the file and byte limits before calling the
+  provider.
 
 The response is limited to 1,600 tokens in the provider request so all material
 findings can be covered without forcing repetitive detail. The integration
@@ -221,12 +312,16 @@ explanation is requested for every completed assessment.
 
 ## Webview behavior
 
-The results panel has three explanation states:
+The results panel has four explanation states:
 
 1. While assessment metrics are still arriving, no explanation block is shown.
-2. After a successful LLM call, a **Plain-language explanation** section is
-   rendered above the raw values.
-3. If the LLM call fails, the panel shows the safe backend error and continues
+2. After a successful custom-metric LLM call, a **Plain-language explanation**
+   section is rendered above the raw values.
+3. After a successful profile LLM call, an **AI profile guidance** panel shows
+   the authoritative goal status, short summary, change observations, numbered
+   suggestion cards, relevant file chips, and whether the model used metrics
+   only or metrics plus source files.
+4. If the LLM call fails, the panel shows the safe backend error and continues
    displaying all raw assessment results.
 
 LLM output is HTML-escaped before rendering. Paragraph breaks are preserved,
@@ -240,6 +335,8 @@ but model-generated HTML cannot execute in the webview.
 | `apps/orchestrator/test_main.py` | Unit tests for URL normalization, prompt contents, URL omission, and response extraction. |
 | `apps/uiqlab-assessment/src/runAssessment.ts` | Client function that calls the orchestrator explanation endpoint and enforces the extension timeout. |
 | `apps/uiqlab-assessment/src/extension.ts` | Calls the explanation function after assessment completion and renders success or failure states. |
+| `apps/uiqlab-assessment/src/sourceContext.ts` | Selects and bounds opt-in frontend source context for profile suggestions. |
+| `apps/uiqlab-assessment/src/assessmentSidebar.ts` | Stores and enforces the per-workspace source-sharing permission toggle. |
 | `docker-compose.yml` | Passes LLM variables into the orchestrator container. |
 | `.env.example` | Documents non-secret example configuration. |
 | `.gitignore` | Keeps the real `.env` private while allowing `.env.example` to be committed. |

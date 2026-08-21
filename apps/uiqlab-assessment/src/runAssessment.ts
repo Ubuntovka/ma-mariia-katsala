@@ -1,4 +1,5 @@
 import { getMetricDefinition } from './metricCatalog';
+import type { AssessmentProfileSelection } from './assessmentProfiles';
 
 export const ASSESSMENTS = [
 	'PNG file size',
@@ -37,6 +38,7 @@ export interface LocalUrlDataSource {
 
 export interface AssessmentRunRequest {
 	assessments: AssessmentName[];
+	assessment?: AssessmentSelection;
 	dataSource: DeploymentUrlDataSource | LocalUrlDataSource;
 	comparison?:
 		| { kind: 'latest' }
@@ -54,7 +56,7 @@ export interface GitInfo {
 	mergeRequestId?: string;
 }
 
-export type AssessmentSelection = { mode: 'custom' } | { mode: 'profiles'; profiles: Array<{ id: string; direction: string }> };
+export type AssessmentSelection = { mode: 'custom' } | { mode: 'profiles'; profiles: AssessmentProfileSelection[] };
 
 export interface HistoricalMetricResult {
 	results: any;
@@ -88,6 +90,47 @@ export interface AssessmentRunComparison {
 
 export interface AssessmentExplanation {
 	explanation: string;
+	profileFeedback?: ProfileLlmFeedback;
+	customFeedback?: CustomMetricLlmFeedback;
+}
+
+export interface CustomMetricLlmFinding {
+	title: string;
+	metricIds: string[];
+	observation: string;
+	interpretation: string;
+	recommendation: string;
+}
+
+export interface CustomMetricLlmFeedback {
+	summary: string;
+	findings: CustomMetricLlmFinding[];
+	analysisMode: 'comparison' | 'current-state';
+	materialChangeCount: number;
+}
+
+export interface ProfileLlmSuggestion {
+	title: string;
+	action: string;
+	rationale: string;
+	files: string[];
+}
+
+export interface ProfileLlmFeedback {
+	goalStatus: string;
+	goalTitle: string;
+	summary: string;
+	changes: string[];
+	suggestions: ProfileLlmSuggestion[];
+	sourceContextUsed: boolean;
+	sourceFiles: string[];
+}
+
+export interface AssessmentExplanationContext {
+	assessment?: AssessmentSelection;
+	profileAssessment?: unknown;
+	target?: string;
+	sourceContext?: Array<{ path: string; content: string }>;
 }
 
 export interface QuickPickUi {
@@ -424,17 +467,18 @@ export async function fetchAssessmentRunComparison(
 
 export async function fetchAssessmentExplanation(
 	currentResults: any[],
-	history?: AssessmentHistory
-): Promise<string> {
+	history?: AssessmentHistory,
+	context: AssessmentExplanationContext = {},
+): Promise<AssessmentExplanation> {
 	const response = await httpPostJson<AssessmentExplanation>(
 		`${ORCHESTRATOR_BASE}/eval/explanation`,
-		{ currentResults, history: history ?? { metrics: {} } },
+		{ currentResults, history: history ?? { metrics: {} }, ...context },
 		210_000
 	);
 	if (typeof response.explanation !== 'string' || !response.explanation.trim()) {
 		throw new Error('The explanation service returned an empty response.');
 	}
-	return response.explanation.trim();
+	return { ...response, explanation: response.explanation.trim() };
 }
 
 /**
@@ -568,8 +612,11 @@ export function formatAssessmentRunSummary(request: AssessmentRunRequest): strin
 	const dataSourceText = request.dataSource.kind === 'deployment-url'
 		? `Deployment URL: ${request.dataSource.deploymentUrl}`
 		: `Local URL: ${request.dataSource.localUrl}`;
+	const selectionText = request.assessment?.mode === 'profiles'
+		? `Selected profiles: ${request.assessment.profiles.map((profile) => `${profile.id} (${profile.direction})`).join(', ')}`
+		: `Selected assessments: ${request.assessments.join(', ')}`;
 
-	return `Selected assessments: ${request.assessments.join(', ')}. ${dataSourceText}.`;
+	return `${selectionText}. ${dataSourceText}.`;
 }
 
 function isValidUrl(value: string): boolean {

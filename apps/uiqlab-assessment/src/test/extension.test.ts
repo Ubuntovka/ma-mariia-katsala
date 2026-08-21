@@ -27,7 +27,14 @@ import {
 	calculateM14Comparison,
 	normalizeUiedElements,
 	getColorfulnessInterpretation,
+	generateResultsHtml,
 	renderExplanationHtml,
+	renderCustomMetricLlmFeedback,
+	renderProfileLlmFeedback,
+	renderProfileAssessmentOverview,
+	renderRequestedHistoryMetricSections,
+	renderUnavailableHistoryMetricSection,
+	requestedHistoryMetricIds,
 } from '../extension';
 import { getPngDimensions } from '../playwrightCapture';
 import { PNG } from 'pngjs';
@@ -58,6 +65,126 @@ suite('Run Assessment flow', () => {
 	test('escapes HTML in LLM explanations before adding safe formatting', () => {
 		const html = renderExplanationHtml('**Safe** <script>alert("x")</script>');
 		assert.strictEqual(html, '<p><strong>Safe</strong> &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;</p>');
+	});
+
+	test('renders structured profile LLM guidance as visual cards and escapes model content', () => {
+		const html = renderProfileLlmFeedback({
+			goalStatus: 'partial',
+			goalTitle: 'Profile goals partially achieved',
+			summary: 'Complexity improved, but <script>content</script> density did not.',
+			changes: ['Edge density decreased.'],
+			suggestions: [{
+				title: 'Simplify the content block',
+				action: 'Reduce secondary copy and retest the profile.',
+				rationale: 'This may move content density toward the selected direction.',
+				files: ['src/pages/home.tsx'],
+			}],
+			sourceContextUsed: true,
+			sourceFiles: ['src/pages/home.tsx'],
+		});
+
+		assert.match(html, /profile-ai-feedback status-partial/);
+		assert.match(html, /Suggested next steps/);
+		assert.match(html, /Metrics and 1 source file/);
+		assert.match(html, /src\/pages\/home\.tsx/);
+		assert.doesNotMatch(html, /<script>/);
+		assert.match(html, /&lt;script&gt;content&lt;\/script&gt;/);
+	});
+
+	test('renders structured custom-metric analysis as evidence-to-action cards', () => {
+		const html = renderCustomMetricLlmFeedback({
+			summary: 'Two independent clutter indicators increased relative to the baseline.',
+			analysisMode: 'comparison',
+			materialChangeCount: 2,
+			findings: [{
+				title: 'Corroborating visual-density measurements',
+				metricIds: ['M9', 'M10'],
+				observation: 'Edge density and feature congestion increased.',
+				interpretation: 'The measurements indicate increased visual information density.',
+				recommendation: 'Isolate one layout change and repeat both measurements. <script>alert(1)</script>',
+			}],
+		});
+
+		assert.match(html, /custom-ai-feedback/);
+		assert.match(html, /Baseline comparison · 2 material changes/);
+		assert.match(html, /Measured evidence/);
+		assert.match(html, /Technical interpretation/);
+		assert.match(html, /Practical next step/);
+		assert.match(html, /Practical action/);
+		assert.match(html, /M9/);
+		assert.doesNotMatch(html, /<script>/);
+		assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+	});
+
+	test('shows an LLM request error instead of hiding the explanation section', () => {
+		const html = generateResultsHtml(
+			[{ metric_id: 'm9_edge_density', results: [0.2] }],
+			'http://localhost:3000',
+			true,
+			undefined,
+			'The LLM provider did not respond in time.',
+		);
+
+		assert.match(html, /AI explanation unavailable/);
+		assert.match(html, /The LLM provider did not respond in time/);
+	});
+
+	test('renders profile goal feedback as a visual status dashboard', () => {
+		const html = renderProfileAssessmentOverview({
+			status: 'achieved',
+			title: 'Profile goal achieved',
+			description: 'The goal was achieved.',
+			outcomes: [{
+				id: 'visual-complexity',
+				direction: 'decrease',
+				outcome: 'aligned',
+				goalStatus: 'achieved',
+				reason: 'All meaningful changes follow the chosen direction.',
+				comparableMetrics: ['m9', 'm10'],
+				meaningfulMetrics: ['m9', 'm10'],
+				alignedMetrics: ['m9', 'm10'],
+				opposedMetrics: [],
+			}],
+		});
+		assert.match(html, /profile-overview status-achieved/);
+		assert.match(html, /Profile goal achieved/);
+		assert.match(html, /outcome-track/);
+		assert.match(html, /2 aligned/);
+		assert.match(html, /Chosen direction: <strong>decrease<\/strong>/);
+	});
+
+	test('keeps every requested metric in history comparison when only some have baselines', () => {
+		const requested = requestedHistoryMetricIds(
+			Array.from({ length: 14 }, (_, index) => `m${index + 1}`),
+			[],
+		);
+		const html = renderRequestedHistoryMetricSections(
+			requested,
+			{
+				m9: '<section class="metric-section">Comparable M9</section>',
+				m10: '<section class="metric-section">Comparable M10</section>',
+			},
+			['m9_edge_density', 'm10_feature_congestion'],
+		);
+		assert.strictEqual(requested.length, 14);
+		assert.strictEqual((html.match(/<section class="metric-section/g) ?? []).length, 14);
+		assert.match(html, /M1 · PNG file size/);
+		assert.match(html, /M14 · NIMA \(Neural IMage Assessment\)/);
+		assert.match(html, /Comparable M9/);
+		assert.match(html, /No baseline available/);
+	});
+
+	test('does not duplicate a current value in a no-baseline placeholder', () => {
+		const html = renderUnavailableHistoryMetricSection('m8', false);
+		assert.match(html, /M8 · Word count/);
+		assert.match(html, /No baseline available/);
+		assert.doesNotMatch(html, /Current value|current value|<span class="value">/);
+	});
+
+	test('distinguishes an unusable baseline from a missing baseline', () => {
+		const html = renderUnavailableHistoryMetricSection('m6', true);
+		assert.match(html, /Comparison unavailable/);
+		assert.doesNotMatch(html, /No baseline available/);
 	});
 
 	test('uses catalog names for backend metrics so sidebar definitions resolve by ID', () => {
@@ -123,6 +250,26 @@ suite('Run Assessment flow', () => {
 				},
 			}),
 			'Selected assessments: NIMA, accessibility. Deployment URL: https://example.com.',
+		);
+	});
+
+	test('formats selected profiles and their directions', () => {
+		assert.strictEqual(
+			formatAssessmentRunSummary({
+				assessments: ['m3', 'm4', 'm13'],
+				assessment: {
+					mode: 'profiles',
+					profiles: [
+						{ id: 'colour-expression', direction: 'more-vivid' },
+						{ id: 'accessibility', direction: 'reduce-issues' },
+					],
+				},
+				dataSource: {
+					kind: 'local-url',
+					localUrl: 'http://localhost:3000',
+				},
+			}),
+			'Selected profiles: colour-expression (more-vivid), accessibility (reduce-issues). Local URL: http://localhost:3000.',
 		);
 	});
 
