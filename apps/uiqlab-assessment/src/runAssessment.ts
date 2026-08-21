@@ -54,6 +54,8 @@ export interface GitInfo {
 	mergeRequestId?: string;
 }
 
+export type AssessmentSelection = { mode: 'custom' } | { mode: 'profiles'; profiles: Array<{ id: string; direction: string }> };
+
 export interface HistoricalMetricResult {
 	results: any;
 	createdAt: string;
@@ -74,6 +76,7 @@ export interface AssessmentRunSummary {
 	branch?: string;
 	assessedTarget?: string;
 	screenshotDimensions?: { width: number; height: number };
+	assessment?: AssessmentSelection;
 }
 
 export interface AssessmentRunComparison {
@@ -271,14 +274,16 @@ export async function fetchAvailableAssessments(): Promise<AssessmentName[]> {
 export async function submitUrlForEvaluation(
 	deploymentUrl: string,
 	selectedAssessments: AssessmentName[],
-	gitInfo: GitInfo
+	gitInfo: GitInfo,
+	assessment?: AssessmentSelection
 ): Promise<any> {
 	const metrics = toMetricIds(selectedAssessments);
 
 	const payload = {
 		url: deploymentUrl,
 		metrics,
-		...gitInfo
+		...gitInfo,
+		...(assessment ? { assessment } : {})
 	};
 	return await httpPostJson(`${ORCHESTRATOR_BASE}/eval/evaluate_url_input_test`, payload);
 }
@@ -291,7 +296,8 @@ export async function submitFileForEvaluation(
 	gitInfo: GitInfo,
 	assessedTarget?: string,
 	screenshotDimensions?: { width: number; height: number },
-	htmlContent?: string
+	htmlContent?: string,
+	assessment?: AssessmentSelection
 ): Promise<any> {
 	if (!Buffer.isBuffer(fileData)) {
 		throw new Error('fileData must be a Buffer');
@@ -331,6 +337,7 @@ export async function submitFileForEvaluation(
 		form.append('screenshotWidth', String(screenshotDimensions.width));
 		form.append('screenshotHeight', String(screenshotDimensions.height));
 	}
+	if (assessment) { form.append('assessment', JSON.stringify(assessment)); }
 
 	const parsed = new URL(`${ORCHESTRATOR_BASE}/eval/evaluate_with_artifacts`);
 	const lib = parsed.protocol === 'https:' ? (await import('https')) : (await import('http'));

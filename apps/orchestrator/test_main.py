@@ -1,5 +1,9 @@
 import unittest
 from datetime import datetime, timezone
+from fastapi import HTTPException
+from unittest.mock import AsyncMock, patch
+
+import httpx
 
 from main import (
     assessment_run_summary,
@@ -11,9 +15,12 @@ from main import (
     merge_metric_results,
     metric_result_index,
     normalize_assessed_target,
+    normalize_repo_url,
     resolve_llm_chat_completions_url,
     select_comparison_findings,
     split_file_metrics,
+    get_eval_result,
+    get_eval_result_history,
 )
 
 
@@ -29,6 +36,10 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             'assessedTarget': '/dashboard',
             'screenshotWidth': 1440,
             'screenshotHeight': 900,
+            'assessment': {
+                'mode': 'profiles',
+                'profiles': [{'id': 'visual-complexity', 'direction': 'decrease'}],
+            },
         })
 
         self.assertEqual(summary, {
@@ -39,6 +50,10 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             'branch': 'main',
             'assessedTarget': '/dashboard',
             'screenshotDimensions': {'width': 1440, 'height': 900},
+            'assessment': {
+                'mode': 'profiles',
+                'profiles': [{'id': 'visual-complexity', 'direction': 'decrease'}],
+            },
         })
 
 
@@ -58,6 +73,27 @@ class AssessedTargetTests(unittest.TestCase):
 
     def test_existing_path_discards_query_and_fragment(self):
         self.assertEqual(normalize_assessed_target('/projects/?tab=active#top'), '/projects')
+
+
+class RepositoryUrlTests(unittest.TestCase):
+    def test_https_and_ssh_clone_urls_share_an_identity(self):
+        self.assertEqual(
+            normalize_repo_url('https://gitlab.example/team/project.git'),
+            normalize_repo_url('git@gitlab.example:team/project.git'),
+        )
+
+    def test_clone_credentials_are_not_stored(self):
+        self.assertEqual(
+            normalize_repo_url('https://gitlab-ci-token:secret@gitlab.example/team/project.git'),
+            'gitlab.example/team/project',
+        )
+
+
+class HistorySelectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rejects_run_and_branch_baselines_together(self):
+        with self.assertRaises(HTTPException) as raised:
+            await get_eval_result_history('backend-id', baseline_run_id=2, baseline_branch='main')
+        self.assertEqual(raised.exception.status_code, 400)
 
 
 class MetricResultIndexTests(unittest.TestCase):
@@ -137,6 +173,32 @@ class HistoryBackendResultTests(unittest.IsolatedAsyncioTestCase):
             {'metric_id': 'm1_png_file_size', 'results': [123]},
             {'metric_id': 'm8_word_count', 'results': [17]},
         ])
+
+
+class EvaluationResultTimeoutTests(unittest.IsolatedAsyncioTestCase):
+    async def test_backend_read_timeout_returns_pending_response(self):
+        connection = AsyncMock()
+        connection.fetchrow.return_value = {
+            'id': 1,
+            'metricsCount': 14,
+            'status': 'PENDING',
+            'backend_result_ids': ['backend-id'],
+        }
+
+        async def timed_out_fetch(client, backend_ids):
+            self.assertEqual(client.timeout.read, 321.0)
+            self.assertEqual(backend_ids, ['backend-id'])
+            raise httpx.ReadTimeout('UIQLab is still processing')
+
+        with patch('main.UIQLAB_RESULT_READ_TIMEOUT_SECONDS', 321.0), patch(
+            'main.asyncpg.connect', AsyncMock(return_value=connection)
+        ), patch(
+            'main.fetch_merged_backend_results', side_effect=timed_out_fetch
+        ):
+            result = await get_eval_result('backend-id')
+
+        self.assertEqual(result, [])
+        connection.close.assert_awaited_once()
 
 
 class LlmExplanationTests(unittest.TestCase):

@@ -1003,7 +1003,7 @@ function readM12Scalar(value: unknown): number | undefined {
 	]));
 	return finiteNumber(
 		fields.get('shannoninformationentropy') ?? fields.get('shannonentropy')
-			?? fields.get('entropy') ?? fields.get('score') ?? fields.get('value')
+		?? fields.get('entropy') ?? fields.get('score') ?? fields.get('value')
 	);
 }
 
@@ -1190,7 +1190,7 @@ function readM14Values(value: unknown): { mean: number; standardDeviation: numbe
 	);
 	const standardDeviation = finiteNumber(
 		fields.get('standarddeviation') ?? fields.get('stddeviation') ?? fields.get('stddev')
-			?? fields.get('stdev') ?? fields.get('std') ?? fields.get('sd')
+		?? fields.get('stdev') ?? fields.get('std') ?? fields.get('sd')
 	);
 	return mean === undefined || standardDeviation === undefined
 		? undefined
@@ -1231,7 +1231,7 @@ function readM8WordCount(value: unknown): number | undefined {
 	]));
 	return readM8WordCount(
 		fields.get('wordcount') ?? fields.get('visiblewordcount') ?? fields.get('words')
-			?? fields.get('count') ?? fields.get('value')
+		?? fields.get('count') ?? fields.get('value')
 	);
 }
 
@@ -1266,10 +1266,10 @@ function generateResultsHtml(
 			return true;
 		}
 		// If it's empty, check if there's any other non-empty result for the same metric_id
-		const hasNonEmpty = results.some((other, j) => 
-			i !== j && 
-			other.metric_id === r.metric_id && 
-			Array.isArray(other.results) && 
+		const hasNonEmpty = results.some((other, j) =>
+			i !== j &&
+			other.metric_id === r.metric_id &&
+			Array.isArray(other.results) &&
 			other.results.length > 0
 		);
 		return !hasNonEmpty;
@@ -1285,16 +1285,16 @@ function generateResultsHtml(
 			<h3>${metricName}</h3>
 			<div class="result-values">
 				${resultValues.map((val: any, i: number) => {
-					let displayVal = '';
-					if (typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://')) && (val.toLowerCase().endsWith('.png') || val.toLowerCase().endsWith('.jpg') || val.toLowerCase().endsWith('.jpeg'))) {
-						displayVal = `<img src="${val}" style="max-width: 100%; border-radius: 4px; margin-top: 5px; border: 1px solid #ddd;" />`;
-					} else if (typeof val === 'object' && val !== null) {
-						displayVal = `<pre style="white-space: pre-wrap; word-break: break-all; background: #eee; padding: 10px; border-radius: 4px; font-size: 12px;">${JSON.stringify(val, null, 2)}</pre>`;
-					} else {
-						displayVal = val;
-					}
-					return `<div class="result-item"><strong>Result ${i + 1}:</strong> ${displayVal}</div>`;
-				}).join('')}
+			let displayVal = '';
+			if (typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://')) && (val.toLowerCase().endsWith('.png') || val.toLowerCase().endsWith('.jpg') || val.toLowerCase().endsWith('.jpeg'))) {
+				displayVal = `<img src="${val}" style="max-width: 100%; border-radius: 4px; margin-top: 5px; border: 1px solid #ddd;" />`;
+			} else if (typeof val === 'object' && val !== null) {
+				displayVal = `<pre style="white-space: pre-wrap; word-break: break-all; background: #eee; padding: 10px; border-radius: 4px; font-size: 12px;">${JSON.stringify(val, null, 2)}</pre>`;
+			} else {
+				displayVal = val;
+			}
+			return `<div class="result-item"><strong>Result ${i + 1}:</strong> ${displayVal}</div>`;
+		}).join('')}
 			</div>
 		</div>
 		`;
@@ -2094,7 +2094,7 @@ async function showHistoryComparison(
 
 	const m6HasChanges = m6Match
 		? m6Match.comparison.added + m6Match.comparison.removed
-			+ m6Match.comparison.moved + m6Match.comparison.resized > 0
+		+ m6Match.comparison.moved + m6Match.comparison.resized > 0
 		: false;
 	const m6Summary = m6Match
 		? m6HasChanges
@@ -2454,6 +2454,12 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.window.showErrorMessage(`Could not load the UIQLab project configuration: ${err?.message ?? err}`);
 			return;
 		}
+		if (projectConfig.assessment) {
+			request = { ...request, assessments: projectConfig.assessment.metrics };
+		}
+		const assessmentSelection = projectConfig.assessment?.mode === 'profiles'
+			? { mode: 'profiles' as const, profiles: projectConfig.assessment.profiles }
+			: { mode: 'custom' as const };
 
 		void vscode.window.showInformationMessage(formatAssessmentRunSummary(request));
 
@@ -2475,7 +2481,7 @@ export function activate(context: vscode.ExtensionContext) {
 					}, async (progress, token) => {
 						progress.report({ message: 'Step 1 of 3: Submitting the page' });
 						const gitInfo = getGitInfo(workspaceRoot, projectConfig);
-						const resp: any = await submitUrlForEvaluation(deploymentUrl, request.assessments, gitInfo);
+						const resp: any = await submitUrlForEvaluation(deploymentUrl, request.assessments, gitInfo, assessmentSelection);
 						const wui_id = resp?.result_id;
 
 						if (!wui_id) {
@@ -2556,13 +2562,14 @@ export function activate(context: vscode.ExtensionContext) {
 						gitInfo,
 						localUrl,
 						result.screenshotDimensions,
-						result.html
+						result.html,
+						assessmentSelection
 					);
 					const wui_id = resp?.result_id;
 					if (!wui_id) {
 						throw new Error('The evaluation service did not return the tracking information needed to retrieve results.');
 					}
-					
+
 					// Poll for result
 					const expectedCount = new Set(toMetricIds(request.assessments)).size;
 					let panel: vscode.WebviewPanel | undefined;

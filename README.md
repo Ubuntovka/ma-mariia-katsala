@@ -4,6 +4,11 @@ See [LLM-Based Assessment Explanations](docs/llm-explanation-integration.md)
 for the implementation architecture, configuration, security model, and
 troubleshooting guide.
 
+See [CI Integration](docs/ci-integration.md) for pipeline triggers,
+merge-request behavior, GitLab and GitHub examples, failure handling, and
+troubleshooting. The [UIQLab CI client](apps/uiqlab-ci/README.md) also contains
+a compact client reference.
+
 This setup allows you to run the Orchestrator application and a PostgreSQL database using Docker Compose.
 
 ## Prerequisites
