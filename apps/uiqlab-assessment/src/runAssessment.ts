@@ -90,6 +90,31 @@ export interface AssessmentRunComparison {
 
 export interface AssessmentExplanation {
 	explanation: string;
+	profileFeedback?: ProfileLlmFeedback;
+}
+
+export interface ProfileLlmSuggestion {
+	title: string;
+	action: string;
+	rationale: string;
+	files: string[];
+}
+
+export interface ProfileLlmFeedback {
+	goalStatus: string;
+	goalTitle: string;
+	summary: string;
+	changes: string[];
+	suggestions: ProfileLlmSuggestion[];
+	sourceContextUsed: boolean;
+	sourceFiles: string[];
+}
+
+export interface AssessmentExplanationContext {
+	assessment?: AssessmentSelection;
+	profileAssessment?: unknown;
+	target?: string;
+	sourceContext?: Array<{ path: string; content: string }>;
 }
 
 export interface QuickPickUi {
@@ -426,17 +451,18 @@ export async function fetchAssessmentRunComparison(
 
 export async function fetchAssessmentExplanation(
 	currentResults: any[],
-	history?: AssessmentHistory
-): Promise<string> {
+	history?: AssessmentHistory,
+	context: AssessmentExplanationContext = {},
+): Promise<AssessmentExplanation> {
 	const response = await httpPostJson<AssessmentExplanation>(
 		`${ORCHESTRATOR_BASE}/eval/explanation`,
-		{ currentResults, history: history ?? { metrics: {} } },
+		{ currentResults, history: history ?? { metrics: {} }, ...context },
 		210_000
 	);
 	if (typeof response.explanation !== 'string' || !response.explanation.trim()) {
 		throw new Error('The explanation service returned an empty response.');
 	}
-	return response.explanation.trim();
+	return { ...response, explanation: response.explanation.trim() };
 }
 
 /**

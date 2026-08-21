@@ -9,8 +9,10 @@ from main import (
     assessment_run_summary,
     backend_result_ids_for_run,
     build_explanation_messages,
+    compact_source_context,
     decode_backend_result_ids,
     extract_llm_explanation,
+    extract_profile_llm_feedback,
     fetch_merged_backend_results,
     merge_metric_results,
     metric_result_index,
@@ -302,6 +304,84 @@ class LlmExplanationTests(unittest.TestCase):
             }),
             'The page became less cluttered.'
         )
+
+    def test_profile_prompt_uses_authoritative_outcome_and_opt_in_source(self):
+        messages = build_explanation_messages(
+            [{'metric_id': 'm9_edge_density', 'results': [0.16]}],
+            {'metrics': {'m9_edge_density': {'results': [0.24]}}},
+            {'mode': 'profiles', 'profiles': [
+                {'id': 'visual-complexity', 'direction': 'decrease'}
+            ]},
+            {
+                'status': 'achieved',
+                'title': 'Profile goal achieved',
+                'outcomes': [{'id': 'visual-complexity', 'goalStatus': 'achieved'}],
+            },
+            'http://localhost:3000/dashboard',
+            [{'path': 'src/pages/dashboard.tsx', 'content': '<main>Dashboard</main>'}],
+        )
+
+        self.assertIn('deterministicProfileOutcome is authoritative', messages[0]['content'])
+        self.assertIn('Return JSON only', messages[0]['content'])
+        self.assertIn('Profile goal achieved', messages[1]['content'])
+        self.assertIn('src/pages/dashboard.tsx', messages[1]['content'])
+        self.assertIn('<main>Dashboard</main>', messages[1]['content'])
+        self.assertIn('untrusted data', messages[0]['content'])
+
+    def test_source_free_profile_prompt_omits_raw_result_artifacts(self):
+        messages = build_explanation_messages(
+            [{'metric_id': 'm10_feature_congestion', 'results': [
+                {'score': 4.2, 'map': 'large-raw-artifact' * 1000}
+            ]}],
+            {'metrics': {'m10_feature_congestion': {'results': [{'score': 5.1}]}}},
+            {'mode': 'profiles', 'profiles': [
+                {'id': 'visual-complexity', 'direction': 'decrease'}
+            ]},
+            {'status': 'achieved', 'title': 'Profile goal achieved', 'outcomes': []},
+        )
+
+        self.assertNotIn('large-raw-artifact', messages[1]['content'])
+        self.assertIn('"sourceFiles": []', messages[1]['content'])
+        self.assertIn('deterministicComparisonSelection', messages[1]['content'])
+
+    def test_compacts_source_context_to_allowed_limits(self):
+        compacted = compact_source_context([
+            {'path': f'src/file-{index}.tsx', 'content': 'x' * (30 * 1024)}
+            for index in range(12)
+        ])
+
+        self.assertLessEqual(len(compacted), 10)
+        self.assertLessEqual(sum(len(item['content'].encode('utf-8')) for item in compacted), 100 * 1024)
+        self.assertTrue(all(len(item['content'].encode('utf-8')) <= 24 * 1024 for item in compacted))
+
+    def test_extracts_and_filters_structured_profile_feedback(self):
+        feedback = extract_profile_llm_feedback({
+            'choices': [{'message': {'content': '''```json
+            {
+              "summary": "The profile goal was achieved.",
+              "changes": ["Edge density decreased."],
+              "suggestions": [{
+                "title": "Keep the hierarchy",
+                "action": "Review the dashboard spacing after future changes.",
+                "rationale": "This helps preserve the selected direction.",
+                "files": ["src/dashboard.tsx", "invented.tsx"]
+              }]
+            }
+            ```'''}}]
+        }, ['src/dashboard.tsx'])
+
+        self.assertEqual(feedback['summary'], 'The profile goal was achieved.')
+        self.assertEqual(feedback['changes'], ['Edge density decreased.'])
+        self.assertEqual(feedback['suggestions'][0]['files'], ['src/dashboard.tsx'])
+
+    def test_accepts_provider_text_before_structured_profile_feedback(self):
+        feedback = extract_profile_llm_feedback({
+            'choices': [{'message': {'content': '''Here is the requested result:
+            {"summary":"Metrics moved toward the goal.","changes":[],"suggestions":[]}
+            '''}}]
+        })
+
+        self.assertEqual(feedback['summary'], 'Metrics moved toward the goal.')
 
 
 if __name__ == '__main__':

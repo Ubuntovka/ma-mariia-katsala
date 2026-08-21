@@ -14,6 +14,8 @@ import {
 	AssessmentRunRequest,
 	AssessmentHistory,
 	AssessmentRunSummary,
+	AssessmentSelection,
+	ProfileLlmFeedback,
 } from './runAssessment';
 import { execSync } from 'child_process';
 import { PNG } from 'pngjs';
@@ -28,6 +30,7 @@ import {
 	type ProfileGoalStatus,
 	type ProfileOutcome,
 } from './profileAssessment';
+import { collectWorkspaceSourceContext } from './sourceContext';
 
 function getGitInfo(workspaceRoot: string, projectConfig: ProjectConfig): GitInfo {
 	let repositoryUrl = '';
@@ -68,10 +71,40 @@ function createResultsWebview(
 	url: string,
 	isComplete: boolean = true,
 	explanation?: string | null,
-	explanationError?: string
+	explanationError?: string,
+	profileFeedback?: ProfileLlmFeedback,
 ): void {
-	const html = generateResultsHtml(results, url, isComplete, explanation, explanationError);
+	const html = generateResultsHtml(results, url, isComplete, explanation, explanationError, profileFeedback);
 	panel.webview.html = html;
+}
+
+async function buildExplanationContext(
+	assessmentSelection: AssessmentSelection,
+	currentResults: any[],
+	history: AssessmentHistory | undefined,
+	target: string,
+	workspaceRoot: string,
+	shareSourceCode: boolean,
+) {
+	const selectedProfiles = normalizeProfileAssessmentSelection(assessmentSelection);
+	if (!selectedProfiles) {
+		return { assessment: assessmentSelection, target };
+	}
+	const profileAssessment = assessProfilesAgainstHistory(
+		selectedProfiles,
+		currentResults,
+		history?.metrics ?? {},
+		Boolean(history?.baselineRun),
+	);
+	const sourceContext = shareSourceCode
+		? await collectWorkspaceSourceContext(workspaceRoot, target)
+		: [];
+	return {
+		assessment: assessmentSelection,
+		profileAssessment,
+		target,
+		...(sourceContext.length > 0 ? { sourceContext } : {}),
+	};
 }
 
 export interface M1SizeComparison {
@@ -1262,12 +1295,68 @@ export function calculateM8Comparison(
 	};
 }
 
-function generateResultsHtml(
+function profileFeedbackStatus(status: string): { className: string; label: string; icon: string } {
+	switch (status) {
+		case 'achieved': return { className: 'achieved', label: 'Goal achieved', icon: '✓' };
+		case 'not-achieved': return { className: 'not-achieved', label: 'Goal not achieved', icon: '×' };
+		case 'partial': return { className: 'partial', label: 'Partially achieved', icon: '◐' };
+		case 'observed': return { className: 'observed', label: 'Change observed', icon: '↕' };
+		case 'unchanged': return { className: 'unchanged', label: 'No meaningful change', icon: '—' };
+		default: return { className: 'not-comparable', label: 'Not comparable', icon: '?' };
+	}
+}
+
+/** Render validated, structured profile guidance without interpreting model output as HTML. */
+export function renderProfileLlmFeedback(feedback: ProfileLlmFeedback): string {
+	const status = profileFeedbackStatus(feedback.goalStatus);
+	const changes = Array.isArray(feedback.changes)
+		? feedback.changes.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 3)
+		: [];
+	const suggestions = Array.isArray(feedback.suggestions)
+		? feedback.suggestions.filter((item) => item && typeof item.title === 'string' && typeof item.action === 'string').slice(0, 4)
+		: [];
+	const sourceFiles = Array.isArray(feedback.sourceFiles)
+		? feedback.sourceFiles.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 10)
+		: [];
+	const sourceLabel = feedback.sourceContextUsed && sourceFiles.length > 0
+		? `Metrics and ${sourceFiles.length} source file${sourceFiles.length === 1 ? '' : 's'}`
+		: 'Metrics only';
+	const changesHtml = changes.length > 0
+		? `<div class="feedback-changes">${changes.map((change) => `<div class="change-chip"><span aria-hidden="true">↳</span><span>${escapeHtml(change)}</span></div>`).join('')}</div>`
+		: '';
+	const suggestionsHtml = suggestions.length > 0
+		? `<div class="suggestion-grid">${suggestions.map((suggestion, index) => {
+			const files = Array.isArray(suggestion.files)
+				? suggestion.files.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 4)
+				: [];
+			return `<article class="suggestion-card">
+				<div class="suggestion-number">${index + 1}</div>
+				<div><h3>${escapeHtml(suggestion.title)}</h3><p class="suggestion-action">${escapeHtml(suggestion.action)}</p>${suggestion.rationale ? `<p class="suggestion-rationale">Why: ${escapeHtml(suggestion.rationale)}</p>` : ''}${files.length > 0 ? `<div class="file-chips">${files.map((file) => `<code>${escapeHtml(file)}</code>`).join('')}</div>` : ''}</div>
+			</article>`;
+		}).join('')}</div>`
+		: '<p class="no-suggestions">No code suggestions were returned for this assessment.</p>';
+
+	return `<section class="profile-ai-feedback status-${status.className}" aria-labelledby="profile-ai-title">
+		<div class="profile-ai-heading">
+			<div class="profile-ai-icon" aria-hidden="true">${status.icon}</div>
+			<div><span class="eyebrow">AI profile guidance</span><h2 id="profile-ai-title">${escapeHtml(feedback.goalTitle || 'Profile assessment')}</h2></div>
+			<span class="profile-ai-status">${status.label}</span>
+		</div>
+		<p class="profile-ai-summary">${escapeHtml(feedback.summary)}</p>
+		${changesHtml}
+		<div class="suggestions-heading"><h3>Suggested next steps</h3><span class="context-badge" title="Source context supplied to the configured LLM provider">${escapeHtml(sourceLabel)}</span></div>
+		${suggestionsHtml}
+		<p class="ai-note">AI-generated suggestions. Validate changes against the profile goal and metric results below.</p>
+	</section>`;
+}
+
+export function generateResultsHtml(
 	results: any[],
 	url: string,
 	isComplete: boolean = true,
 	explanation?: string | null,
-	explanationError?: string
+	explanationError?: string,
+	profileFeedback?: ProfileLlmFeedback,
 ): string {
 	// Filter out results that are completely empty, but keep them if they are the only ones for a metric
 	const filteredResults = results.filter((r, i) => {
@@ -1308,7 +1397,11 @@ function generateResultsHtml(
 		</div>
 		`;
 	}).join('');
-	const explanationHtml = explanation === undefined ? '' : explanation
+	const explanationHtml = profileFeedback
+		? renderProfileLlmFeedback(profileFeedback)
+		: explanationError
+			? `<section class="ai-explanation unavailable"><h2>AI explanation unavailable</h2><p>${escapeHtml(explanationError)} The assessment results are still shown below.</p></section>`
+		: explanation === undefined ? '' : explanation
 		? `<section class="ai-explanation"><h2>Plain-language explanation</h2>${renderExplanationHtml(explanation)}<p class="ai-note">AI-generated interpretation. Verify important decisions against the metric values below.</p></section>`
 		: `<section class="ai-explanation unavailable"><h2>Plain-language explanation</h2><p>${escapeHtml(explanationError || 'The AI explanation is unavailable.')} The assessment results are still shown below.</p></section>`;
 
@@ -1382,6 +1475,47 @@ function generateResultsHtml(
 		.ai-explanation p:last-child { margin-bottom: 0; }
 		.ai-explanation.unavailable { background: #fff8e8; border-color: #d8a83e; }
 		.ai-note { color: #666; font-size: 12px; }
+		.profile-ai-feedback {
+			margin-bottom: 26px;
+			padding: 22px;
+			border: 1px solid #d8dcf7;
+			border-top: 5px solid #667eea;
+			border-radius: 10px;
+			background: linear-gradient(180deg, #f8f9ff 0%, #fff 100%);
+		}
+		.profile-ai-feedback.status-achieved { border-top-color: #16865a; }
+		.profile-ai-feedback.status-not-achieved { border-top-color: #c44848; }
+		.profile-ai-feedback.status-partial { border-top-color: #c68116; }
+		.profile-ai-heading { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
+		.profile-ai-heading .eyebrow { color: #667eea; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+		.profile-ai-heading h2 { margin-top: 3px; color: #27305e; font-size: 20px; }
+		.profile-ai-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: #667eea; color: white; font-size: 21px; font-weight: 700; }
+		.status-achieved .profile-ai-icon { background: #16865a; }
+		.status-not-achieved .profile-ai-icon { background: #c44848; }
+		.status-partial .profile-ai-icon { background: #c68116; }
+		.profile-ai-status, .context-badge { padding: 5px 9px; border-radius: 999px; background: #e8eafd; color: #414d9a; font-size: 12px; font-weight: 700; white-space: nowrap; }
+		.profile-ai-summary { margin: 18px 0 14px; font-size: 16px; line-height: 1.55; color: #30364f; }
+		.feedback-changes { display: grid; gap: 8px; margin-bottom: 20px; }
+		.change-chip { display: grid; grid-template-columns: auto 1fr; gap: 8px; padding: 9px 11px; border-radius: 6px; background: #f0f2fd; color: #3d4465; font-size: 13px; line-height: 1.45; }
+		.change-chip > span:first-child { color: #667eea; font-weight: 700; }
+		.suggestions-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 18px 0 10px; }
+		.suggestions-heading h3 { color: #27305e; font-size: 16px; }
+		.context-badge { background: #eef1f5; color: #5c6471; font-weight: 600; }
+		.suggestion-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 11px; margin-bottom: 14px; }
+		.suggestion-card { display: grid; grid-template-columns: auto 1fr; gap: 11px; padding: 14px; border: 1px solid #e0e3f2; border-radius: 8px; background: #fff; }
+		.suggestion-number { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: #667eea; color: white; font-size: 12px; font-weight: 700; }
+		.suggestion-card h3 { margin: 2px 0 6px; color: #35418b; font-size: 14px; }
+		.suggestion-action { color: #30343f; font-size: 13px; line-height: 1.45; }
+		.suggestion-rationale { margin-top: 7px; color: #687080; font-size: 12px; line-height: 1.4; }
+		.file-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+		.file-chips code { max-width: 100%; overflow: hidden; padding: 3px 6px; border-radius: 4px; background: #f1f2f7; color: #4e5673; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+		.no-suggestions { margin-bottom: 14px; color: #687080; font-size: 13px; }
+		.profile-ai-feedback .ai-note { margin-top: 4px; }
+		@media (max-width: 620px) {
+			.profile-ai-heading { grid-template-columns: auto 1fr; }
+			.profile-ai-status { grid-column: 1 / -1; width: fit-content; }
+			.suggestions-heading { align-items: flex-start; flex-direction: column; }
+		}
 		.metric-result {
 			background: #f8f9fa;
 			border-left: 4px solid #667eea;
@@ -2603,6 +2737,7 @@ export function activate(context: vscode.ExtensionContext) {
 		request: AssessmentRunRequest,
 		shareDeployment: boolean,
 		useLlmExplanation: boolean,
+		shareSourceCode: boolean,
 	): Promise<void> => {
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 		let projectConfig: ProjectConfig;
@@ -2667,15 +2802,23 @@ export function activate(context: vscode.ExtensionContext) {
 							}
 							let history: AssessmentHistory | undefined;
 							let explanation: string | null | undefined;
+							let profileFeedback: ProfileLlmFeedback | undefined;
 							let explanationError: string | undefined;
 							history = await chooseHistoryForCurrentRun(wui_id, request.comparison);
 							if (useLlmExplanation) {
-								try { explanation = await fetchAssessmentExplanation(results, history); }
+								try {
+									const explanationContext = await buildExplanationContext(
+										assessmentSelection, results, history, deploymentUrl, workspaceRoot, shareSourceCode,
+									);
+									const response = await fetchAssessmentExplanation(results, history, explanationContext);
+									explanation = response.explanation;
+									profileFeedback = response.profileFeedback;
+								}
 								catch (error: any) { explanationError = error?.message; }
 							} else {
 								explanation = undefined;
 							}
-							createResultsWebview(panel, results, deploymentUrl, true, explanation, explanationError);
+							createResultsWebview(panel, results, deploymentUrl, true, explanation, explanationError, profileFeedback);
 							if (history) {
 								await showHistoryComparison(results, history, deploymentUrl, toMetricIds(request.assessments), request.assessment);
 							}
@@ -2757,14 +2900,22 @@ export function activate(context: vscode.ExtensionContext) {
 							history = await chooseHistoryForCurrentRun(wui_id, request.comparison);
 						}
 						let explanation: string | null | undefined;
+						let profileFeedback: ProfileLlmFeedback | undefined;
 						let explanationError: string | undefined;
 						if (useLlmExplanation) {
-							try { explanation = await fetchAssessmentExplanation(resultData, history); }
+							try {
+								const explanationContext = await buildExplanationContext(
+									assessmentSelection, resultData, history, localUrl, workspaceRoot, shareSourceCode,
+								);
+								const response = await fetchAssessmentExplanation(resultData, history, explanationContext);
+								explanation = response.explanation;
+								profileFeedback = response.profileFeedback;
+							}
 							catch (error: any) { explanationError = error?.message; }
 						} else {
 							explanation = undefined;
 						}
-						createResultsWebview(panel, resultData, localUrl, true, explanation, explanationError);
+						createResultsWebview(panel, resultData, localUrl, true, explanation, explanationError, profileFeedback);
 						if (history) {
 							await showHistoryComparison(resultData, history, localUrl, toMetricIds(request.assessments), request.assessment);
 						}

@@ -46,6 +46,26 @@ The existing detailed metric comparison remains directly below the dashboard.
 Custom metric comparisons do not render the profile dashboard and keep their
 current overview unchanged.
 
+If **Use LLM explanation** is enabled during a profile run, the Evaluation
+Results editor also shows structured **AI profile guidance**. The deterministic
+history outcome remains authoritative; the LLM briefly explains the measured
+movement and proposes two to four next-step experiments for the selected
+directions. This appears as a status header, compact change rows, and numbered
+suggestion cards rather than one prose block. Custom metric runs keep the
+existing plain-language explanation overview.
+
+The sidebar provides a separate **Allow LLM to use source code (Demo)** toggle.
+This experimental feature is available only for profile runs with LLM feedback,
+stored per workspace, and off by default. With permission, the IDE extension
+selects up to 10 relevant frontend files, limited to 24 KiB per file and 100 KiB
+total. The files are supplied to the LLM to produce more precise,
+project-specific suggestions. The active editor and assessed route are
+prioritized; generated directories, dependencies, minified JavaScript, and
+source maps are excluded. The LLM cannot search the project, and the captured
+page HTML is not used as this source context. Without permission, the same
+profile summary is generated from assessment/history data and suggestions use
+metrics only.
+
 The history comparison lists every metric requested by the current assessment,
 not only metrics shared with the baseline. A requested metric without a
 compatible historical result is shown by name with **No baseline available**.

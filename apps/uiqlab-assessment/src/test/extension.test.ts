@@ -27,7 +27,9 @@ import {
 	calculateM14Comparison,
 	normalizeUiedElements,
 	getColorfulnessInterpretation,
+	generateResultsHtml,
 	renderExplanationHtml,
+	renderProfileLlmFeedback,
 	renderProfileAssessmentOverview,
 	renderRequestedHistoryMetricSections,
 	renderUnavailableHistoryMetricSection,
@@ -62,6 +64,43 @@ suite('Run Assessment flow', () => {
 	test('escapes HTML in LLM explanations before adding safe formatting', () => {
 		const html = renderExplanationHtml('**Safe** <script>alert("x")</script>');
 		assert.strictEqual(html, '<p><strong>Safe</strong> &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;</p>');
+	});
+
+	test('renders structured profile LLM guidance as visual cards and escapes model content', () => {
+		const html = renderProfileLlmFeedback({
+			goalStatus: 'partial',
+			goalTitle: 'Profile goals partially achieved',
+			summary: 'Complexity improved, but <script>content</script> density did not.',
+			changes: ['Edge density decreased.'],
+			suggestions: [{
+				title: 'Simplify the content block',
+				action: 'Reduce secondary copy and retest the profile.',
+				rationale: 'This may move content density toward the selected direction.',
+				files: ['src/pages/home.tsx'],
+			}],
+			sourceContextUsed: true,
+			sourceFiles: ['src/pages/home.tsx'],
+		});
+
+		assert.match(html, /profile-ai-feedback status-partial/);
+		assert.match(html, /Suggested next steps/);
+		assert.match(html, /Metrics and 1 source file/);
+		assert.match(html, /src\/pages\/home\.tsx/);
+		assert.doesNotMatch(html, /<script>/);
+		assert.match(html, /&lt;script&gt;content&lt;\/script&gt;/);
+	});
+
+	test('shows an LLM request error instead of hiding the explanation section', () => {
+		const html = generateResultsHtml(
+			[{ metric_id: 'm9_edge_density', results: [0.2] }],
+			'http://localhost:3000',
+			true,
+			undefined,
+			'The LLM provider did not respond in time.',
+		);
+
+		assert.match(html, /AI explanation unavailable/);
+		assert.match(html, /The LLM provider did not respond in time/);
 	});
 
 	test('renders profile goal feedback as a visual status dashboard', () => {
