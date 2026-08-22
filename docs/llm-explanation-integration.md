@@ -55,6 +55,27 @@ sent to the webview, or returned by the explanation endpoint.
 The root `.env` file is ignored by Git. `.env.example` contains only placeholder
 configuration and is safe to commit.
 
+## Privacy and operator responsibility
+
+UIQLab does not provide an LLM service, model account, or API credentials. The
+person operating the assessment backend selects and configures their own
+OpenAI-compatible API endpoint, model, and API key. Consequently, the selected
+provider's terms and configured retention, model-training, and international-
+transfer practices apply to LLM requests.
+
+When **Use LLM explanation** is enabled, assessment metrics and compatible
+history are sent to the configured provider. Source files are included only
+when **Allow LLM to use source code** is separately enabled, subject to the
+limits documented below. Operators should not submit secrets, personal data, or
+confidential code unless they are authorised to do so and the selected provider
+is approved for that data. Where personal data is processed, the operator is
+responsible for the applicable legal basis, transparency information, processor
+terms, and transfer safeguards.
+
+The sidebar presents this information in a collapsible **Privacy and AI notice**
+beside the LLM controls. Generated explanations are advisory and may be
+inaccurate; the deterministic assessment results remain authoritative.
+
 ## Configuration
 
 The integration uses these variables:
@@ -133,7 +154,10 @@ The extension sidebar includes a **Use LLM explanation** toggle. When enabled,
 both deployment-URL and local-URL assessment flows request an explanation. When
 disabled, no request is sent to the explanation endpoint and the results panel
 shows the raw metric results without an explanation block. The preference is
-stored per workspace and defaults to enabled to preserve the existing behavior.
+stored per workspace and defaults to disabled. On the first load after this
+default changed, the extension resets the earlier enabled-by-default value and
+source-sharing preference to disabled once. Choices made after that migration
+remain stored per workspace.
 History is included only when the history endpoint finds a comparable previous
 run. Screenshot-based comparisons require matching screenshot dimensions.
 
