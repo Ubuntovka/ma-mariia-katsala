@@ -129,6 +129,25 @@ suite('Run Assessment flow', () => {
 		assert.match(html, /The LLM provider did not respond in time/);
 	});
 
+	test('renders the result page with the white assessment palette and clear hierarchy', () => {
+		const html = generateResultsHtml(
+			[{ metric_id: 'm9_edge_density', results: [0.2] }],
+			'http://localhost:3000',
+		);
+
+		assert.match(html, /--navy: #12364f/);
+		assert.match(html, /--accent: #0b746f/);
+		assert.match(html, /--canvas: #f1f4f6/);
+		assert.doesNotMatch(html, /body\.vscode-dark/);
+		assert.match(html, /assessment-status complete/);
+		assert.match(html, /class="target-link" href="http:\/\/localhost:3000"/);
+		assert.match(html, /target="_blank" rel="noopener noreferrer"/);
+		assert.match(html, /Metric results/);
+		assert.match(html, /1 metric/);
+		assert.doesNotMatch(html, /#667eea|#764ba2|linear-gradient\(/);
+		assert.doesNotMatch(generateResultsHtml([], 'javascript:alert(1)'), /class="target-link"/);
+	});
+
 	test('renders profile goal feedback as a visual status dashboard', () => {
 		const html = renderProfileAssessmentOverview({
 			status: 'achieved',
