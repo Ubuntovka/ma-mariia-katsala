@@ -32,12 +32,33 @@ How to run an assessment:
 - Alternatively, choose **Custom metrics** to select any combination of the 14 metrics. Use **All** or **None** to change the complete metric selection at once, and expand **What does this measure?** to read a short description of any metric.
 - Profile mode runs the ordered, de-duplicated union of metrics assigned to the selected profiles. Custom mode runs exactly the checked metrics.
 - Switching modes clears the inactive selection, so earlier profile choices cannot leak into a custom metric run or vice versa.
-- Enable **Use LLM explanation** to receive an explanation after the run. Profile runs show a structured goal summary and suggested next steps. Custom metric runs show structured technical findings that separate measured evidence, interpretation, and practical implementation actions.
+- Enable **Use LLM explanation** to receive an explanation after the run. It is off by default. Profile runs show a structured goal summary and suggested next steps. Custom metric runs show structured technical findings that separate measured evidence, interpretation, and practical implementation actions.
 - **Allow LLM to use source code (Demo)** is an experimental, profile-only permission and is off by default. When enabled, the extension sends at most 10 relevant frontend source files (100 KiB total) to the configured LLM provider. These files are used to provide more precise, project-specific suggestions. Suggestions still use metrics when the feature is off. The LLM does not search the project itself and the captured page HTML is not used as suggestion context.
 - Choose **Current state vs latest assessment**, **Current state vs selected assessment**, or **Two previous assessments**. Historical assessments are selected in the sidebar before the action starts.
 - Select **Run and compare** for a current-state mode, or **Compare assessments** for two historical runs. The sidebar hides page and profile controls when no new assessment is required.
 - Local URLs (for example `http://localhost:3000`) are captured with Playwright.
 - For a local URL, the extension opens a headless Chromium, waits for page load, waits until document.readyState === "complete", waits an extra 5s, disables animations, captures a fixed-viewport PNG and rendered HTML, then uploads the screenshot to the orchestrator.
+
+## Privacy and AI notice
+
+UIQLab does not provide an LLM service, model account, or API credentials. The
+person operating the assessment backend must configure their own
+OpenAI-compatible API endpoint, model, and API key. The selected provider, not
+UIQLab, determines the applicable service terms and its retention, model
+training, and international-transfer practices.
+
+Enabling **Use LLM explanation** sends assessment metrics and compatible
+history to that configured provider. Enabling **Allow LLM to use source code**
+separately permits up to 10 selected frontend files, with a combined limit of
+100 KiB, to be included. Do not submit secrets, personal data, or confidential
+code unless you are authorised to do so and the configured provider is approved
+for that data. The operator is responsible for selecting an appropriate
+provider configuration and, where personal data is processed, establishing the
+required legal basis, notices, contracts, and transfer safeguards.
+
+LLM explanations are AI-generated advisory output and may be inaccurate. The
+measured assessment results remain authoritative and should be used to verify
+important decisions.
 
 VSIX packaging limitation:
 - Playwright/browser binaries are not automatically included in a standard VSIX bundle. During development run `npx playwright install chromium` or ensure the host has Chromium available. For distribution, either include the browser in the package or instruct users to install it following the commands above.

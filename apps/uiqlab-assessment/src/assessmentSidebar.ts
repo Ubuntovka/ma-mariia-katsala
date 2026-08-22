@@ -48,6 +48,8 @@ interface ComparePastMessage {
 
 type SidebarMessage = RunMessage | LlmPreferenceMessage | SourceCodePreferenceMessage | ComparePastMessage;
 
+const LLM_PREFERENCE_DEFAULTS_VERSION = 1;
+
 export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'uiqlab-assessment.sidebar';
 	private view?: vscode.WebviewView;
@@ -71,6 +73,12 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	public async resolveWebviewView(view: vscode.WebviewView): Promise<void> {
 		this.view = view;
 		view.webview.options = { enableScripts: true };
+		const preferenceDefaultsVersion = this.context.workspaceState.get<number>('uiqlab.llmPreferenceDefaultsVersion', 0);
+		if (preferenceDefaultsVersion < LLM_PREFERENCE_DEFAULTS_VERSION) {
+			await this.context.workspaceState.update('uiqlab.useLlmExplanation', false);
+			await this.context.workspaceState.update('uiqlab.shareSourceCode', false);
+			await this.context.workspaceState.update('uiqlab.llmPreferenceDefaultsVersion', LLM_PREFERENCE_DEFAULTS_VERSION);
+		}
 		const [assessmentRuns, initialSelection] = await Promise.all([
 			this.fetchAssessmentRuns().catch(() => []),
 			this.fetchInitialSelection().catch(() => undefined),
@@ -177,7 +185,7 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	): string {
 		const nonce = getNonce();
 		const lastUrl = this.context.workspaceState.get<string>('uiqlab.lastUrl', '');
-		const useLlmExplanation = this.context.workspaceState.get<boolean>('uiqlab.useLlmExplanation', true);
+		const useLlmExplanation = this.context.workspaceState.get<boolean>('uiqlab.useLlmExplanation', false);
 		const shareSourceCode = this.context.workspaceState.get<boolean>('uiqlab.shareSourceCode', false);
 		const initialMode = initialSelection?.mode ?? 'profiles';
 		const initialProfiles = initialSelection?.mode === 'profiles' ? initialSelection.profiles : [];
@@ -235,6 +243,12 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	.demo-badge { display: inline-block; margin-left: 4px; padding: 1px 5px; border-radius: 8px; color: var(--vscode-badge-foreground); background: var(--vscode-badge-background); font-size: 9px; font-weight: 600; line-height: 1.35; text-transform: uppercase; vertical-align: 1px; }
 	.preference + .preference { border-top: 1px solid var(--vscode-widget-border); }
 	.preference.disabled { opacity: .55; }
+	.ai-privacy-notice { margin-top: 8px; border: 1px solid var(--vscode-widget-border); border-radius: 4px; background: var(--vscode-textBlockQuote-background); color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.45; }
+	.ai-privacy-notice summary { padding: 9px 10px; color: var(--vscode-foreground); font-size: 12px; font-weight: 600; cursor: pointer; }
+	.ai-privacy-notice summary:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -2px; }
+	.ai-privacy-content { padding: 0 10px 10px; }
+	.ai-privacy-notice p { margin: 0; }
+	.ai-privacy-notice p + p { margin-top: 6px; }
 	.switch { position: relative; display: inline-block; flex: 0 0 auto; width: 34px; height: 18px; }
 	.switch input { width: 1px; height: 1px; opacity: 0; }
 	.slider { position: absolute; inset: 0; border: 1px solid var(--vscode-input-border, var(--vscode-widget-border)); border-radius: 9px; background: var(--vscode-input-background); cursor: pointer; transition: background .15s; }
@@ -296,7 +310,13 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 		</div><div class="preference" id="source-sharing-row">
 			<div class="preference-copy"><label class="preference-title" for="share-source-code">Allow LLM to use source code <span class="demo-badge">Demo</span></label><span class="preference-description">Experimental feature for profile-based assessments only. Allows up to 10 relevant frontend files (100 KiB total) to be sent to the configured LLM provider and used to provide more precise, project-specific suggestions. When off, suggestions use metrics only.</span></div>
 			<label class="switch" aria-label="Allow LLM to use source code for profile suggestions"><input id="share-source-code" type="checkbox"${shareSourceCode ? ' checked' : ''}><span class="slider"></span></label>
-		</div></fieldset>
+		</div><details class="ai-privacy-notice">
+			<summary>Privacy and AI notice</summary>
+			<div class="ai-privacy-content">
+				<p>UIQLab does not provide an LLM service or API credentials. The person operating the assessment backend must configure their own OpenAI-compatible API endpoint, model, and API key. When LLM explanations are enabled, assessment metrics and compatible history are sent to that configured provider. Source files are sent only when source sharing is separately enabled.</p>
+				<p>The selected provider processes data under its own terms, retention, training, and international-transfer settings. Do not send secrets, personal data, or confidential code unless you are authorised to do so and the provider is approved for that data. AI output may be inaccurate and is advisory; measured assessment results remain authoritative.</p>
+			</div>
+		</details></fieldset>
 		</div>
 		<p class="error" id="error" role="alert"></p><button class="run" id="run" type="submit">Run assessment</button>
 	</form>
@@ -310,8 +330,6 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	if (Array.isArray(saved.profiles)) document.querySelectorAll('input[name="profile"]').forEach(i => { const profile = saved.profiles.find(item => item && item.id === i.value); i.checked = Boolean(profile); const direction = document.querySelector('select[data-profile-direction="' + i.value + '"]'); direction.disabled = !i.checked; if (profile && typeof profile.direction === 'string' && [...direction.options].some(option => option.value === profile.direction)) direction.value = profile.direction; });
 	if (Array.isArray(saved.metrics)) document.querySelectorAll('input[name="metric"]').forEach(i => i.checked = saved.metrics.includes(i.value));
 	if (typeof saved.share === 'boolean') document.getElementById('share').checked = saved.share;
-	if (typeof saved.useLlmExplanation === 'boolean') document.getElementById('llm-explanation').checked = saved.useLlmExplanation;
-	if (typeof saved.shareSourceCode === 'boolean') document.getElementById('share-source-code').checked = saved.shareSourceCode;
 	if (saved.comparison) { const comparison = document.querySelector('input[name="comparison"][value="' + saved.comparison + '"]'); if (comparison) comparison.checked = true; }
 	if (saved.selectionMode) { const selectionMode = document.querySelector('input[name="assessment-mode"][value="' + saved.selectionMode + '"]'); if (selectionMode) selectionMode.checked = true; }
 	function source() { return document.querySelector('input[name="source"]:checked').value; }
