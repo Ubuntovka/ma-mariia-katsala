@@ -6,8 +6,20 @@ The UIQLab CI client runs Web UI Assessments against several routes of a public
 commit preview. It processes the configured pages in order. For each page it
 submits one URL to the orchestrator, waits for that page's profile metrics, and
 compares the results with the same page's latest compatible assessment from the
-baseline branch before starting the next page. The client writes one
-machine-readable `uiqlab-report.json` batch artifact.
+baseline branch before starting the next page. The client writes two artifacts
+after every run:
+
+- `uiqlab-report.html` is a self-contained, responsive visual report with the
+  same palette and information hierarchy as the IDE results. It includes the
+  overall gate, page and profile outcomes, baseline comparisons, metric cards,
+  embedded visual metric files, and expandable raw values. It has no JavaScript
+  or external stylesheet. Visual files are fetched while the CI job can still
+  reach the evaluator, avoiding broken `localhost` URLs in downloaded artifacts.
+- `uiqlab-report.json` remains the machine-readable source of truth for later
+  automation.
+
+The HTML report also includes print styles, so it can be opened in a browser
+and printed or saved as PDF without requiring a separate CI dependency.
 
 For profile-based assessments, the client classifies meaningful metric changes
 against the selected directions and applies the configured quality-gate mode.
@@ -141,6 +153,7 @@ web-ui-assessment:
   artifacts:
     when: always
     paths:
+      - uiqlab-report.html
       - uiqlab-report.json
 ```
 
@@ -205,7 +218,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: uiqlab-assessment
-          path: uiqlab-report.json
+          path: |
+            uiqlab-report.html
+            uiqlab-report.json
           if-no-files-found: ignore
 ```
 
@@ -271,8 +286,9 @@ web-ui-assessment:
 ```
 
 Technical errors and enforced opposed outcomes use exit code `1` and continue
-to block the job. Artifacts use `when: always`, so `uiqlab-report.json` is
-uploaded for passes, warnings, and failures.
+to block the job. Artifacts use `when: always`, so `uiqlab-report.html` and
+`uiqlab-report.json` are uploaded for passes, warnings, and failures. The client
+also creates both files for a branch that is skipped.
 
 ## Running the client manually
 
@@ -284,8 +300,10 @@ npm run build --prefix apps/uiqlab-ci
 node apps/uiqlab-ci/dist/src/cli.js
 ```
 
-Optional command-line flags are `--config`, `--report`, `--url`, `--branch`, and
-`--orchestrator-url`. Environment variables provide the same values in CI.
+Optional command-line flags are `--config`, `--report`, `--html-report`, `--url`,
+`--branch`, and `--orchestrator-url`. `--report` changes the JSON path and
+`--html-report` changes the visual report path. `UIQLAB_REPORT` and
+`UIQLAB_HTML_REPORT` are the equivalent environment variables.
 
 ## Troubleshooting
 

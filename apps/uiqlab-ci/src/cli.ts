@@ -14,6 +14,7 @@ import { qualityGateExitCode, type QualityGateMode } from './qualityGate.js';
 import { jsonRequest } from './http.js';
 import { pollEvaluationResult } from './poll.js';
 import { assessPagesSequentially, pageTarget } from './workflow.js';
+import { renderHtmlReportWithEmbeddedImages } from './htmlReport.js';
 
 interface GitMetadata {
   branch?: string;
@@ -23,6 +24,7 @@ interface GitMetadata {
 }
 
 let activeReportPath = 'uiqlab-report.json';
+let activeHtmlReportPath = 'uiqlab-report.html';
 let activeQualityGateMode: QualityGateMode = 'warn';
 let activeAssessment: AssessmentReport['assessment'] | undefined;
 let activeBatch = false;
@@ -30,6 +32,14 @@ let activeBatch = false;
 function argument(name: string, fallback?: string): string | undefined {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : fallback;
+}
+
+async function writeReportArtifacts(report: unknown, reportPath: string, htmlReportPath: string): Promise<void> {
+  const html = await renderHtmlReportWithEmbeddedImages(report);
+  await Promise.all([
+    writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`),
+    writeFile(htmlReportPath, html),
+  ]);
 }
 
 function git(...args: string[]): string | undefined {
@@ -118,7 +128,9 @@ async function assessPage(
 async function main(): Promise<void> {
   const configPath = argument('--config', process.env.UIQLAB_CONFIG ?? '.uiqlab.json') ?? '.uiqlab.json';
   const reportPath = argument('--report', process.env.UIQLAB_REPORT ?? 'uiqlab-report.json') ?? 'uiqlab-report.json';
+  const htmlReportPath = argument('--html-report', process.env.UIQLAB_HTML_REPORT ?? 'uiqlab-report.html') ?? 'uiqlab-report.html';
   activeReportPath = reportPath;
+  activeHtmlReportPath = htmlReportPath;
   const baseUrl = argument('--orchestrator-url', process.env.UIQLAB_ORCHESTRATOR_URL)?.replace(/\/$/, '');
   const previewUrl = argument('--url', process.env.UIQLAB_PREVIEW_URL);
   const config = await loadConfig(configPath);
@@ -131,7 +143,7 @@ async function main(): Promise<void> {
     const skipped = activeBatch
       ? { schemaVersion: 2, status: 'skipped', reason: `Branch ${meta.branch} does not match ci.branches.`, branch: meta.branch, source: 'ci/cd', pages: config.pages.map((page) => ({ path: page.path, assessment: { mode: 'profiles', profiles: page.profiles }, qualityGate: { mode: page.qualityGateMode, status: 'pass', reason: 'The branch trigger skipped this page assessment.' } })), qualityGate: { mode: 'per-page', status: 'pass', reason: 'The branch trigger skipped this assessment.' } }
       : { schemaVersion: 1, status: 'skipped', reason: `Branch ${meta.branch} does not match ci.branches.`, branch: meta.branch, source: 'ci/cd', assessment: config.assessment, profileOutcomes: [], qualityGate: { mode: config.qualityGateMode, status: 'pass', reason: 'The branch trigger skipped this assessment.' } };
-    await writeFile(reportPath, `${JSON.stringify(skipped, null, 2)}\n`);
+    await writeReportArtifacts(skipped, reportPath, htmlReportPath);
     console.log(`Web UI Assessment\n\nSkipped: branch "${meta.branch}" does not match ci.branches.`);
     return;
   }
@@ -165,13 +177,13 @@ async function main(): Promise<void> {
 
   if (activeBatch) {
     const report = buildBatchReport(reports, meta.branch, meta.commitHash);
-    await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+    await writeReportArtifacts(report, reportPath, htmlReportPath);
     console.log(formatBatchSummary(report, config.baselineBranch));
     process.exitCode = qualityGateExitCode(report.qualityGate);
   } else {
     const report = reports[0];
     if (!report) throw new Error('No page assessment was completed.');
-    await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+    await writeReportArtifacts(report, reportPath, htmlReportPath);
     console.log(formatSummary(report, config.baselineBranch));
     process.exitCode = qualityGateExitCode(report.qualityGate);
   }
@@ -190,9 +202,9 @@ main().catch(async (error: unknown) => {
     qualityGate: { mode: activeQualityGateMode, status: 'fail', reason: 'A technical error prevented the assessment from completing.' },
   };
   try {
-    await writeFile(activeReportPath, `${JSON.stringify(failureReport, null, 2)}\n`);
+    await writeReportArtifacts(failureReport, activeReportPath, activeHtmlReportPath);
   } catch (reportError) {
-    console.error(`Could not write ${activeReportPath}: ${reportError instanceof Error ? reportError.message : String(reportError)}`);
+    console.error(`Could not write report artifacts: ${reportError instanceof Error ? reportError.message : String(reportError)}`);
   }
   process.exitCode = 1;
 });

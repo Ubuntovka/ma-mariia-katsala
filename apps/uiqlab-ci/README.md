@@ -4,7 +4,9 @@ This client makes a CI/CD pipeline another UIQLab assessment source. It accepts
 one public preview containing several configured page routes, assesses those
 pages sequentially through the orchestrator, compares every page with its own
 latest compatible assessment from the configured baseline branch, prints a job
-summary, and writes the complete `uiqlab-report.json` artifact.
+summary, and writes a polished `uiqlab-report.html` visual artifact alongside
+the complete machine-readable `uiqlab-report.json` artifact. Both files are
+created for completed, skipped, and technically failed assessments.
 
 For profile-based assessments, the client deterministically classifies material
 metric changes against each selected direction. The configurable quality gate
@@ -83,8 +85,15 @@ npm run build --prefix apps/uiqlab-ci
 node apps/uiqlab-ci/dist/src/cli.js
 ```
 
-Optional flags are `--config`, `--report`, `--url`, `--branch`, and
-`--orchestrator-url`.
+Optional flags are `--config`, `--report`, `--html-report`, `--url`, `--branch`,
+and `--orchestrator-url`. The report paths can also be set with `UIQLAB_REPORT`
+and `UIQLAB_HTML_REPORT`.
+
+`uiqlab-report.html` is responsive and self-contained: its styling is embedded,
+it uses no JavaScript, and visual metric files are downloaded and embedded while
+the CI job can still reach the evaluator. Open it directly from the downloaded
+pipeline artifact. Its print layout can also be saved as a PDF from the browser.
+Keep the JSON artifact for tooling and long-term machine-readable results.
 
 ## GitLab CI example
 
@@ -121,6 +130,7 @@ web-ui-assessment:
   artifacts:
     when: always
     paths:
+      - uiqlab-report.html
       - uiqlab-report.json
 ```
 
@@ -150,10 +160,14 @@ non-matching branches, mirror those patterns in GitLab `rules`.
   uses: actions/upload-artifact@v4
   with:
     name: uiqlab-assessment
-    path: uiqlab-report.json
+    path: |
+      uiqlab-report.html
+      uiqlab-report.json
 ```
 
-The console output is suitable for the pipeline log. A multi-page JSON report
+The console output is suitable for the pipeline log. The HTML artifact presents
+the same run as an IDE-like overview with gate, profile, and metric cards. A
+multi-page JSON report
 uses schema version 2 and contains an ordered `pages` array with one complete
 page report per orchestrator run plus the aggregate quality-gate status. The
 aggregate has mode `per-page` and uses the most severe page result: failure,
