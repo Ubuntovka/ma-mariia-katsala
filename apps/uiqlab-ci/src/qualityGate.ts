@@ -119,7 +119,7 @@ export function evaluateQualityGate(mode: QualityGateMode, outcomes: readonly Pr
   return { mode, status: 'pass', reason: outcomes.length === 0 ? 'No assessment profiles are configured.' : 'No profile outcome triggers this quality-gate mode.' };
 }
 
-export function qualityGateExitCode(gate: QualityGateResult): 0 | 1 | 2 {
+export function qualityGateExitCode(gate: Pick<QualityGateResult, 'status'>): 0 | 1 | 2 {
   if (gate.status === 'fail') return 1;
   if (gate.status === 'warning') return 2;
   return 0;

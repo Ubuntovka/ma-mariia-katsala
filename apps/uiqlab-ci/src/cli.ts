@@ -2,10 +2,18 @@
 import { writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { loadConfig, matchesBranch } from './config.js';
-import { buildReport, formatSummary, type AssessmentHistory, type AssessmentReport } from './report.js';
+import {
+  buildBatchReport,
+  buildReport,
+  formatBatchSummary,
+  formatSummary,
+  type AssessmentHistory,
+  type AssessmentReport,
+} from './report.js';
 import { qualityGateExitCode, type QualityGateMode } from './qualityGate.js';
 import { jsonRequest } from './http.js';
 import { pollEvaluationResult } from './poll.js';
+import { assessPagesSequentially, pageTarget } from './workflow.js';
 
 interface GitMetadata {
   branch?: string;
@@ -17,6 +25,7 @@ interface GitMetadata {
 let activeReportPath = 'uiqlab-report.json';
 let activeQualityGateMode: QualityGateMode = 'warn';
 let activeAssessment: AssessmentReport['assessment'] | undefined;
+let activeBatch = false;
 
 function argument(name: string, fallback?: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -55,49 +64,124 @@ function metadata(): GitMetadata {
   return result;
 }
 
+interface PageAssessmentInput {
+  target: string;
+  metrics: string[];
+  assessment: AssessmentReport['assessment'];
+  qualityGateMode: QualityGateMode;
+}
+
+async function assessPage(
+  page: PageAssessmentInput,
+  baseUrl: string,
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  meta: GitMetadata & { branch: string; repositoryUrl: string },
+): Promise<AssessmentReport> {
+  activeAssessment = page.assessment;
+  activeQualityGateMode = page.qualityGateMode;
+  const submission = await jsonRequest<{ result_id?: unknown }>(`${baseUrl}/eval/evaluate_url_input_test`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      url: page.target,
+      metrics: page.metrics,
+      assessment: page.assessment,
+      projectKey: config.projectKey,
+      projectName: config.projectName,
+      repositoryUrl: meta.repositoryUrl,
+      source: 'ci/cd',
+      branch: meta.branch,
+      commitHash: meta.commitHash,
+      gitDirty: false,
+      mergeRequestId: meta.mergeRequestId,
+    }),
+  });
+  if (typeof submission.result_id !== 'string') throw new Error('Orchestrator response did not contain result_id.');
+  const results = await pollEvaluationResult(baseUrl, submission.result_id, page.metrics.length, config.timeoutMs, config.pollIntervalMs);
+  const failedMetrics = results.filter((item) => item.results.length === 0);
+  if (failedMetrics.length) throw new Error(`Assessment failed technically for: ${failedMetrics.map((item) => item.metric_id).join(', ')}`);
+  const query = new URLSearchParams({ baseline_branch: config.baselineBranch });
+  const history = await jsonRequest<AssessmentHistory>(`${baseUrl}/eval/result/${encodeURIComponent(submission.result_id)}/history?${query}`);
+  return buildReport({
+    target: page.target,
+    branch: meta.branch,
+    ...(meta.commitHash ? { commitHash: meta.commitHash } : {}),
+    resultId: submission.result_id,
+    baselineBranch: config.baselineBranch,
+    results,
+    history,
+    assessment: page.assessment,
+    qualityGateMode: page.qualityGateMode,
+  });
+}
+
 async function main(): Promise<void> {
   const configPath = argument('--config', process.env.UIQLAB_CONFIG ?? '.uiqlab.json') ?? '.uiqlab.json';
   const reportPath = argument('--report', process.env.UIQLAB_REPORT ?? 'uiqlab-report.json') ?? 'uiqlab-report.json';
   activeReportPath = reportPath;
   const baseUrl = argument('--orchestrator-url', process.env.UIQLAB_ORCHESTRATOR_URL)?.replace(/\/$/, '');
-  const target = argument('--url', process.env.UIQLAB_PREVIEW_URL);
+  const previewUrl = argument('--url', process.env.UIQLAB_PREVIEW_URL);
   const config = await loadConfig(configPath);
   activeQualityGateMode = config.qualityGateMode;
   activeAssessment = config.assessment;
+  activeBatch = config.pages.length > 0;
   const meta = metadata();
   if (!meta.branch) throw new Error('Could not determine the CI branch. Set UIQLAB_BRANCH.');
   if (!matchesBranch(meta.branch, config.branches)) {
-    await writeFile(reportPath, `${JSON.stringify({ schemaVersion: 1, status: 'skipped', reason: `Branch ${meta.branch} does not match ci.branches.`, branch: meta.branch, source: 'ci/cd', assessment: config.assessment, profileOutcomes: [], qualityGate: { mode: config.qualityGateMode, status: 'pass', reason: 'The branch trigger skipped this assessment.' } }, null, 2)}\n`);
+    const skipped = activeBatch
+      ? { schemaVersion: 2, status: 'skipped', reason: `Branch ${meta.branch} does not match ci.branches.`, branch: meta.branch, source: 'ci/cd', pages: config.pages.map((page) => ({ path: page.path, assessment: { mode: 'profiles', profiles: [page.profile] }, qualityGate: { mode: page.qualityGateMode, status: 'pass', reason: 'The branch trigger skipped this page assessment.' } })), qualityGate: { mode: 'per-page', status: 'pass', reason: 'The branch trigger skipped this assessment.' } }
+      : { schemaVersion: 1, status: 'skipped', reason: `Branch ${meta.branch} does not match ci.branches.`, branch: meta.branch, source: 'ci/cd', assessment: config.assessment, profileOutcomes: [], qualityGate: { mode: config.qualityGateMode, status: 'pass', reason: 'The branch trigger skipped this assessment.' } };
+    await writeFile(reportPath, `${JSON.stringify(skipped, null, 2)}\n`);
     console.log(`Web UI Assessment\n\nSkipped: branch "${meta.branch}" does not match ci.branches.`);
     return;
   }
   if (!baseUrl) throw new Error('UIQLAB_ORCHESTRATOR_URL is required.');
-  if (!target) throw new Error('UIQLAB_PREVIEW_URL is required for an assessed branch.');
+  if (!previewUrl) throw new Error('UIQLAB_PREVIEW_URL is required for an assessed branch.');
   if (!meta.repositoryUrl) throw new Error('Could not determine repository URL. Set UIQLAB_REPOSITORY_URL.');
-  new URL(target);
+  new URL(previewUrl);
+  const assessedMeta: GitMetadata & { branch: string; repositoryUrl: string } = {
+    ...meta,
+    branch: meta.branch,
+    repositoryUrl: meta.repositoryUrl,
+  };
 
-  const submission = await jsonRequest<{ result_id?: unknown }>(`${baseUrl}/eval/evaluate_url_input_test`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ url: target, metrics: config.metrics, assessment: config.assessment, projectKey: config.projectKey, projectName: config.projectName, repositoryUrl: meta.repositoryUrl, source: 'ci/cd', branch: meta.branch, commitHash: meta.commitHash, gitDirty: false, mergeRequestId: meta.mergeRequestId }),
+  const pages: PageAssessmentInput[] = config.pages.length > 0
+    ? config.pages.map((page) => ({
+      target: pageTarget(previewUrl, page.path),
+      metrics: page.metrics,
+      assessment: { mode: 'profiles', profiles: [page.profile] },
+      qualityGateMode: page.qualityGateMode,
+    }))
+    : [{ target: previewUrl, metrics: config.metrics, assessment: config.assessment, qualityGateMode: config.qualityGateMode }];
+  const reports = await assessPagesSequentially(pages, async (page, index) => {
+    if (pages.length > 1) console.log(`Assessing page ${index + 1}/${pages.length}: ${page.target}`);
+    try {
+      return await assessPage(page, baseUrl, config, assessedMeta);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Page ${index + 1}/${pages.length} (${page.target}) failed: ${message}`);
+    }
   });
-  if (typeof submission.result_id !== 'string') throw new Error('Orchestrator response did not contain result_id.');
-  const results = await pollEvaluationResult(baseUrl, submission.result_id, config.metrics.length, config.timeoutMs, config.pollIntervalMs);
-  const failedMetrics = results.filter((item) => item.results.length === 0);
-  if (failedMetrics.length) throw new Error(`Assessment failed technically for: ${failedMetrics.map((item) => item.metric_id).join(', ')}`);
-  const query = new URLSearchParams({ baseline_branch: config.baselineBranch });
-  const history = await jsonRequest<AssessmentHistory>(`${baseUrl}/eval/result/${encodeURIComponent(submission.result_id)}/history?${query}`);
-  const report = buildReport({ target, branch: meta.branch, ...(meta.commitHash ? { commitHash: meta.commitHash } : {}), resultId: submission.result_id, baselineBranch: config.baselineBranch, results, history, assessment: config.assessment, qualityGateMode: config.qualityGateMode });
-  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
-  console.log(formatSummary(report, config.baselineBranch));
-  process.exitCode = qualityGateExitCode(report.qualityGate);
+
+  if (activeBatch) {
+    const report = buildBatchReport(reports, meta.branch, meta.commitHash);
+    await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+    console.log(formatBatchSummary(report, config.baselineBranch));
+    process.exitCode = qualityGateExitCode(report.qualityGate);
+  } else {
+    const report = reports[0];
+    if (!report) throw new Error('No page assessment was completed.');
+    await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+    console.log(formatSummary(report, config.baselineBranch));
+    process.exitCode = qualityGateExitCode(report.qualityGate);
+  }
 }
 
 main().catch(async (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`Web UI Assessment\n\nAssessment failed because of a technical error.\n${message}`);
   const failureReport = {
-    schemaVersion: 1,
+    schemaVersion: activeBatch ? 2 : 1,
     status: 'failed',
     source: 'ci/cd',
     reason: message,

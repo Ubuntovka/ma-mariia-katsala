@@ -1,9 +1,10 @@
 # UIQLab CI client
 
-This client makes a CI/CD pipeline another UIQLab assessment source. It submits
-a public preview URL to the orchestrator, waits for all selected metrics, compares
-them with the latest compatible assessment from the configured baseline branch,
-prints a short job summary, and writes the complete `uiqlab-report.json` artifact.
+This client makes a CI/CD pipeline another UIQLab assessment source. It accepts
+one public preview containing several configured page routes, assesses those
+pages sequentially through the orchestrator, compares every page with its own
+latest compatible assessment from the configured baseline branch, prints a job
+summary, and writes the complete `uiqlab-report.json` artifact.
 
 For profile-based assessments, the client deterministically classifies material
 metric changes against each selected direction. The configurable quality gate
@@ -19,16 +20,14 @@ extension and add `ci` settings:
 {
   "projectKey": "your-existing-project-uuid",
   "name": "your-project",
-  "assessment": {
-    "mode": "profiles",
-    "profiles": [{ "id": "visual-complexity", "direction": "decrease" }]
-  },
-  "qualityGate": {
-    "mode": "warn"
-  },
   "ci": {
     "branches": ["main", "feature/ui-*", "redesign/**"],
-    "baselineBranch": "main"
+    "baselineBranch": "main",
+    "pages": [
+      { "path": "/", "profile": "general-review", "direction": "observe", "qualityGate": { "mode": "report" } },
+      { "path": "/checkout", "profile": "accessibility", "direction": "reduce-issues", "qualityGate": { "mode": "enforce" } },
+      { "path": "/catalog", "profile": "visual-complexity", "direction": "decrease", "qualityGate": { "mode": "warn" } }
+    ]
   }
 }
 ```
@@ -37,7 +36,17 @@ extension and add `ci` settings:
 successfully with a skipped report when the current branch does not match. See
 the repository's `.uiqlab.example.json` for a complete example.
 
-Quality-gate modes are `report`, `warn`, and `enforce`; `warn` is the default.
+`ci.pages` is processed in array order. Each `path` starts with `/` and is
+resolved relative to `UIQLAB_PREVIEW_URL`; each page must select exactly one of
+the seven profile IDs, one direction allowed by that profile, and its own
+`qualityGate.mode`. The client fully submits, polls, and reports one page before
+requesting the next page from the orchestrator. The timeout applies separately
+to each page. If `ci.pages` is omitted, the existing single-page
+`assessment`/custom-metric configuration, global `qualityGate.mode`, and exact
+preview URL continue to work.
+
+Quality-gate modes are `report`, `warn`, and `enforce`. Every multi-page entry
+must specify one; the legacy single-page global mode defaults to `warn`.
 The CLI uses exit code `0` for a pass, `1` for a blocking gate or technical
 failure, and `2` for a non-blocking warning. A first run without a compatible
 baseline passes and establishes the baseline.
@@ -45,8 +54,9 @@ baseline passes and establishes the baseline.
 ## Required pipeline inputs
 
 - `UIQLAB_ORCHESTRATOR_URL`: externally reachable orchestrator base URL.
-- `UIQLAB_PREVIEW_URL`: public URL produced by the pipeline's preview/deployment
-  job. The assessment service must be able to load it.
+- `UIQLAB_PREVIEW_URL`: public base URL produced by the pipeline's
+  preview/deployment job. The configured page paths are appended to it, and the
+  assessment service must be able to load every resulting URL.
 
 Branch, commit, repository, and merge-request metadata are detected from GitLab,
 GitHub Actions, or Git. They can be overridden with `UIQLAB_BRANCH`,
@@ -132,6 +142,8 @@ non-matching branches, mirror those patterns in GitLab `rules`.
     path: uiqlab-report.json
 ```
 
-The console output is suitable for the pipeline log. The JSON report contains
-raw evaluator results, normalized scalar comparisons, profile outcomes, and the
-final quality-gate status for machine processing.
+The console output is suitable for the pipeline log. A multi-page JSON report
+uses schema version 2 and contains an ordered `pages` array with one complete
+page report per orchestrator run plus the aggregate quality-gate status. The
+aggregate has mode `per-page` and uses the most severe page result: failure,
+then warning, then pass.

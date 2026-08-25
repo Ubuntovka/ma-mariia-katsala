@@ -44,6 +44,16 @@ export interface AssessmentReport {
   rawResults: MetricResult[];
 }
 
+export interface BatchAssessmentReport {
+  schemaVersion: 2;
+  status: 'completed';
+  source: 'ci/cd';
+  branch: string;
+  commitHash?: string;
+  qualityGate: { mode: 'per-page'; status: QualityGateResult['status']; reason: string };
+  pages: AssessmentReport[];
+}
+
 const METRIC_NAMES: Record<string, string> = {
   m1: 'PNG file size', m2: 'JPEG file size', m3: 'Colorfulness',
   m4: 'CIELab color', m5: 'White space proportion', m6: 'UI segmentation',
@@ -226,6 +236,45 @@ export function buildReport(input: BuildReportInput): AssessmentReport {
   return report;
 }
 
+export function buildBatchReport(
+  pages: AssessmentReport[],
+  branch: string,
+  commitHash?: string,
+): BatchAssessmentReport {
+  const failed = pages.filter((page) => page.qualityGate.status === 'fail').length;
+  const warned = pages.filter((page) => page.qualityGate.status === 'warning').length;
+  let qualityGate: BatchAssessmentReport['qualityGate'];
+  if (failed > 0) {
+    qualityGate = {
+      mode: 'per-page',
+      status: 'fail',
+      reason: `${failed} of ${pages.length} page assessment${pages.length === 1 ? '' : 's'} failed the quality gate.`,
+    };
+  } else if (warned > 0) {
+    qualityGate = {
+      mode: 'per-page',
+      status: 'warning',
+      reason: `${warned} of ${pages.length} page assessment${pages.length === 1 ? '' : 's'} produced a quality warning.`,
+    };
+  } else {
+    qualityGate = {
+      mode: 'per-page',
+      status: 'pass',
+      reason: `All ${pages.length} page assessment${pages.length === 1 ? '' : 's'} passed the quality gate.`,
+    };
+  }
+  const report: BatchAssessmentReport = {
+    schemaVersion: 2,
+    status: 'completed',
+    source: 'ci/cd',
+    branch,
+    qualityGate,
+    pages,
+  };
+  if (commitHash !== undefined) report.commitHash = commitHash;
+  return report;
+}
+
 export function formatSummary(report: AssessmentReport, baselineBranch: string): string {
   const gateDecision = report.qualityGate.status === 'fail'
     ? 'Blocking failure: enforce mode fails when any profile is opposed.'
@@ -266,5 +315,20 @@ export function formatSummary(report: AssessmentReport, baselineBranch: string):
     }
   }
   lines.push('', 'Full results are available in the attached JSON report.');
+  return lines.join('\n');
+}
+
+export function formatBatchSummary(report: BatchAssessmentReport, baselineBranch: string): string {
+  const lines = [
+    'Web UI Assessment', '',
+    `Pages assessed: ${report.pages.length}`,
+    `Overall quality gate: ${report.qualityGate.status.toUpperCase()} (${report.qualityGate.mode})`,
+    `Decision: ${report.qualityGate.reason}`,
+    `Exit code: ${qualityGateExitCode(report.qualityGate)}`,
+  ];
+  report.pages.forEach((page, index) => {
+    const pageLines = formatSummary(page, baselineBranch).split('\n').slice(2);
+    lines.push('', `Page ${index + 1}/${report.pages.length}: ${page.target}`, ...pageLines);
+  });
   return lines.join('\n');
 }

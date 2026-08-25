@@ -2,10 +2,12 @@
 
 ## Purpose
 
-The UIQLab CI client runs a Web UI Assessment against a public preview of a
-commit. It submits the preview URL to the orchestrator, waits for the configured
-metrics, compares the results with the latest compatible assessment from the
-baseline branch, and writes a machine-readable `uiqlab-report.json` artifact.
+The UIQLab CI client runs Web UI Assessments against several routes of a public
+commit preview. It processes the configured pages in order. For each page it
+submits one URL to the orchestrator, waits for that page's profile metrics, and
+compares the results with the same page's latest compatible assessment from the
+baseline branch before starting the next page. The client writes one
+machine-readable `uiqlab-report.json` batch artifact.
 
 For profile-based assessments, the client classifies meaningful metric changes
 against the selected directions and applies the configured quality-gate mode.
@@ -40,16 +42,14 @@ The extension and CI client share the repository-root `.uiqlab.json` file:
 {
   "projectKey": "123e4567-e89b-12d3-a456-426614174000",
   "name": "example-web-app",
-  "assessment": {
-    "mode": "profiles",
-    "profiles": [{ "id": "visual-complexity", "direction": "decrease" }]
-  },
-  "qualityGate": {
-    "mode": "warn"
-  },
   "ci": {
     "branches": ["main", "feature/ui-*", "redesign/**"],
     "baselineBranch": "main",
+    "pages": [
+      { "path": "/", "profile": "general-review", "direction": "observe", "qualityGate": { "mode": "report" } },
+      { "path": "/checkout", "profile": "accessibility", "direction": "reduce-issues", "qualityGate": { "mode": "enforce" } },
+      { "path": "/catalog", "profile": "visual-complexity", "direction": "decrease", "qualityGate": { "mode": "warn" } }
+    ],
     "timeoutMs": 300000,
     "pollIntervalMs": 2000
   }
@@ -60,12 +60,13 @@ The extension and CI client share the repository-root `.uiqlab.json` file:
 | --- | --- | --- |
 | `projectKey` | Yes | UUID shared with the UIQLab extension. |
 | `name` | No | Human-readable project name. |
-| `assessment` | No | Profile selections or custom metrics. See `assessment-profiles.md`. |
-| `qualityGate.mode` | No | `report`, `warn`, or `enforce`. Defaults to `warn`. |
+| `assessment` | No | Existing single-page profile/custom-metric selection and IDE default. Used by CI only when `ci.pages` is omitted. |
+| `qualityGate.mode` | No | Global mode for compatible single-page CI runs: `report`, `warn`, or `enforce`. Defaults to `warn`. |
 | `ci.branches` | Yes | Branches eligible for assessment. Exact names and `*`, `**`, and `?` globs are supported. |
 | `ci.baselineBranch` | No | Branch used for the historical comparison. Defaults to `main`. |
+| `ci.pages` | No | Ordered pages for a multi-page CI run. Each entry requires one route `path`, one of the seven profile IDs in `profile`, an allowed `direction`, and its own `qualityGate.mode`. |
 | `ci.metrics` | No | Legacy manual metric IDs from `m1` through `m14`; treated as custom mode and not allowed with profiles. |
-| `ci.timeoutMs` | No | Maximum time to wait for all metrics. Defaults to 300,000 ms. |
+| `ci.timeoutMs` | No | Maximum time to wait for each page's metrics. Defaults to 300,000 ms. |
 | `ci.pollIntervalMs` | No | Delay between result requests. Defaults to 2,000 ms. |
 
 ## Required CI inputs
@@ -73,15 +74,21 @@ The extension and CI client share the repository-root `.uiqlab.json` file:
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `UIQLAB_ORCHESTRATOR_URL` | Yes | Externally reachable orchestrator base URL. Store it as a CI/CD variable. |
-| `UIQLAB_PREVIEW_URL` | Yes for assessed branches | Public preview URL produced by an earlier job. The assessment service must be able to load it. |
+| `UIQLAB_PREVIEW_URL` | Yes for assessed branches | Public preview base URL produced by an earlier job. Every `ci.pages[].path` is appended to this URL. |
 | `UIQLAB_BRANCH` | Sometimes | Explicit branch override. It is currently required for GitLab merge-request pipelines; see below. |
 | `UIQLAB_COMMIT_SHA` | No | Explicit commit override. Otherwise detected from the CI provider or Git. |
 | `UIQLAB_REPOSITORY_URL` | No | Explicit repository URL override. Otherwise detected automatically. |
 | `UIQLAB_MERGE_REQUEST_ID` | No | Explicit merge-request ID override. GitLab and GitHub metadata are normally detected automatically. |
 
-The preview must not depend on a developer's local machine or an authenticated
-browser session. It must be reachable from the assessment service for the
-duration of the job.
+Page paths must start with `/`, must not contain a query or fragment, and must be
+unique after trailing-slash normalization. The preview must not depend on a
+developer's local machine or an authenticated browser session. Every resulting
+page URL must be reachable from the assessment service for the duration of the
+job. `ci.pages` cannot be combined with `ci.metrics`; profile metric resolution
+and quality-gate evaluation are page-specific. Page gate modes do not inherit
+from the top-level gate. When `ci.pages` is omitted, the client retains the
+existing single-page behavior and assesses the exact `UIQLAB_PREVIEW_URL` using
+the top-level `assessment` selection (or legacy custom metrics) and global gate.
 
 ## GitLab CI
 
@@ -204,10 +211,17 @@ requests may need to skip the assessment or use a separately secured workflow.
 
 ### Successful assessment
 
-The job exits with code `0` when the gate passes, prints profile outcomes and
-metric comparisons, and writes a completed JSON report. A missing baseline does
-not fail the assessment; the run establishes the baseline and is classified as
-`not-comparable`.
+The job exits with code `0` when every page gate passes, prints page-specific
+profile outcomes and metric comparisons, and writes a completed JSON report.
+A missing baseline does not fail a page assessment; that run establishes the
+page's baseline and is classified as `not-comparable`.
+
+Multi-page reports use schema version 2. Their ordered `pages` array contains
+the complete schema-version-1 report for each page, including its target,
+result ID, profile, metrics, comparison, and independently configured page
+quality gate. The top-level gate uses mode `per-page`, reports the most severe
+page gate (`fail`, then `warning`, then `pass`), and determines the process exit
+code.
 
 Exit code `2` is a non-blocking warning produced by `warn` mode for `mixed` or
 `opposed` outcomes and by `enforce` mode for `mixed` outcomes. Exit code `1`
@@ -230,7 +244,7 @@ include:
 - an invalid preview URL;
 - an HTTP, connectivity, timeout, or invalid-JSON error;
 - an orchestrator response without a result ID;
-- an assessment that does not finish before `ci.timeoutMs`;
+- a page assessment that does not finish before its `ci.timeoutMs` deadline;
 - a configured metric that completes without results.
 
 Dependency installation, application build, preview deployment, and artifact

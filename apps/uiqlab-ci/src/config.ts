@@ -10,11 +10,19 @@ export interface CiConfig {
   projectName?: string;
   branches: string[];
   baselineBranch: string;
+  pages: CiPageConfig[];
   metrics: string[];
   assessment: { mode: 'custom' } | { mode: 'profiles'; profiles: AssessmentProfileSelection[] };
   qualityGateMode: QualityGateMode;
   timeoutMs: number;
   pollIntervalMs: number;
+}
+
+export interface CiPageConfig {
+  path: string;
+  profile: AssessmentProfileSelection;
+  metrics: string[];
+  qualityGateMode: QualityGateMode;
 }
 
 interface ProjectConfigFile {
@@ -29,10 +37,60 @@ interface ProjectConfigFile {
   ci?: {
     branches?: unknown;
     baselineBranch?: unknown;
+    pages?: unknown;
     metrics?: unknown;
     timeoutMs?: unknown;
     pollIntervalMs?: unknown;
   };
+}
+
+function resolvePages(value: unknown, filename: string): CiPageConfig[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${filename} ci.pages must contain one or more page configurations.`);
+  }
+
+  const pages: CiPageConfig[] = [];
+  const paths = new Set<string>();
+  for (let index = 0; index < value.length; index += 1) {
+    const item = value[index];
+    const location = `${filename} ci.pages[${index}]`;
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw new Error(`${location} must contain a path, profile, direction, and qualityGate.mode.`);
+    }
+    const { path, profile, direction, qualityGate } = item as {
+      path?: unknown;
+      profile?: unknown;
+      direction?: unknown;
+      qualityGate?: { mode?: unknown };
+    };
+    if (typeof path !== 'string' || !path.startsWith('/') || path.includes('?') || path.includes('#')) {
+      throw new Error(`${location}.path must be a route path starting with "/" and without a query or fragment.`);
+    }
+    const normalizedPath = path === '/' ? path : path.replace(/\/+$/, '');
+    if (normalizedPath.length === 0) {
+      throw new Error(`${location}.path must be a route path starting with "/".`);
+    }
+    if (paths.has(normalizedPath)) {
+      throw new Error(`${filename} ci.pages must not contain duplicate path "${normalizedPath}".`);
+    }
+    const resolved = resolveAssessmentProfiles(
+      [{ id: profile, direction }],
+      location,
+    );
+    const selection = resolved.profiles[0];
+    if (!selection) throw new Error(`${location} must contain a profile and direction.`);
+    if (typeof qualityGate !== 'object' || qualityGate === null || Array.isArray(qualityGate)) {
+      throw new Error(`${location}.qualityGate must be an object containing mode.`);
+    }
+    const qualityGateMode = qualityGate.mode;
+    if (qualityGateMode !== 'report' && qualityGateMode !== 'warn' && qualityGateMode !== 'enforce') {
+      throw new Error(`${location}.qualityGate.mode must be one of: report, warn, enforce.`);
+    }
+    paths.add(normalizedPath);
+    pages.push({ path: normalizedPath, profile: selection, metrics: resolved.metrics, qualityGateMode });
+  }
+  return pages;
 }
 
 function escapeRegex(value: string): string {
@@ -81,6 +139,11 @@ export async function loadConfig(filename: string): Promise<CiConfig> {
     throw new Error(`${filename} cannot combine assessment.profiles with custom metrics.`);
   }
 
+  const pages = resolvePages(parsed.ci?.pages, filename);
+  if (pages.length > 0 && parsed.ci?.metrics !== undefined) {
+    throw new Error(`${filename} cannot combine ci.pages with ci.metrics; every page gets its metrics from its profile.`);
+  }
+
   const resolvedProfiles = assessment?.mode === 'profiles'
     ? resolveAssessmentProfiles(assessment.profiles, `${filename} assessment.profiles`)
     : undefined;
@@ -108,6 +171,7 @@ export async function loadConfig(filename: string): Promise<CiConfig> {
     projectKey: parsed.projectKey,
     branches,
     baselineBranch: typeof parsed.ci?.baselineBranch === 'string' ? parsed.ci.baselineBranch : 'main',
+    pages,
     metrics: metricsValue,
     assessment: resolvedProfiles
       ? { mode: 'profiles', profiles: resolvedProfiles.profiles }
