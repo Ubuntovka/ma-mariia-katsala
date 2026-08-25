@@ -40,23 +40,49 @@ test('resolves profiles to unique metric IDs and retains their intent', async ()
   assert.equal(config.qualityGateMode, 'warn');
 });
 
-test('loads ordered CI pages with one resolved profile per page', async () => {
+test('loads ordered CI pages with independently resolved profile groups and gates', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'uiqlab-ci-'));
   const filename = join(directory, '.uiqlab.json');
   await writeFile(filename, JSON.stringify({
     projectKey: '123e4567-e89b-12d3-a456-426614174000',
     ci: { branches: ['main'], pages: [
-      { path: '/', profile: 'general-review', direction: 'observe', qualityGate: { mode: 'report' } },
-      { path: '/checkout/', profile: 'accessibility', direction: 'reduce-issues', qualityGate: { mode: 'enforce' } },
-      { path: '/catalog', profile: 'colour-expression', direction: 'more-vivid', qualityGate: { mode: 'warn' } },
+      { path: '/', profiles: [{ id: 'general-review', direction: 'observe' }], qualityGate: { mode: 'report' } },
+      { path: '/checkout/', profiles: [
+        { id: 'accessibility', direction: 'reduce-issues' },
+        { id: 'content-density', direction: 'decrease' },
+      ], qualityGate: { mode: 'enforce' } },
+      { path: '/catalog', profiles: [
+        { id: 'colour-expression', direction: 'more-vivid' },
+        { id: 'aesthetic-impression', direction: 'increase' },
+      ], qualityGate: { mode: 'warn' } },
     ] },
   }));
   const config = await loadConfig(filename);
   assert.deepEqual(config.pages, [
-    { path: '/', profile: { id: 'general-review', direction: 'observe' }, metrics: ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14'], qualityGateMode: 'report' },
-    { path: '/checkout', profile: { id: 'accessibility', direction: 'reduce-issues' }, metrics: ['m13'], qualityGateMode: 'enforce' },
-    { path: '/catalog', profile: { id: 'colour-expression', direction: 'more-vivid' }, metrics: ['m3', 'm4'], qualityGateMode: 'warn' },
+    { path: '/', profiles: [{ id: 'general-review', direction: 'observe' }], metrics: ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14'], qualityGateMode: 'report' },
+    { path: '/checkout', profiles: [
+      { id: 'accessibility', direction: 'reduce-issues' },
+      { id: 'content-density', direction: 'decrease' },
+    ], metrics: ['m13', 'm8', 'm5', 'm10'], qualityGateMode: 'enforce' },
+    { path: '/catalog', profiles: [
+      { id: 'colour-expression', direction: 'more-vivid' },
+      { id: 'aesthetic-impression', direction: 'increase' },
+    ], metrics: ['m3', 'm4', 'm14'], qualityGateMode: 'warn' },
   ]);
+});
+
+test('keeps singular page profile configuration compatible', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'uiqlab-ci-'));
+  const filename = join(directory, '.uiqlab.json');
+  await writeFile(filename, JSON.stringify({
+    projectKey: '123e4567-e89b-12d3-a456-426614174000',
+    ci: { branches: ['main'], pages: [
+      { path: '/', profile: 'accessibility', direction: 'reduce-issues', qualityGate: { mode: 'enforce' } },
+    ] },
+  }));
+  assert.deepEqual((await loadConfig(filename)).pages[0], {
+    path: '/', profiles: [{ id: 'accessibility', direction: 'reduce-issues' }], metrics: ['m13'], qualityGateMode: 'enforce',
+  });
 });
 
 test('rejects invalid or duplicate CI page configurations', async () => {
@@ -80,6 +106,13 @@ test('rejects invalid or duplicate CI page configurations', async () => {
   await assert.rejects(loadConfig(filename), /qualityGate must be an object containing mode/);
   await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [{ path: '/', profile: 'accessibility', direction: 'observe', qualityGate: { mode: 'strict' } }] } }));
   await assert.rejects(loadConfig(filename), /qualityGate\.mode must be one of: report, warn, enforce/);
+  await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [{ path: '/', profiles: [{ id: 'accessibility', direction: 'observe' }], profile: 'visual-complexity', direction: 'decrease', qualityGate: { mode: 'warn' } }] } }));
+  await assert.rejects(loadConfig(filename), /cannot combine profiles with the legacy profile\/direction fields/);
+  await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [{ path: '/', profiles: [
+    { id: 'accessibility', direction: 'observe' },
+    { id: 'accessibility', direction: 'preserve' },
+  ], qualityGate: { mode: 'warn' } }] } }));
+  await assert.rejects(loadConfig(filename), /must not select profile "accessibility" more than once/);
 });
 
 test('loads all quality gate modes and rejects unknown modes', async () => {

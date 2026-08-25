@@ -46,9 +46,14 @@ The extension and CI client share the repository-root `.uiqlab.json` file:
     "branches": ["main", "feature/ui-*", "redesign/**"],
     "baselineBranch": "main",
     "pages": [
-      { "path": "/", "profile": "general-review", "direction": "observe", "qualityGate": { "mode": "report" } },
-      { "path": "/checkout", "profile": "accessibility", "direction": "reduce-issues", "qualityGate": { "mode": "enforce" } },
-      { "path": "/catalog", "profile": "visual-complexity", "direction": "decrease", "qualityGate": { "mode": "warn" } }
+      {
+        "path": "/checkout",
+        "profiles": [
+          { "id": "accessibility", "direction": "reduce-issues" },
+          { "id": "content-density", "direction": "decrease" }
+        ],
+        "qualityGate": { "mode": "enforce" }
+      }
     ],
     "timeoutMs": 300000,
     "pollIntervalMs": 2000
@@ -64,7 +69,7 @@ The extension and CI client share the repository-root `.uiqlab.json` file:
 | `qualityGate.mode` | No | Global mode for compatible single-page CI runs: `report`, `warn`, or `enforce`. Defaults to `warn`. |
 | `ci.branches` | Yes | Branches eligible for assessment. Exact names and `*`, `**`, and `?` globs are supported. |
 | `ci.baselineBranch` | No | Branch used for the historical comparison. Defaults to `main`. |
-| `ci.pages` | No | Ordered pages for a multi-page CI run. Each entry requires one route `path`, one of the seven profile IDs in `profile`, an allowed `direction`, and its own `qualityGate.mode`. |
+| `ci.pages` | No | Ordered pages for a multi-page CI run. Each entry requires one route `path`, a non-empty `profiles` array containing profile IDs and directions, and its own `qualityGate.mode`. |
 | `ci.metrics` | No | Legacy manual metric IDs from `m1` through `m14`; treated as custom mode and not allowed with profiles. |
 | `ci.timeoutMs` | No | Maximum time to wait for each page's metrics. Defaults to 300,000 ms. |
 | `ci.pollIntervalMs` | No | Delay between result requests. Defaults to 2,000 ms. |
@@ -89,6 +94,8 @@ and quality-gate evaluation are page-specific. Page gate modes do not inherit
 from the top-level gate. When `ci.pages` is omitted, the client retains the
 existing single-page behavior and assesses the exact `UIQLAB_PREVIEW_URL` using
 the top-level `assessment` selection (or legacy custom metrics) and global gate.
+The earlier singular page `profile` and `direction` fields remain accepted for
+configuration compatibility.
 
 ## GitLab CI
 
@@ -218,7 +225,7 @@ page's baseline and is classified as `not-comparable`.
 
 Multi-page reports use schema version 2. Their ordered `pages` array contains
 the complete schema-version-1 report for each page, including its target,
-result ID, profile, metrics, comparison, and independently configured page
+result ID, profiles, metrics, comparison, and independently configured page
 quality gate. The top-level gate uses mode `per-page`, reports the most severe
 page gate (`fail`, then `warning`, then `pass`), and determines the process exit
 code.
@@ -226,6 +233,9 @@ code.
 Exit code `2` is a non-blocking warning produced by `warn` mode for `mixed` or
 `opposed` outcomes and by `enforce` mode for `mixed` outcomes. Exit code `1`
 represents either an enforced `opposed` outcome or a technical failure.
+For pages with multiple profiles, one opposed profile is sufficient to fail an
+`enforce` page; one opposed or mixed profile is sufficient to warn a `warn`
+page.
 
 ### Skipped assessment
 

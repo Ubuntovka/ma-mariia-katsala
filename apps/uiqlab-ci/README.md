@@ -24,9 +24,14 @@ extension and add `ci` settings:
     "branches": ["main", "feature/ui-*", "redesign/**"],
     "baselineBranch": "main",
     "pages": [
-      { "path": "/", "profile": "general-review", "direction": "observe", "qualityGate": { "mode": "report" } },
-      { "path": "/checkout", "profile": "accessibility", "direction": "reduce-issues", "qualityGate": { "mode": "enforce" } },
-      { "path": "/catalog", "profile": "visual-complexity", "direction": "decrease", "qualityGate": { "mode": "warn" } }
+      {
+        "path": "/checkout",
+        "profiles": [
+          { "id": "accessibility", "direction": "reduce-issues" },
+          { "id": "content-density", "direction": "decrease" }
+        ],
+        "qualityGate": { "mode": "enforce" }
+      }
     ]
   }
 }
@@ -37,11 +42,13 @@ successfully with a skipped report when the current branch does not match. See
 the repository's `.uiqlab.example.json` for a complete example.
 
 `ci.pages` is processed in array order. Each `path` starts with `/` and is
-resolved relative to `UIQLAB_PREVIEW_URL`; each page must select exactly one of
-the seven profile IDs, one direction allowed by that profile, and its own
-`qualityGate.mode`. The client fully submits, polls, and reports one page before
-requesting the next page from the orchestrator. The timeout applies separately
-to each page. If `ci.pages` is omitted, the existing single-page
+resolved relative to `UIQLAB_PREVIEW_URL`; each page must select one or more of
+the seven profile IDs, one direction per profile, and its own
+`qualityGate.mode`. Metrics shared by multiple profiles are requested only once.
+The client fully submits, polls, and reports one page before requesting the next
+page from the orchestrator. The timeout applies separately to each page. The
+earlier singular `profile`/`direction` fields remain accepted. If `ci.pages` is
+omitted, the existing single-page
 `assessment`/custom-metric configuration, global `qualityGate.mode`, and exact
 preview URL continue to work.
 
@@ -50,6 +57,10 @@ must specify one; the legacy single-page global mode defaults to `warn`.
 The CLI uses exit code `0` for a pass, `1` for a blocking gate or technical
 failure, and `2` for a non-blocking warning. A first run without a compatible
 baseline passes and establishes the baseline.
+
+For a page in `enforce` mode, any `opposed` profile fails the page; if none are
+opposed but at least one is `mixed`, the page warns. In `warn` mode, any
+`opposed` or `mixed` profile warns. `report` mode never blocks or warns.
 
 ## Required pipeline inputs
 

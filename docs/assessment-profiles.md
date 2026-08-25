@@ -90,7 +90,8 @@ profile outcome.
 ## Profile configuration
 
 For a multi-page CI assessment, configure an ordered `ci.pages` array. Every
-page has exactly one of the seven profile IDs and one allowed direction:
+page has one or more of the seven profile IDs and one allowed direction for each
+profile:
 
 ```json
 {
@@ -100,16 +101,23 @@ page has exactly one of the seven profile IDs and one allowed direction:
     "branches": ["main", "feature/ui-*"],
     "baselineBranch": "main",
     "pages": [
-      { "path": "/", "profile": "general-review", "direction": "observe", "qualityGate": { "mode": "report" } },
-      { "path": "/checkout", "profile": "accessibility", "direction": "reduce-issues", "qualityGate": { "mode": "enforce" } }
+      {
+        "path": "/checkout",
+        "profiles": [
+          { "id": "accessibility", "direction": "reduce-issues" },
+          { "id": "content-density", "direction": "decrease" }
+        ],
+        "qualityGate": { "mode": "enforce" }
+      }
     ]
   }
 }
 ```
 
-The CI client resolves each page profile and quality-gate mode independently and
-submits one orchestrator assessment at a time. A page's direction, resolved
-metrics, and gate policy cannot leak into another page. The top-level
+The CI client resolves each page's profiles and quality-gate mode independently,
+de-duplicates overlapping metric IDs, and submits one orchestrator assessment
+at a time. A page's directions, resolved metrics, and gate policy cannot leak
+into another page. The top-level
 `assessment` and `qualityGate` configuration remains available as the IDE
 default and for the compatible single-page CI mode. Set `assessment.mode` to
 `profiles` and provide one or more profile selections:
@@ -230,8 +238,9 @@ Configuration loading fails with a descriptive error when:
 - custom metrics are missing, duplicated, or outside `m1` through `m14`;
 - `ci.pages` is empty, contains an invalid or duplicate route path, or is
   combined with legacy `ci.metrics`;
-- a CI page is missing its profile, direction, or `qualityGate.mode`, uses a
-  direction not supported by that profile, or uses an unknown gate mode.
+- a CI page has no profiles, repeats a profile, is missing a profile direction
+  or `qualityGate.mode`, uses an unsupported direction, or uses an unknown gate
+  mode.
 
 Both the CI client and IDE extension validate configuration selections. The IDE
 extension also validates selections submitted from the sidebar before starting
@@ -273,10 +282,10 @@ Profile IDs and directions are retained so future CI and IDE features can
 explain results in the context of the user's intent.
 
 Multi-page CI output uses report schema version 2. Its ordered `pages` array
-contains one complete page report, with one profile selection, per orchestrator
-run. Each page report retains its configured `report`, `warn`, or `enforce`
-mode. The batch quality gate uses mode `per-page` and reflects the most severe
-page gate.
+contains one complete page report with all profile selections for that
+orchestrator run. Each page report retains its configured `report`, `warn`, or
+`enforce` mode. The batch quality gate uses mode `per-page` and reflects the
+most severe page gate.
 
 ## Quality gate
 
@@ -292,6 +301,12 @@ runs and defaults to `warn`. Report mode always exits successfully; warn mode
 returns a non-blocking warning for mixed or opposed outcomes; enforce mode
 blocks opposed outcomes and warns for mixed outcomes. The gate does not
 calculate an overall quality score.
+
+With multiple profiles on one page, `enforce` fails when at least one profile is
+`opposed`; it warns when none are opposed but at least one is `mixed`. `warn`
+produces a warning when at least one profile is `opposed` or `mixed`. Requiring
+all profiles to be opposed would allow one regression to be hidden by unrelated
+profile improvements.
 
 LLM explanations remain outside the quality-gate flow.
 

@@ -20,7 +20,7 @@ export interface CiConfig {
 
 export interface CiPageConfig {
   path: string;
-  profile: AssessmentProfileSelection;
+  profiles: AssessmentProfileSelection[];
   metrics: string[];
   qualityGateMode: QualityGateMode;
 }
@@ -56,10 +56,11 @@ function resolvePages(value: unknown, filename: string): CiPageConfig[] {
     const item = value[index];
     const location = `${filename} ci.pages[${index}]`;
     if (typeof item !== 'object' || item === null || Array.isArray(item)) {
-      throw new Error(`${location} must contain a path, profile, direction, and qualityGate.mode.`);
+      throw new Error(`${location} must contain a path, profiles, and qualityGate.mode.`);
     }
-    const { path, profile, direction, qualityGate } = item as {
+    const { path, profiles, profile, direction, qualityGate } = item as {
       path?: unknown;
+      profiles?: unknown;
       profile?: unknown;
       direction?: unknown;
       qualityGate?: { mode?: unknown };
@@ -74,12 +75,13 @@ function resolvePages(value: unknown, filename: string): CiPageConfig[] {
     if (paths.has(normalizedPath)) {
       throw new Error(`${filename} ci.pages must not contain duplicate path "${normalizedPath}".`);
     }
+    if (profiles !== undefined && (profile !== undefined || direction !== undefined)) {
+      throw new Error(`${location} cannot combine profiles with the legacy profile/direction fields.`);
+    }
     const resolved = resolveAssessmentProfiles(
-      [{ id: profile, direction }],
-      location,
+      profiles ?? [{ id: profile, direction }],
+      profiles !== undefined ? `${location}.profiles` : location,
     );
-    const selection = resolved.profiles[0];
-    if (!selection) throw new Error(`${location} must contain a profile and direction.`);
     if (typeof qualityGate !== 'object' || qualityGate === null || Array.isArray(qualityGate)) {
       throw new Error(`${location}.qualityGate must be an object containing mode.`);
     }
@@ -88,7 +90,7 @@ function resolvePages(value: unknown, filename: string): CiPageConfig[] {
       throw new Error(`${location}.qualityGate.mode must be one of: report, warn, enforce.`);
     }
     paths.add(normalizedPath);
-    pages.push({ path: normalizedPath, profile: selection, metrics: resolved.metrics, qualityGateMode });
+    pages.push({ path: normalizedPath, profiles: resolved.profiles, metrics: resolved.metrics, qualityGateMode });
   }
   return pages;
 }
@@ -141,7 +143,7 @@ export async function loadConfig(filename: string): Promise<CiConfig> {
 
   const pages = resolvePages(parsed.ci?.pages, filename);
   if (pages.length > 0 && parsed.ci?.metrics !== undefined) {
-    throw new Error(`${filename} cannot combine ci.pages with ci.metrics; every page gets its metrics from its profile.`);
+    throw new Error(`${filename} cannot combine ci.pages with ci.metrics; every page gets its metrics from its profiles.`);
   }
 
   const resolvedProfiles = assessment?.mode === 'profiles'

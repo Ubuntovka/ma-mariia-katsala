@@ -129,7 +129,7 @@ async function main(): Promise<void> {
   if (!meta.branch) throw new Error('Could not determine the CI branch. Set UIQLAB_BRANCH.');
   if (!matchesBranch(meta.branch, config.branches)) {
     const skipped = activeBatch
-      ? { schemaVersion: 2, status: 'skipped', reason: `Branch ${meta.branch} does not match ci.branches.`, branch: meta.branch, source: 'ci/cd', pages: config.pages.map((page) => ({ path: page.path, assessment: { mode: 'profiles', profiles: [page.profile] }, qualityGate: { mode: page.qualityGateMode, status: 'pass', reason: 'The branch trigger skipped this page assessment.' } })), qualityGate: { mode: 'per-page', status: 'pass', reason: 'The branch trigger skipped this assessment.' } }
+      ? { schemaVersion: 2, status: 'skipped', reason: `Branch ${meta.branch} does not match ci.branches.`, branch: meta.branch, source: 'ci/cd', pages: config.pages.map((page) => ({ path: page.path, assessment: { mode: 'profiles', profiles: page.profiles }, qualityGate: { mode: page.qualityGateMode, status: 'pass', reason: 'The branch trigger skipped this page assessment.' } })), qualityGate: { mode: 'per-page', status: 'pass', reason: 'The branch trigger skipped this assessment.' } }
       : { schemaVersion: 1, status: 'skipped', reason: `Branch ${meta.branch} does not match ci.branches.`, branch: meta.branch, source: 'ci/cd', assessment: config.assessment, profileOutcomes: [], qualityGate: { mode: config.qualityGateMode, status: 'pass', reason: 'The branch trigger skipped this assessment.' } };
     await writeFile(reportPath, `${JSON.stringify(skipped, null, 2)}\n`);
     console.log(`Web UI Assessment\n\nSkipped: branch "${meta.branch}" does not match ci.branches.`);
@@ -149,7 +149,7 @@ async function main(): Promise<void> {
     ? config.pages.map((page) => ({
       target: pageTarget(previewUrl, page.path),
       metrics: page.metrics,
-      assessment: { mode: 'profiles', profiles: [page.profile] },
+      assessment: { mode: 'profiles', profiles: page.profiles },
       qualityGateMode: page.qualityGateMode,
     }))
     : [{ target: previewUrl, metrics: config.metrics, assessment: config.assessment, qualityGateMode: config.qualityGateMode }];

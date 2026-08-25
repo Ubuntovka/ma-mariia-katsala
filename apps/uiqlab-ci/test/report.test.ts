@@ -125,3 +125,27 @@ test('applies the gate mode independently to each page', () => {
   assert.equal(enforced.qualityGate.status, 'fail');
   assert.equal(buildBatchReport([reported, enforced], 'main').qualityGate.status, 'fail');
 });
+
+test('fails an enforced page when any one of its profiles is opposed', () => {
+  const input = {
+    target: 'https://example.com/checkout', branch: 'main', resultId: 'checkout', baselineBranch: 'main',
+    results: [
+      { metric_id: 'm13_accessibility', results: [{ violations: [{ id: 'label', nodes: [{}, {}] }] }] },
+      { metric_id: 'm14_nima', results: [{ mean: 5.5 }] },
+    ],
+    history: { baselineRun: { id: 1 }, metrics: {
+      m13_accessibility: { results: [{ violations: [{ id: 'label', nodes: [{}] }] }] },
+      m14_nima: { results: [{ mean: 5 }] },
+    } },
+    assessment: { mode: 'profiles' as const, profiles: [
+      { id: 'accessibility', direction: 'reduce-issues' },
+      { id: 'aesthetic-impression', direction: 'increase' },
+    ] },
+  };
+  const enforced = buildReport({ ...input, qualityGateMode: 'enforce' });
+  assert.deepEqual(enforced.profileOutcomes.map((profile) => profile.outcome), ['opposed', 'aligned']);
+  assert.equal(enforced.qualityGate.status, 'fail');
+  assert.match(enforced.qualityGate.reason, /1 profile opposed/);
+  assert.equal(buildReport({ ...input, qualityGateMode: 'warn' }).qualityGate.status, 'warning');
+  assert.equal(buildReport({ ...input, qualityGateMode: 'report' }).qualityGate.status, 'pass');
+});
