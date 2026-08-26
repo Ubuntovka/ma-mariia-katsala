@@ -322,7 +322,7 @@ LLM explanations remain outside the quality-gate flow.
 - `apps/uiqlab-assessment/src/profileAssessment.ts`: deterministic IDE profile outcome and overall-goal classification.
 - `apps/uiqlab-assessment/src/projectConfig.ts`: IDE configuration parsing and validation.
 - `apps/orchestrator/main.py`: assessment metadata persistence and run summaries.
-- `.uiqlab.example.json`: example profile configuration.
+- `docs/uiqlab.example.json`: example profile configuration.
 
 ## Verification
 

@@ -34,7 +34,8 @@
           }
         ],
         "qualityGate": {
-          "mode": "enforce"
+          "mode": "enforce",
+          "requireBaseline": true
         }
       },
       {
@@ -50,9 +51,12 @@
           }
         ],
         "qualityGate": {
-          "mode": "warn"
+          "mode": "warn",
+          "requireBaseline": false
         }
       }
-    ]
+    ],
+    "timeoutMs": 300000,
+    "pollIntervalMs": 2000
   }
 }

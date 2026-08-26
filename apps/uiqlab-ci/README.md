@@ -32,7 +32,7 @@ extension and add `ci` settings:
           { "id": "accessibility", "direction": "reduce-issues" },
           { "id": "content-density", "direction": "decrease" }
         ],
-        "qualityGate": { "mode": "enforce" }
+        "qualityGate": { "mode": "enforce", "requireBaseline": true }
       }
     ]
   }
@@ -41,7 +41,8 @@ extension and add `ci` settings:
 
 `branches` accepts exact names plus `*`, `**`, and `?` globs. The CLI exits
 successfully with a skipped report when the current branch does not match. See
-the repository's `.uiqlab.example.json` for a complete example.
+[`docs/uiqlab.example.json`](../../docs/uiqlab.example.json) for a complete
+example.
 
 `ci.pages` is processed in array order. Each `path` starts with `/` and is
 resolved relative to `UIQLAB_PREVIEW_URL`; each page must select one or more of
@@ -58,7 +59,9 @@ Quality-gate modes are `report`, `warn`, and `enforce`. Every multi-page entry
 must specify one; the legacy single-page global mode defaults to `warn`.
 The CLI uses exit code `0` for a pass, `1` for a blocking gate or technical
 failure, and `2` for a non-blocking warning. A first run without a compatible
-baseline passes and establishes the baseline.
+baseline passes and establishes the baseline unless `qualityGate.requireBaseline`
+is `true`; that option fails a run without a compatible baseline in every gate
+mode.
 
 For a page in `enforce` mode, any `opposed` profile fails the page; if none are
 opposed but at least one is `mixed`, the page warns. In `warn` mode, any
@@ -86,8 +89,12 @@ node apps/uiqlab-ci/dist/src/cli.js
 ```
 
 Optional flags are `--config`, `--report`, `--html-report`, `--url`, `--branch`,
-and `--orchestrator-url`. The report paths can also be set with `UIQLAB_REPORT`
-and `UIQLAB_HTML_REPORT`.
+`--orchestrator-url`, and `--warning-exit-code`. The warning code accepts `0` or
+`2` and can also be set with `UIQLAB_WARNING_EXIT_CODE`. The report paths can be
+set with `UIQLAB_REPORT` and `UIQLAB_HTML_REPORT`. See the
+[complete CI integration reference](../../docs/ci-integration.md) for every
+configuration field, environment variable, profile direction, and GitLab YAML
+option.
 
 `uiqlab-report.html` is responsive and self-contained: its styling is embedded,
 it uses no JavaScript, and visual metric files are downloaded and embedded while
@@ -120,6 +127,8 @@ web-ui-assessment:
   needs:
     - job: ui-preview
       artifacts: true
+  before_script:
+    - if [ -n "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" ]; then export UIQLAB_BRANCH="$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"; else export UIQLAB_BRANCH="$CI_COMMIT_BRANCH"; fi
   script:
     - npm ci --prefix apps/uiqlab-ci
     - npm run build --prefix apps/uiqlab-ci
