@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildReport, formatSummary, primaryValue, type AssessmentHistory, type MetricResult } from '../src/report.js';
+import { buildBatchReport, buildFailedPageReport, buildReport, formatBatchSummary, formatSummary, primaryValue, type AssessmentHistory, type MetricResult } from '../src/report.js';
 
 test('extracts the CI summary values used by the default metrics', () => {
   assert.equal(primaryValue('m10_feature_congestion', [{ feature_congestion: 0.48 }]), 0.48);
@@ -60,6 +60,44 @@ test('includes metric comparisons, profile outcomes and final gate status', () =
   assert.match(summary, /Outcome: MIXED/);
   assert.match(summary, /Edge density decreased: 0\.2 → 0\.15.*aligned with the profile goal/);
   assert.match(summary, /Feature congestion increased: 4 → 5\.2.*opposed to the profile goal/);
+  assert.match(formatSummary(report, 'main', 0), /Exit code: 0/);
+});
+
+test('blocks a report when its configured baseline is required but missing', () => {
+  const report = buildReport({
+    target: 'https://example.com', branch: 'feature/ui', resultId: 'job', baselineBranch: 'main',
+    results: [{ metric_id: 'm14_nima', results: [{ mean: 5.2 }] }],
+    history: {},
+    assessment: { mode: 'profiles', profiles: [{ id: 'aesthetic-impression', direction: 'increase' }] },
+    qualityGateMode: 'enforce',
+    requireBaseline: true,
+  });
+  assert.equal(report.qualityGate.status, 'fail');
+  assert.equal(report.qualityGate.requireBaseline, true);
+  assert.match(report.qualityGate.reason, /baseline is required/);
+});
+
+test('retains completed pages when another page fails technically', () => {
+  const completed = buildReport({
+    target: 'https://example.com/', branch: 'main', resultId: 'home', baselineBranch: 'main',
+    results: [], history: {}, assessment: { mode: 'profiles', profiles: [{ id: 'general-review', direction: 'observe' }] },
+    qualityGateMode: 'report',
+  });
+  const failed = buildFailedPageReport({
+    target: 'https://example.com/checkout', branch: 'main', commitHash: 'abc',
+    assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'reduce-issues' }] },
+    qualityGateMode: 'enforce', requireBaseline: true, reason: 'Result endpoint timed out.',
+  });
+  const batch = buildBatchReport([completed, failed], 'main', 'abc');
+  assert.equal(batch.status, 'failed');
+  assert.equal(batch.pages[0]?.status, 'completed');
+  assert.equal(batch.pages[1]?.status, 'failed');
+  assert.equal(batch.qualityGate.status, 'fail');
+  assert.match(batch.qualityGate.reason, /1 of 2 page assessments failed technically/);
+  const summary = formatBatchSummary(batch, 'main');
+  assert.match(summary, /Page 1\/2: https:\/\/example\.com\//);
+  assert.match(summary, /Page 2\/2: https:\/\/example\.com\/checkout/);
+  assert.match(summary, /Result endpoint timed out/);
 });
 
 test('explains why an enforced opposed profile blocks the job', () => {
@@ -75,9 +113,77 @@ test('explains why an enforced opposed profile blocks the job', () => {
   const report = buildReport({ target: 'https://example.com/projects', branch: 'feature/ui-density', resultId: 'job', baselineBranch: 'main', results, history, assessment, qualityGateMode: 'enforce' });
   const summary = formatSummary(report, 'main');
   assert.match(summary, /Quality gate: FAIL \(enforce\)/);
-  assert.match(summary, /Blocking failure: enforce mode fails when any profile is opposed/);
+  assert.match(summary, /Blocking failure: 1 profile opposed the configured direction/);
   assert.match(summary, /Exit code: 1/);
   assert.match(summary, /Outcome: OPPOSED/);
   assert.match(summary, /Word count decreased: 519 → 303.*opposed to the profile goal/);
   assert.match(summary, /Feature congestion decreased: 15\.333 → 12\.577.*opposed to the profile goal/);
+});
+
+test('aggregates page reports and uses the most severe page quality gate', () => {
+  const passing = buildReport({
+    target: 'https://example.com/', branch: 'main', resultId: 'home', baselineBranch: 'main',
+    results: [], history: {}, assessment: { mode: 'profiles', profiles: [{ id: 'general-review', direction: 'observe' }] },
+    qualityGateMode: 'report',
+  });
+  const warning = buildReport({
+    target: 'https://example.com/checkout', branch: 'main', resultId: 'checkout', baselineBranch: 'main',
+    results: [{ metric_id: 'm13_accessibility', results: [{ violations: [{ id: 'label', nodes: [{}, {}] }] }] }],
+    history: { baselineRun: { id: 1 }, metrics: { m13_accessibility: { results: [{ violations: [{ id: 'label', nodes: [{}] }] }] } } },
+    assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'reduce-issues' }] },
+    qualityGateMode: 'warn',
+  });
+  const report = buildBatchReport([passing, warning], 'main', 'abc');
+  assert.equal(report.schemaVersion, 2);
+  assert.equal(report.pages.length, 2);
+  assert.equal(report.pages[0]?.qualityGate.mode, 'report');
+  assert.equal(report.pages[1]?.qualityGate.mode, 'warn');
+  assert.equal(report.qualityGate.mode, 'per-page');
+  assert.equal(report.qualityGate.status, 'warning');
+  assert.match(report.qualityGate.reason, /1 of 2 page assessments/);
+  const summary = formatBatchSummary(report, 'main');
+  assert.match(summary, /Pages assessed: 2/);
+  assert.match(summary, /Page 1\/2: https:\/\/example\.com\//);
+  assert.match(summary, /Page 2\/2: https:\/\/example\.com\/checkout/);
+  assert.match(summary, /Overall quality gate: WARNING/);
+});
+
+test('applies the gate mode independently to each page', () => {
+  const common = {
+    branch: 'main', baselineBranch: 'main',
+    results: [{ metric_id: 'm13_accessibility', results: [{ violations: [{ id: 'label', nodes: [{}, {}] }] }] }],
+    history: { baselineRun: { id: 1 }, metrics: { m13_accessibility: { results: [{ violations: [{ id: 'label', nodes: [{}] }] }] } } },
+    assessment: { mode: 'profiles' as const, profiles: [{ id: 'accessibility', direction: 'reduce-issues' }] },
+  };
+  const reported = buildReport({ ...common, target: 'https://example.com/help', resultId: 'help', qualityGateMode: 'report' });
+  const enforced = buildReport({ ...common, target: 'https://example.com/checkout', resultId: 'checkout', qualityGateMode: 'enforce' });
+  assert.equal(reported.profileOutcomes[0]?.outcome, 'opposed');
+  assert.equal(reported.qualityGate.status, 'pass');
+  assert.equal(enforced.profileOutcomes[0]?.outcome, 'opposed');
+  assert.equal(enforced.qualityGate.status, 'fail');
+  assert.equal(buildBatchReport([reported, enforced], 'main').qualityGate.status, 'fail');
+});
+
+test('fails an enforced page when any one of its profiles is opposed', () => {
+  const input = {
+    target: 'https://example.com/checkout', branch: 'main', resultId: 'checkout', baselineBranch: 'main',
+    results: [
+      { metric_id: 'm13_accessibility', results: [{ violations: [{ id: 'label', nodes: [{}, {}] }] }] },
+      { metric_id: 'm14_nima', results: [{ mean: 5.5 }] },
+    ],
+    history: { baselineRun: { id: 1 }, metrics: {
+      m13_accessibility: { results: [{ violations: [{ id: 'label', nodes: [{}] }] }] },
+      m14_nima: { results: [{ mean: 5 }] },
+    } },
+    assessment: { mode: 'profiles' as const, profiles: [
+      { id: 'accessibility', direction: 'reduce-issues' },
+      { id: 'aesthetic-impression', direction: 'increase' },
+    ] },
+  };
+  const enforced = buildReport({ ...input, qualityGateMode: 'enforce' });
+  assert.deepEqual(enforced.profileOutcomes.map((profile) => profile.outcome), ['opposed', 'aligned']);
+  assert.equal(enforced.qualityGate.status, 'fail');
+  assert.match(enforced.qualityGate.reason, /1 profile opposed/);
+  assert.equal(buildReport({ ...input, qualityGateMode: 'warn' }).qualityGate.status, 'warning');
+  assert.equal(buildReport({ ...input, qualityGateMode: 'report' }).qualityGate.status, 'pass');
 });

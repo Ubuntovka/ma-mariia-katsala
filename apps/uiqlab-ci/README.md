@@ -1,9 +1,12 @@
 # UIQLab CI client
 
-This client makes a CI/CD pipeline another UIQLab assessment source. It submits
-a public preview URL to the orchestrator, waits for all selected metrics, compares
-them with the latest compatible assessment from the configured baseline branch,
-prints a short job summary, and writes the complete `uiqlab-report.json` artifact.
+This client makes a CI/CD pipeline another UIQLab assessment source. It accepts
+one public preview containing several configured page routes, assesses those
+pages sequentially through the orchestrator, compares every page with its own
+latest compatible assessment from the configured baseline branch, prints a job
+summary, and writes a polished `uiqlab-report.html` visual artifact alongside
+the complete machine-readable `uiqlab-report.json` artifact. Both files are
+created for completed, skipped, and technically failed assessments.
 
 For profile-based assessments, the client deterministically classifies material
 metric changes against each selected direction. The configurable quality gate
@@ -19,34 +22,57 @@ extension and add `ci` settings:
 {
   "projectKey": "your-existing-project-uuid",
   "name": "your-project",
-  "assessment": {
-    "mode": "profiles",
-    "profiles": [{ "id": "visual-complexity", "direction": "decrease" }]
-  },
-  "qualityGate": {
-    "mode": "warn"
-  },
   "ci": {
     "branches": ["main", "feature/ui-*", "redesign/**"],
-    "baselineBranch": "main"
+    "baselineBranch": "main",
+    "pages": [
+      {
+        "path": "/checkout",
+        "profiles": [
+          { "id": "accessibility", "direction": "reduce-issues" },
+          { "id": "content-density", "direction": "decrease" }
+        ],
+        "qualityGate": { "mode": "enforce", "requireBaseline": true }
+      }
+    ]
   }
 }
 ```
 
 `branches` accepts exact names plus `*`, `**`, and `?` globs. The CLI exits
 successfully with a skipped report when the current branch does not match. See
-the repository's `.uiqlab.example.json` for a complete example.
+[`docs/uiqlab.example.json`](../../docs/uiqlab.example.json) for a complete
+example.
 
-Quality-gate modes are `report`, `warn`, and `enforce`; `warn` is the default.
+`ci.pages` is processed in array order. Each `path` starts with `/` and is
+resolved relative to `UIQLAB_PREVIEW_URL`; each page must select one or more of
+the seven profile IDs, one direction per profile, and its own
+`qualityGate.mode`. Metrics shared by multiple profiles are requested only once.
+The client fully submits, polls, and reports one page before requesting the next
+page from the orchestrator. The timeout applies separately to each page. The
+earlier singular `profile`/`direction` fields remain accepted. If `ci.pages` is
+omitted, the existing single-page
+`assessment`/custom-metric configuration, global `qualityGate.mode`, and exact
+preview URL continue to work.
+
+Quality-gate modes are `report`, `warn`, and `enforce`. Every multi-page entry
+must specify one; the legacy single-page global mode defaults to `warn`.
 The CLI uses exit code `0` for a pass, `1` for a blocking gate or technical
 failure, and `2` for a non-blocking warning. A first run without a compatible
-baseline passes and establishes the baseline.
+baseline passes and establishes the baseline unless `qualityGate.requireBaseline`
+is `true`; that option fails a run without a compatible baseline in every gate
+mode.
+
+For a page in `enforce` mode, any `opposed` profile fails the page; if none are
+opposed but at least one is `mixed`, the page warns. In `warn` mode, any
+`opposed` or `mixed` profile warns. `report` mode never blocks or warns.
 
 ## Required pipeline inputs
 
 - `UIQLAB_ORCHESTRATOR_URL`: externally reachable orchestrator base URL.
-- `UIQLAB_PREVIEW_URL`: public URL produced by the pipeline's preview/deployment
-  job. The assessment service must be able to load it.
+- `UIQLAB_PREVIEW_URL`: public base URL produced by the pipeline's
+  preview/deployment job. The configured page paths are appended to it, and the
+  assessment service must be able to load every resulting URL.
 
 Branch, commit, repository, and merge-request metadata are detected from GitLab,
 GitHub Actions, or Git. They can be overridden with `UIQLAB_BRANCH`,
@@ -62,8 +88,19 @@ npm run build --prefix apps/uiqlab-ci
 node apps/uiqlab-ci/dist/src/cli.js
 ```
 
-Optional flags are `--config`, `--report`, `--url`, `--branch`, and
-`--orchestrator-url`.
+Optional flags are `--config`, `--report`, `--html-report`, `--url`, `--branch`,
+`--orchestrator-url`, and `--warning-exit-code`. The warning code accepts `0` or
+`2` and can also be set with `UIQLAB_WARNING_EXIT_CODE`. The report paths can be
+set with `UIQLAB_REPORT` and `UIQLAB_HTML_REPORT`. See the
+[complete CI integration reference](../../docs/ci-integration.md) for every
+configuration field, environment variable, profile direction, and GitLab YAML
+option.
+
+`uiqlab-report.html` is responsive and self-contained: its styling is embedded,
+it uses no JavaScript, and visual metric files are downloaded and embedded while
+the CI job can still reach the evaluator. Open it directly from the downloaded
+pipeline artifact. Its print layout can also be saved as a PDF from the browser.
+Keep the JSON artifact for tooling and long-term machine-readable results.
 
 ## GitLab CI example
 
@@ -90,6 +127,8 @@ web-ui-assessment:
   needs:
     - job: ui-preview
       artifacts: true
+  before_script:
+    - if [ -n "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" ]; then export UIQLAB_BRANCH="$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"; else export UIQLAB_BRANCH="$CI_COMMIT_BRANCH"; fi
   script:
     - npm ci --prefix apps/uiqlab-ci
     - npm run build --prefix apps/uiqlab-ci
@@ -100,6 +139,7 @@ web-ui-assessment:
   artifacts:
     when: always
     paths:
+      - uiqlab-report.html
       - uiqlab-report.json
 ```
 
@@ -129,9 +169,15 @@ non-matching branches, mirror those patterns in GitLab `rules`.
   uses: actions/upload-artifact@v4
   with:
     name: uiqlab-assessment
-    path: uiqlab-report.json
+    path: |
+      uiqlab-report.html
+      uiqlab-report.json
 ```
 
-The console output is suitable for the pipeline log. The JSON report contains
-raw evaluator results, normalized scalar comparisons, profile outcomes, and the
-final quality-gate status for machine processing.
+The console output is suitable for the pipeline log. The HTML artifact presents
+the same run as an IDE-like overview with gate, profile, and metric cards. A
+multi-page JSON report
+uses schema version 2 and contains an ordered `pages` array with one complete
+page report per orchestrator run plus the aggregate quality-gate status. The
+aggregate has mode `per-page` and uses the most severe page result: failure,
+then warning, then pass.

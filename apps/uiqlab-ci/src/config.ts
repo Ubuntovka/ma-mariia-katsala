@@ -10,11 +10,21 @@ export interface CiConfig {
   projectName?: string;
   branches: string[];
   baselineBranch: string;
+  pages: CiPageConfig[];
   metrics: string[];
   assessment: { mode: 'custom' } | { mode: 'profiles'; profiles: AssessmentProfileSelection[] };
   qualityGateMode: QualityGateMode;
+  requireBaseline: boolean;
   timeoutMs: number;
   pollIntervalMs: number;
+}
+
+export interface CiPageConfig {
+  path: string;
+  profiles: AssessmentProfileSelection[];
+  metrics: string[];
+  qualityGateMode: QualityGateMode;
+  requireBaseline: boolean;
 }
 
 interface ProjectConfigFile {
@@ -25,14 +35,75 @@ interface ProjectConfigFile {
     profiles?: unknown;
     metrics?: unknown;
   };
-  qualityGate?: { mode?: unknown };
+  qualityGate?: { mode?: unknown; requireBaseline?: unknown };
   ci?: {
     branches?: unknown;
     baselineBranch?: unknown;
+    pages?: unknown;
     metrics?: unknown;
     timeoutMs?: unknown;
     pollIntervalMs?: unknown;
   };
+}
+
+function resolvePages(value: unknown, filename: string): CiPageConfig[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${filename} ci.pages must contain one or more page configurations.`);
+  }
+
+  const pages: CiPageConfig[] = [];
+  const paths = new Set<string>();
+  for (let index = 0; index < value.length; index += 1) {
+    const item = value[index];
+    const location = `${filename} ci.pages[${index}]`;
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      throw new Error(`${location} must contain a path, profiles, and qualityGate.mode.`);
+    }
+    const { path, profiles, profile, direction, qualityGate } = item as {
+      path?: unknown;
+      profiles?: unknown;
+      profile?: unknown;
+      direction?: unknown;
+      qualityGate?: { mode?: unknown; requireBaseline?: unknown };
+    };
+    if (typeof path !== 'string' || !path.startsWith('/') || path.includes('?') || path.includes('#')) {
+      throw new Error(`${location}.path must be a route path starting with "/" and without a query or fragment.`);
+    }
+    const normalizedPath = path === '/' ? path : path.replace(/\/+$/, '');
+    if (normalizedPath.length === 0) {
+      throw new Error(`${location}.path must be a route path starting with "/".`);
+    }
+    if (paths.has(normalizedPath)) {
+      throw new Error(`${filename} ci.pages must not contain duplicate path "${normalizedPath}".`);
+    }
+    if (profiles !== undefined && (profile !== undefined || direction !== undefined)) {
+      throw new Error(`${location} cannot combine profiles with the legacy profile/direction fields.`);
+    }
+    const resolved = resolveAssessmentProfiles(
+      profiles ?? [{ id: profile, direction }],
+      profiles !== undefined ? `${location}.profiles` : location,
+    );
+    if (typeof qualityGate !== 'object' || qualityGate === null || Array.isArray(qualityGate)) {
+      throw new Error(`${location}.qualityGate must be an object containing mode.`);
+    }
+    const qualityGateMode = qualityGate.mode;
+    if (qualityGateMode !== 'report' && qualityGateMode !== 'warn' && qualityGateMode !== 'enforce') {
+      throw new Error(`${location}.qualityGate.mode must be one of: report, warn, enforce.`);
+    }
+    if (qualityGate.requireBaseline !== undefined && typeof qualityGate.requireBaseline !== 'boolean') {
+      throw new Error(`${location}.qualityGate.requireBaseline must be a boolean.`);
+    }
+    paths.add(normalizedPath);
+    pages.push({
+      path: normalizedPath,
+      profiles: resolved.profiles,
+      metrics: resolved.metrics,
+      qualityGateMode,
+      requireBaseline: qualityGate.requireBaseline ?? false,
+    });
+  }
+  return pages;
 }
 
 function escapeRegex(value: string): string {
@@ -81,6 +152,11 @@ export async function loadConfig(filename: string): Promise<CiConfig> {
     throw new Error(`${filename} cannot combine assessment.profiles with custom metrics.`);
   }
 
+  const pages = resolvePages(parsed.ci?.pages, filename);
+  if (pages.length > 0 && parsed.ci?.metrics !== undefined) {
+    throw new Error(`${filename} cannot combine ci.pages with ci.metrics; every page gets its metrics from its profiles.`);
+  }
+
   const resolvedProfiles = assessment?.mode === 'profiles'
     ? resolveAssessmentProfiles(assessment.profiles, `${filename} assessment.profiles`)
     : undefined;
@@ -104,15 +180,20 @@ export async function loadConfig(filename: string): Promise<CiConfig> {
   if (qualityGateMode !== 'report' && qualityGateMode !== 'warn' && qualityGateMode !== 'enforce') {
     throw new Error(`${filename} qualityGate.mode must be one of: report, warn, enforce.`);
   }
+  if (parsed.qualityGate?.requireBaseline !== undefined && typeof parsed.qualityGate.requireBaseline !== 'boolean') {
+    throw new Error(`${filename} qualityGate.requireBaseline must be a boolean.`);
+  }
   const result: CiConfig = {
     projectKey: parsed.projectKey,
     branches,
     baselineBranch: typeof parsed.ci?.baselineBranch === 'string' ? parsed.ci.baselineBranch : 'main',
+    pages,
     metrics: metricsValue,
     assessment: resolvedProfiles
       ? { mode: 'profiles', profiles: resolvedProfiles.profiles }
       : { mode: 'custom' },
     qualityGateMode,
+    requireBaseline: parsed.qualityGate?.requireBaseline ?? false,
     timeoutMs: typeof parsed.ci?.timeoutMs === 'number' ? parsed.ci.timeoutMs : 300_000,
     pollIntervalMs: typeof parsed.ci?.pollIntervalMs === 'number' ? parsed.ci.pollIntervalMs : 2_000,
   };

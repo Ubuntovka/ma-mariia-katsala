@@ -2,14 +2,48 @@
 
 ## Purpose
 
-The UIQLab CI client runs a Web UI Assessment against a public preview of a
-commit. It submits the preview URL to the orchestrator, waits for the configured
-metrics, compares the results with the latest compatible assessment from the
-baseline branch, and writes a machine-readable `uiqlab-report.json` artifact.
+The UIQLab CI client runs Web UI Assessments against several routes of a public
+commit preview. It processes the configured pages in order. For each page it
+submits one URL to the orchestrator, waits for that page's profile metrics, and
+compares the results with the same page's latest compatible assessment from the
+baseline branch before starting the next page. The client writes two artifacts
+after every run:
+
+- `uiqlab-report.html` is a self-contained, responsive visual report with the
+  same palette and information hierarchy as the IDE results. It includes the
+  overall gate, page and profile outcomes, baseline comparisons, metric cards,
+  embedded visual metric files, and expandable raw values. It has no JavaScript
+  or external stylesheet. Visual files are fetched while the CI job can still
+  reach the evaluator, avoiding broken `localhost` URLs in downloaded artifacts.
+- `uiqlab-report.json` remains the machine-readable source of truth for later
+  automation.
+
+The HTML report also includes print styles, so it can be opened in a browser
+and printed or saved as PDF without requiring a separate CI dependency.
 
 For profile-based assessments, the client classifies meaningful metric changes
 against the selected directions and applies the configured quality-gate mode.
 It reuses fixed comparison tolerances and does not calculate an overall score.
+
+## Integration checklist
+
+To add UIQLab to a GitLab project:
+
+1. Commit `.uiqlab.json` at the repository root. Keep the `projectKey` created
+   by the UIQLab extension, then add the `ci` object described below.
+2. Make the UIQLab CI client available to the job. The examples in this
+   repository build it from `apps/uiqlab-ci`; if the consuming project installs
+   or checks it out elsewhere, change only the three client commands.
+3. Add a preview job to `.gitlab-ci.yml`. It must deploy the current commit to a
+   URL that the UIQLab assessment service can reach without a developer login.
+4. Add `UIQLAB_ORCHESTRATOR_URL` under **Settings > CI/CD > Variables**. Do not
+   put credentials or other secrets in `.gitlab-ci.yml` or the preview dotenv
+   artifact.
+5. Add the assessment job, pass the preview URL through a dotenv artifact, and
+   retain both generated reports as job artifacts.
+6. Validate the YAML with GitLab CI Lint, push a configured branch, and download
+   `uiqlab-report.html` from the job to verify the first run. Unless a baseline
+   is required, the first compatible run passes and establishes that baseline.
 
 ## When the assessment runs
 
@@ -32,68 +66,198 @@ If the branch does not match `ci.branches`, the client writes a report with
 run by that point. To avoid creating unnecessary preview environments, mirror
 the relevant branch conditions in the CI provider's job rules.
 
-## UIQLab project configuration
+## Configure `.uiqlab.json`
 
-The extension and CI client share the repository-root `.uiqlab.json` file:
+The extension and CI client share the repository-root `.uiqlab.json` file. The
+following is a complete recommended multi-page configuration:
 
 ```json
 {
   "projectKey": "123e4567-e89b-12d3-a456-426614174000",
   "name": "example-web-app",
-  "assessment": {
-    "mode": "profiles",
-    "profiles": [{ "id": "visual-complexity", "direction": "decrease" }]
-  },
-  "qualityGate": {
-    "mode": "warn"
-  },
   "ci": {
     "branches": ["main", "feature/ui-*", "redesign/**"],
     "baselineBranch": "main",
+    "pages": [
+      {
+        "path": "/checkout",
+        "profiles": [
+          { "id": "accessibility", "direction": "reduce-issues" },
+          { "id": "content-density", "direction": "decrease" }
+        ],
+        "qualityGate": {
+          "mode": "enforce",
+          "requireBaseline": true
+        }
+      }
+    ],
     "timeoutMs": 300000,
     "pollIntervalMs": 2000
   }
 }
 ```
 
-| Setting | Required | Meaning |
-| --- | --- | --- |
-| `projectKey` | Yes | UUID shared with the UIQLab extension. |
-| `name` | No | Human-readable project name. |
-| `assessment` | No | Profile selections or custom metrics. See `assessment-profiles.md`. |
-| `qualityGate.mode` | No | `report`, `warn`, or `enforce`. Defaults to `warn`. |
-| `ci.branches` | Yes | Branches eligible for assessment. Exact names and `*`, `**`, and `?` globs are supported. |
-| `ci.baselineBranch` | No | Branch used for the historical comparison. Defaults to `main`. |
-| `ci.metrics` | No | Legacy manual metric IDs from `m1` through `m14`; treated as custom mode and not allowed with profiles. |
-| `ci.timeoutMs` | No | Maximum time to wait for all metrics. Defaults to 300,000 ms. |
-| `ci.pollIntervalMs` | No | Delay between result requests. Defaults to 2,000 ms. |
+The checked-in [uiqlab.example.json](uiqlab.example.json) contains a larger
+copyable example. JSON does not support comments, so use the reference tables
+below when adapting it.
 
-## Required CI inputs
+### Top-level and CI options
 
-| Variable | Required | Meaning |
+| Setting | Required | Allowed values and default | Result |
+| --- | --- | --- | --- |
+| `projectKey` | Yes | A UUID, normally generated by the UIQLab extension | Identifies the project when assessments and baselines are stored. Do not create a new value for each branch or pipeline. |
+| `name` | Recommended; required by the extension | Non-empty project name | Appears as project metadata. The CI client can run without it. |
+| `assessment` | Only for single-page mode | See the single-page alternatives below | Selects profiles or manual metrics when `ci.pages` is absent. It is also the IDE's default assessment selection. |
+| `qualityGate` | Only for single-page mode | `mode` defaults to `warn`; `requireBaseline` defaults to `false` | Controls the gate for the exact `UIQLAB_PREVIEW_URL`. It does not provide defaults for entries in `ci.pages`. |
+| `ci.branches` | Yes | Non-empty array of exact names or glob patterns | A matching branch is assessed. A non-matching branch creates skipped HTML/JSON reports and exits `0`. |
+| `ci.baselineBranch` | No | Branch name; default `main` | Compares each page with its latest compatible completed run from this branch. |
+| `ci.pages` | Recommended | Non-empty ordered array | Enables multi-page profile mode. Pages are assessed sequentially and keep independent gates. |
+| `ci.metrics` | Legacy single-page only | Unique IDs from `m1` through `m14` | Assesses manual metrics in custom mode. It cannot be combined with `ci.pages` or profile mode. |
+| `ci.timeoutMs` | No | Positive number; default `300000` | Maximum polling time for each page. One slow or failed page does not consume the next page's timeout. |
+| `ci.pollIntervalMs` | No | Positive number; default `2000` | Delay between requests for assessment results. Smaller values poll more often. |
+
+Branch patterns match the complete branch name. `*` matches zero or more
+characters except `/`, `**` can cross `/`, and `?` matches exactly one
+non-`/` character. For example, `feature/*` matches `feature/cart` but not
+`feature/cart/header`; `feature/**` matches both.
+
+A compatible baseline has the same `projectKey`, normalized page path, and
+screenshot dimensions and comes from `ci.baselineBranch`. The host name of a
+commit preview may change because UIQLab stores URL assessments by normalized
+path. The selected metrics do not all need to exist in the older run; available
+matching metrics are compared individually.
+
+### `ci.pages[]` options
+
+| Setting | Required | Allowed values and default | Result |
+| --- | --- | --- | --- |
+| `path` | Yes | Route beginning with `/`, without `?` or `#` | Appended to the path of `UIQLAB_PREVIEW_URL`. A trailing slash is removed except for `/`; normalized paths must be unique. |
+| `profiles` | Yes | Non-empty array of unique `{ "id", "direction" }` objects | Resolves the metrics for this page. Metrics shared by selected profiles run only once. |
+| `qualityGate.mode` | Yes | `report`, `warn`, or `enforce` | Applies only to this page. There is deliberately no inherited default in multi-page mode. |
+| `qualityGate.requireBaseline` | No | Boolean; default `false` | If `true`, no compatible baseline makes the page fail with exit code `1`, even in `report` mode. If `false`, the first run passes as `not-comparable`. |
+
+The old singular `profile` and `direction` fields are accepted in place of
+`profiles` for backward compatibility, but new configurations should use the
+array. Do not combine the two forms.
+
+### Profiles and directions
+
+| Profile ID | Metrics selected | Direction options and their result |
 | --- | --- | --- |
-| `UIQLAB_ORCHESTRATOR_URL` | Yes | Externally reachable orchestrator base URL. Store it as a CI/CD variable. |
-| `UIQLAB_PREVIEW_URL` | Yes for assessed branches | Public preview URL produced by an earlier job. The assessment service must be able to load it. |
-| `UIQLAB_BRANCH` | Sometimes | Explicit branch override. It is currently required for GitLab merge-request pipelines; see below. |
-| `UIQLAB_COMMIT_SHA` | No | Explicit commit override. Otherwise detected from the CI provider or Git. |
-| `UIQLAB_REPOSITORY_URL` | No | Explicit repository URL override. Otherwise detected automatically. |
-| `UIQLAB_MERGE_REQUEST_ID` | No | Explicit merge-request ID override. GitLab and GitHub metadata are normally detected automatically. |
+| `general-review` | `m1`-`m14` | `observe` records all metrics without treating movement as opposed. |
+| `visual-complexity` | `m9`, `m10`, `m11`, `m12` | `decrease` expects less complexity; `increase` expects more; `preserve` opposes any meaningful movement; `observe` reports movement without opposing it. |
+| `layout-density` | `m5`, `m10`, `m6` | `more-spacious` expects more whitespace and less congestion; `more-compact` expects the reverse; `preserve` and `observe` behave as above. |
+| `content-density` | `m8`, `m5`, `m10` | `decrease` expects fewer words/congestion and more whitespace; `increase` expects the reverse; `preserve` and `observe` behave as above. |
+| `colour-expression` | `m3`, `m4` | `more-vivid` expects greater colorfulness; `more-restrained` expects less; `preserve` and `observe` behave as above. |
+| `aesthetic-impression` | `m14` | `increase` expects a higher NIMA score; `preserve` opposes meaningful movement; `observe` only reports it. |
+| `accessibility` | `m13` | `reduce-issues` expects fewer accessibility issues; `preserve` opposes a meaningful change in either direction; `observe` only reports it. |
+
+Profile outcomes are `aligned`, `opposed`, `mixed`, `unchanged`, or
+`not-comparable`. Only fixed, materially changed scalar metrics influence the
+directional outcome; visual/raw results remain available in the reports.
+
+### Quality-gate options and outcomes
+
+| Mode | Aligned, unchanged, or not comparable | Mixed | Opposed |
+| --- | --- | --- | --- |
+| `report` | Pass (`0`) | Pass (`0`) | Pass (`0`) |
+| `warn` | Pass (`0`) | Warning (`2` by default) | Warning (`2` by default) |
+| `enforce` | Pass (`0`) | Warning (`2` by default) | Fail (`1`) |
+
+`requireBaseline: true` overrides this table when no compatible baseline exists
+and fails with exit code `1`. A technical error also exits `1`. Warning exit
+code `2` can be changed to `0` with `UIQLAB_WARNING_EXIT_CODE` or
+`--warning-exit-code`; the assessment remains a warning in both reports.
+
+### Single-page alternatives
+
+Omit `ci.pages` to assess the exact `UIQLAB_PREVIEW_URL`. Choose one of these
+forms; do not combine profiles and manual metrics:
+
+```json
+{
+  "assessment": {
+    "mode": "profiles",
+    "profiles": [
+      { "id": "accessibility", "direction": "reduce-issues" }
+    ]
+  },
+  "qualityGate": { "mode": "enforce", "requireBaseline": false }
+}
+```
+
+```json
+{
+  "assessment": {
+    "mode": "custom",
+    "metrics": ["m8", "m13", "m14"]
+  },
+  "qualityGate": { "mode": "report", "requireBaseline": false }
+}
+```
+
+For compatibility, custom metrics can instead be placed in `ci.metrics`. If no
+single-page selection is present, the CI client defaults to `m8`, `m10`, `m13`,
+and `m14` in custom mode. Custom mode reports metric changes but has no profile
+direction to enforce.
+
+The manual metric IDs produce these results:
+
+| ID | Result |
+| --- | --- |
+| `m1` | PNG file size, used as a visual-complexity indicator. |
+| `m2` | JPEG file size and PNG-to-JPEG compression ratio. |
+| `m3` | Hasler-Süsstrunk perceived-colorfulness score. |
+| `m4` | Mean and standard deviation of CIELAB lightness and color channels. |
+| `m5` | White-space proportion/distribution score from UIED segmentation. |
+| `m6` | UIED component-segmentation image and component JSON. |
+| `m7` | UMSI saliency heatmap and overlay. |
+| `m8` | Visible DOM word count. |
+| `m9` | Canny edge density and edge image. |
+| `m10` | Feature-congestion score and congestion map. |
+| `m11` | Subband-entropy clutter score. |
+| `m12` | Shannon information-entropy score. |
+| `m13` | axe-core accessibility violation count and issue details. |
+| `m14` | NIMA predicted aesthetic/technical-quality mean score and standard deviation. |
+
+`m4`, `m6`, and `m7` produce structured or visual results rather than the
+single scalar used for direction classification. They are retained in the HTML
+and JSON reports but do not by themselves make a profile aligned or opposed.
+
+## CI variables and command-line options
+
+Command-line flags take precedence over their environment-variable equivalents.
+
+| Environment variable | CLI flag | Required/default | Result |
+| --- | --- | --- | --- |
+| `UIQLAB_ORCHESTRATOR_URL` | `--orchestrator-url` | Required for assessed branches | Base URL used for submissions, polling, history, and visual-result downloads. Store it as a GitLab CI/CD variable. |
+| `UIQLAB_PREVIEW_URL` | `--url` | Required for assessed branches | Public preview base URL. In multi-page mode each `ci.pages[].path` is appended to its existing path. |
+| `UIQLAB_BRANCH` | `--branch` | Override; required for GitLab merge-request pipelines in the current client | Controls `ci.branches` matching and the branch stored with the run. Otherwise the client tries `CI_COMMIT_BRANCH`, GitHub variables, then Git. |
+| `UIQLAB_COMMIT_SHA` | None | Optional override | Commit recorded in the reports and assessment history. Otherwise detected from `CI_COMMIT_SHA`, GitHub, or Git. |
+| `UIQLAB_REPOSITORY_URL` | None | Optional override | Repository identity sent to UIQLab. Otherwise detected from GitLab, GitHub, or Git; URL credentials are removed. |
+| `UIQLAB_MERGE_REQUEST_ID` | None | Optional override | Merge-request metadata. Otherwise detected from `CI_MERGE_REQUEST_IID` or GitHub. |
+| `UIQLAB_CONFIG` | `--config` | Default `.uiqlab.json` | Reads project configuration from another path. |
+| `UIQLAB_REPORT` | `--report` | Default `uiqlab-report.json` | Changes the machine-readable report path. Keep `.gitlab-ci.yml` artifact paths in sync. |
+| `UIQLAB_HTML_REPORT` | `--html-report` | Default `uiqlab-report.html` | Changes the visual report path. Keep `.gitlab-ci.yml` artifact paths in sync. |
+| `UIQLAB_WARNING_EXIT_CODE` | `--warning-exit-code` | `0` or `2`; default `2` | `2` lets GitLab display an allowed warning when `allow_failure.exit_codes` includes `2`; `0` makes warning outcomes successful at process level. |
 
 The preview must not depend on a developer's local machine or an authenticated
-browser session. It must be reachable from the assessment service for the
-duration of the job.
+browser session. Every resulting page URL must remain reachable from the
+assessment service until the job has written the reports, because visual files
+are downloaded and embedded at that point.
 
 ## GitLab CI
 
 The following workflow creates merge-request pipelines, suppresses the duplicate
 branch pipeline when a branch already has an open merge request, and otherwise
-creates normal branch pipelines:
+creates normal branch pipelines. Save it as `.gitlab-ci.yml` at the repository
+root and merge the jobs/stages into any pipeline already present:
 
 ```yaml
 workflow:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"'
       when: never
     - if: '$CI_COMMIT_BRANCH'
 
@@ -101,6 +265,7 @@ stages: [preview, assess]
 
 ui-preview:
   stage: preview
+  image: node:20
   script:
     - npm ci
     - npm run build
@@ -126,12 +291,53 @@ web-ui-assessment:
       - 2
   artifacts:
     when: always
+    expire_in: 1 week
     paths:
+      - uiqlab-report.html
       - uiqlab-report.json
 ```
 
 Replace `./scripts/deploy-preview.sh` with the application's actual preview
-deployment command.
+deployment command. It must print only the final public base URL. The example
+assumes the client source is present at `apps/uiqlab-ci`; replace those commands
+with the consuming project's installation and invocation commands if it is
+located elsewhere.
+
+### What each `.gitlab-ci.yml` option does
+
+| YAML entry | Required | Result or alternative |
+| --- | --- | --- |
+| `workflow.rules` | Recommended | Creates merge-request pipelines, suppresses a duplicate push pipeline when an MR is open, and otherwise creates branch pipelines. Remove or merge this block if the project already controls pipeline creation globally. |
+| `stages: [preview, assess]` | Yes, unless equivalent stages exist | Ensures preview deployment precedes assessment. Add the two names to an existing `stages` list rather than replacing it. |
+| `ui-preview.stage` | Yes | Assigns preview deployment to the earlier stage. Job names are arbitrary, but references in `needs` must match. |
+| `ui-preview.image` | Runner-dependent | Supplies Node.js for the example build. Use the image and setup required by the application. |
+| `ui-preview.script` | Yes | Installs/builds the current commit, deploys it, and writes exactly `UIQLAB_PREVIEW_URL=<public-url>` to `preview.env`. |
+| `ui-preview.artifacts.reports.dotenv` | Yes for this hand-off pattern | Imports `UIQLAB_PREVIEW_URL` into later jobs. Do not store secrets in this file. A project may instead set the URL directly in the assessment job. |
+| `web-ui-assessment.image: node:20` | Yes for the source-built client | Provides a supported Node.js runtime; the client requires Node.js 18 or later. |
+| `web-ui-assessment.needs` | Yes for the dotenv pattern | Waits for `ui-preview`, starts as soon as it succeeds, and downloads its artifacts. |
+| `before_script` branch export | Yes for current GitLab MR pipelines | Uses `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME` in MR pipelines and `CI_COMMIT_BRANCH` in branch pipelines, so `.uiqlab.json` sees the actual source branch. |
+| Assessment `script` | Yes | Installs and builds the CI client, then runs it from the repository root so the default config/report paths resolve correctly. |
+| `allow_failure.exit_codes: [2]` | Recommended with the default warning exit code | Marks exit code `2` as an allowed failure, so warnings are visible but do not block later stages or merging. Exit code `1` still blocks. Omit it to make warnings blocking, or set `UIQLAB_WARNING_EXIT_CODE: "0"` to make warning jobs fully successful. |
+| `artifacts.when: always` | Recommended | Attempts to upload reports for passes, skips, warnings, and failures. Failures before the client starts cannot produce reports. |
+| `artifacts.paths` | Yes to retain reports | Makes the HTML and JSON files downloadable. Change both entries if report path options are changed. |
+| `artifacts.expire_in` | No | Retains reports for the chosen period; omit it to use the GitLab instance default. |
+
+`UIQLAB_ORCHESTRATOR_URL` is intentionally absent from the YAML. Add it in the
+GitLab project or group CI/CD variables instead. It is not automatically a
+secret if it is only a public base URL, but it may be protected or masked
+according to the deployment. Protected variables are unavailable on
+unprotected branches.
+
+The UIQLab client still applies `ci.branches` after the jobs begin. To avoid an
+unnecessary preview deployment, optionally add matching GitLab job `rules` to
+both jobs. GitLab rules use regular expressions rather than UIQLab's glob
+syntax, so keep the two lists synchronized deliberately. For example:
+
+```yaml
+rules:
+  - if: '$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^(main|feature\/ui-[^\/]*)$/'
+  - if: '$CI_COMMIT_BRANCH =~ /^(main|feature\/ui-[^\/]*)$/'
+```
 
 ### Merge-request branch detection
 
@@ -146,6 +352,11 @@ In merge-request pipelines from forks, protected CI/CD variables may be
 unavailable. Ensure the orchestrator URL and preview deployment can be used in
 the project's chosen fork security model; do not expose secrets to untrusted
 pipeline code.
+
+The relevant GitLab behavior is documented in the official references for
+[`workflow:rules`](https://docs.gitlab.com/ci/yaml/workflow/),
+[`allow_failure:exit_codes`](https://docs.gitlab.com/ci/yaml/#allow_failureexit_codes),
+and [dotenv report variables](https://docs.gitlab.com/ci/variables/dotenv_variables/).
 
 ## GitHub Actions
 
@@ -191,7 +402,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: uiqlab-assessment
-          path: uiqlab-report.json
+          path: |
+            uiqlab-report.html
+            uiqlab-report.json
           if-no-files-found: ignore
 ```
 
@@ -204,14 +417,24 @@ requests may need to skip the assessment or use a separately secured workflow.
 
 ### Successful assessment
 
-The job exits with code `0` when the gate passes, prints profile outcomes and
-metric comparisons, and writes a completed JSON report. A missing baseline does
-not fail the assessment; the run establishes the baseline and is classified as
-`not-comparable`.
+The job exits with code `0` when every page gate passes, prints page-specific
+profile outcomes and metric comparisons, and writes a completed JSON report.
+A missing baseline does not fail a page assessment; that run establishes the
+page's baseline and is classified as `not-comparable`.
+
+Multi-page reports use schema version 2. Their ordered `pages` array contains
+the complete schema-version-1 report for each page, including its target,
+result ID, profiles, metrics, comparison, and independently configured page
+quality gate. The top-level gate uses mode `per-page`, reports the most severe
+page gate (`fail`, then `warning`, then `pass`), and determines the process exit
+code.
 
 Exit code `2` is a non-blocking warning produced by `warn` mode for `mixed` or
 `opposed` outcomes and by `enforce` mode for `mixed` outcomes. Exit code `1`
 represents either an enforced `opposed` outcome or a technical failure.
+For pages with multiple profiles, one opposed profile is sufficient to fail an
+`enforce` page; one opposed or mixed profile is sufficient to warn a `warn`
+page.
 
 ### Skipped assessment
 
@@ -230,7 +453,7 @@ include:
 - an invalid preview URL;
 - an HTTP, connectivity, timeout, or invalid-JSON error;
 - an orchestrator response without a result ID;
-- an assessment that does not finish before `ci.timeoutMs`;
+- a page assessment that does not finish before its `ci.timeoutMs` deadline;
 - a configured metric that completes without results.
 
 Dependency installation, application build, preview deployment, and artifact
@@ -247,8 +470,9 @@ web-ui-assessment:
 ```
 
 Technical errors and enforced opposed outcomes use exit code `1` and continue
-to block the job. Artifacts use `when: always`, so `uiqlab-report.json` is
-uploaded for passes, warnings, and failures.
+to block the job. Artifacts use `when: always`, so `uiqlab-report.html` and
+`uiqlab-report.json` are uploaded for passes, warnings, and failures. The client
+also creates both files for a branch that is skipped.
 
 ## Running the client manually
 
@@ -260,8 +484,10 @@ npm run build --prefix apps/uiqlab-ci
 node apps/uiqlab-ci/dist/src/cli.js
 ```
 
-Optional command-line flags are `--config`, `--report`, `--url`, `--branch`, and
-`--orchestrator-url`. Environment variables provide the same values in CI.
+Optional command-line flags are `--config`, `--report`, `--html-report`, `--url`,
+`--branch`, `--orchestrator-url`, and `--warning-exit-code`. The complete
+precedence and default reference is in
+[CI variables and command-line options](#ci-variables-and-command-line-options).
 
 ## Troubleshooting
 
@@ -284,5 +510,6 @@ working but legitimately need more time.
 ### No baseline is shown
 
 Confirm that `ci.baselineBranch` names the intended branch and that at least one
-compatible assessment has completed on it. This condition does not fail the
-job.
+compatible assessment has completed on it. Check that the page path and capture
+dimensions are stable. This condition passes by default, but fails when the
+applicable `qualityGate.requireBaseline` is `true`.

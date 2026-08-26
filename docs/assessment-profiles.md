@@ -89,7 +89,38 @@ profile outcome.
 
 ## Profile configuration
 
-Set `assessment.mode` to `profiles` and provide one or more profile selections:
+For a multi-page CI assessment, configure an ordered `ci.pages` array. Every
+page has one or more of the seven profile IDs and one allowed direction for each
+profile:
+
+```json
+{
+  "projectKey": "123e4567-e89b-12d3-a456-426614174000",
+  "name": "example-web-app",
+  "ci": {
+    "branches": ["main", "feature/ui-*"],
+    "baselineBranch": "main",
+    "pages": [
+      {
+        "path": "/checkout",
+        "profiles": [
+          { "id": "accessibility", "direction": "reduce-issues" },
+          { "id": "content-density", "direction": "decrease" }
+        ],
+        "qualityGate": { "mode": "enforce" }
+      }
+    ]
+  }
+}
+```
+
+The CI client resolves each page's profiles and quality-gate mode independently,
+de-duplicates overlapping metric IDs, and submits one orchestrator assessment
+at a time. A page's directions, resolved metrics, and gate policy cannot leak
+into another page. The top-level
+`assessment` and `qualityGate` configuration remains available as the IDE
+default and for the compatible single-page CI mode. Set `assessment.mode` to
+`profiles` and provide one or more profile selections:
 
 ```json
 {
@@ -204,7 +235,12 @@ Configuration loading fails with a descriptive error when:
 - a direction is not allowed for its profile;
 - the same profile is selected more than once;
 - profile selection is combined with manual metrics;
-- custom metrics are missing, duplicated, or outside `m1` through `m14`.
+- custom metrics are missing, duplicated, or outside `m1` through `m14`;
+- `ci.pages` is empty, contains an invalid or duplicate route path, or is
+  combined with legacy `ci.metrics`;
+- a CI page has no profiles, repeats a profile, is missing a profile direction
+  or `qualityGate.mode`, uses an unsupported direction, or uses an unknown gate
+  mode.
 
 Both the CI client and IDE extension validate configuration selections. The IDE
 extension also validates selections submitted from the sidebar before starting
@@ -245,6 +281,12 @@ Custom assessments are represented as:
 Profile IDs and directions are retained so future CI and IDE features can
 explain results in the context of the user's intent.
 
+Multi-page CI output uses report schema version 2. Its ordered `pages` array
+contains one complete page report with all profile selections for that
+orchestrator run. Each page report retains its configured `report`, `warn`, or
+`enforce` mode. The batch quality gate uses mode `per-page` and reflects the
+most severe page gate.
+
 ## Quality gate
 
 The CI client compares primary scalar metrics with the latest compatible
@@ -253,10 +295,18 @@ is classified as `aligned`, `opposed`, `mixed`, `unchanged`, or
 `not-comparable`. A first run is `not-comparable`, establishes the baseline, and
 passes.
 
-Configure `qualityGate.mode` as `report`, `warn`, or `enforce`. The default is
-`warn`. Report mode always exits successfully; warn mode returns a non-blocking
-warning for mixed or opposed outcomes; enforce mode blocks opposed outcomes and
-warns for mixed outcomes. The gate does not calculate an overall quality score.
+Configure each multi-page entry's `qualityGate.mode` as `report`, `warn`, or
+`enforce`. The global `qualityGate.mode` remains available for single-page CI
+runs and defaults to `warn`. Report mode always exits successfully; warn mode
+returns a non-blocking warning for mixed or opposed outcomes; enforce mode
+blocks opposed outcomes and warns for mixed outcomes. The gate does not
+calculate an overall quality score.
+
+With multiple profiles on one page, `enforce` fails when at least one profile is
+`opposed`; it warns when none are opposed but at least one is `mixed`. `warn`
+produces a warning when at least one profile is `opposed` or `mixed`. Requiring
+all profiles to be opposed would allow one regression to be hidden by unrelated
+profile improvements.
 
 LLM explanations remain outside the quality-gate flow.
 
@@ -266,12 +316,13 @@ LLM explanations remain outside the quality-gate flow.
 - `apps/uiqlab-ci/src/config.ts`: CI configuration parsing and validation.
 - `apps/uiqlab-ci/src/qualityGate.ts`: deterministic profile classification and gate decisions.
 - `apps/uiqlab-ci/src/report.ts`: profile metadata in CI reports.
+- `apps/uiqlab-ci/src/workflow.ts`: ordered page URL resolution and sequential execution.
 - `apps/uiqlab-assessment/src/assessmentProfiles.ts`: IDE profile catalog and resolver.
 - `apps/uiqlab-assessment/src/assessmentSidebar.ts`: multi-profile and direction selection in the IDE sidebar.
 - `apps/uiqlab-assessment/src/profileAssessment.ts`: deterministic IDE profile outcome and overall-goal classification.
 - `apps/uiqlab-assessment/src/projectConfig.ts`: IDE configuration parsing and validation.
 - `apps/orchestrator/main.py`: assessment metadata persistence and run summaries.
-- `.uiqlab.example.json`: example profile configuration.
+- `docs/uiqlab.example.json`: example profile configuration.
 
 ## Verification
 

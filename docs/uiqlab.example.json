@@ -1,0 +1,62 @@
+{
+  "projectKey": "123e4567-e89b-12d3-a456-426614174000",
+  "name": "example-web-app",
+  "ci": {
+    "branches": [
+      "main",
+      "feature/ui-*",
+      "redesign/**"
+    ],
+    "baselineBranch": "main",
+    "pages": [
+      {
+        "path": "/",
+        "profiles": [
+          {
+            "id": "general-review",
+            "direction": "observe"
+          }
+        ],
+        "qualityGate": {
+          "mode": "report"
+        }
+      },
+      {
+        "path": "/checkout",
+        "profiles": [
+          {
+            "id": "accessibility",
+            "direction": "reduce-issues"
+          },
+          {
+            "id": "content-density",
+            "direction": "decrease"
+          }
+        ],
+        "qualityGate": {
+          "mode": "enforce",
+          "requireBaseline": true
+        }
+      },
+      {
+        "path": "/catalog",
+        "profiles": [
+          {
+            "id": "visual-complexity",
+            "direction": "decrease"
+          },
+          {
+            "id": "colour-expression",
+            "direction": "more-vivid"
+          }
+        ],
+        "qualityGate": {
+          "mode": "warn",
+          "requireBaseline": false
+        }
+      }
+    ],
+    "timeoutMs": 300000,
+    "pollIntervalMs": 2000
+  }
+}
