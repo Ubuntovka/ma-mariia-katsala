@@ -1,4 +1,4 @@
-import type { AssessmentReport, BatchAssessmentReport, ReportMetric } from './report.js';
+import type { AssessmentReport, BatchAssessmentReport, FailedPageAssessmentReport, PageAssessmentReport, ReportMetric } from './report.js';
 
 type GateStatus = 'pass' | 'warning' | 'fail';
 
@@ -213,6 +213,23 @@ function renderPage(report: AssessmentReport, options: HtmlReportOptions, index?
   </section>`;
 }
 
+function renderFailedPage(report: FailedPageAssessmentReport, index: number): string {
+  return `<section class="page-report">
+    <div class="page-heading">
+      <div><span class="eyebrow">Page ${index + 1}</span><h2>${escapeHtml(report.target)}</h2></div>
+      <span class="outcome">Technical failure</span>
+    </div>
+    ${renderGate(report.qualityGate)}
+    <div class="state-card state-failed"><span class="state-icon" aria-hidden="true">&#215;</span><span class="eyebrow">Assessment failed</span><h2>This page could not be completed</h2><p>${escapeHtml(report.reason)}</p></div>
+  </section>`;
+}
+
+function renderPageResult(report: PageAssessmentReport, options: HtmlReportOptions, index: number): string {
+  return report.status === 'completed'
+    ? renderPage(report, options, index)
+    : renderFailedPage(report, index);
+}
+
 function isCompletedPage(value: unknown): value is AssessmentReport {
   const item = record(value);
   return item?.status === 'completed' && typeof item.target === 'string' && Array.isArray(item.metrics) && Array.isArray(item.profileOutcomes);
@@ -220,14 +237,17 @@ function isCompletedPage(value: unknown): value is AssessmentReport {
 
 function isCompletedBatch(value: unknown): value is BatchAssessmentReport {
   const item = record(value);
-  return item?.status === 'completed' && Array.isArray(item.pages);
+  return item?.schemaVersion === 2
+    && (item.status === 'completed' || item.status === 'failed')
+    && Array.isArray(item.pages);
 }
 
 function renderOverview(report: AssessmentReport | BatchAssessmentReport): string {
   const pages = isCompletedBatch(report) ? report.pages : [report];
-  const metrics = pages.reduce((sum, page) => sum + page.metrics.length, 0);
-  const meaningful = pages.reduce((sum, page) => sum + page.metrics.filter((metric) => metric.meaningfulChange).length, 0);
-  const profiles = pages.reduce((sum, page) => sum + page.profileOutcomes.length, 0);
+  const completedPages = pages.filter((page): page is AssessmentReport => page.status === 'completed');
+  const metrics = completedPages.reduce((sum, page) => sum + page.metrics.length, 0);
+  const meaningful = completedPages.reduce((sum, page) => sum + page.metrics.filter((metric) => metric.meaningfulChange).length, 0);
+  const profiles = completedPages.reduce((sum, page) => sum + page.profileOutcomes.length, 0);
   return `<div class="overview">
     <div><span>Pages</span><strong>${pages.length}</strong></div>
     <div><span>Metrics</span><strong>${metrics}</strong></div>
@@ -242,7 +262,7 @@ function renderBody(report: unknown, options: HtmlReportOptions): { status: Gate
     return {
       status: gateStatus(report.qualityGate),
       meta,
-      content: `${renderOverview(report)}${renderGate(report.qualityGate)}<div class="pages">${report.pages.map((page, index) => renderPage(page, options, index)).join('')}</div>`,
+      content: `${renderOverview(report)}${renderGate(report.qualityGate)}<div class="pages">${report.pages.map((page, index) => renderPageResult(page, options, index)).join('')}</div>`,
     };
   }
   if (isCompletedPage(report)) {

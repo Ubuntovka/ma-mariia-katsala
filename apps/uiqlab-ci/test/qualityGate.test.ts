@@ -33,6 +33,7 @@ test('warn mode returns exit code 2 for mixed or opposed results', () => {
     assert.equal(qualityGateExitCode(gate), 2);
   }
   assert.equal(qualityGateExitCode(evaluateQualityGate('warn', [outcome('aligned')])), 0);
+  assert.equal(qualityGateExitCode(evaluateQualityGate('warn', [outcome('mixed')]), 0), 0);
 });
 
 test('enforce mode blocks opposed and warns for mixed results', () => {
@@ -48,4 +49,13 @@ test('first run is not comparable and passes in enforce mode', () => {
   const outcomes = classifyProfiles(visualProfile, [metric('m9', -1)], false);
   assert.equal(outcomes[0]?.outcome, 'not-comparable');
   assert.equal(qualityGateExitCode(evaluateQualityGate('enforce', outcomes)), 0);
+});
+
+test('fails when a compatible baseline is explicitly required', () => {
+  const outcomes = classifyProfiles(visualProfile, [metric('m9', -1)], false);
+  const gate = evaluateQualityGate('enforce', outcomes, { requireBaseline: true, hasBaseline: false });
+  assert.equal(gate.status, 'fail');
+  assert.equal(gate.requireBaseline, true);
+  assert.match(gate.reason, /baseline is required/);
+  assert.equal(qualityGateExitCode(gate), 1);
 });

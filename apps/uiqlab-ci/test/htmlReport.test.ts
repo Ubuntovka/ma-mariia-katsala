@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { renderHtmlReport, renderHtmlReportWithEmbeddedImages } from '../src/htmlReport.js';
-import { buildBatchReport, buildReport } from '../src/report.js';
+import { buildBatchReport, buildFailedPageReport, buildReport } from '../src/report.js';
 
 test('renders a self-contained visual report with profiles and metric comparisons', () => {
   const report = buildReport({
@@ -85,4 +85,21 @@ test('renders useful HTML artifacts for skipped and failed runs', () => {
   assert.match(failed, /Assessment could not be completed/);
   assert.match(failed, /Orchestrator timeout/);
   assert.match(failed, /Technical failure/);
+});
+
+test('renders completed and technically failed pages in the same batch artifact', () => {
+  const completed = buildReport({
+    target: 'https://example.com/', branch: 'main', resultId: 'home', baselineBranch: 'main',
+    results: [], history: {}, assessment: { mode: 'profiles', profiles: [{ id: 'general-review', direction: 'observe' }] },
+    qualityGateMode: 'report',
+  });
+  const failed = buildFailedPageReport({
+    target: 'https://example.com/checkout', branch: 'main', assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'reduce-issues' }] },
+    qualityGateMode: 'enforce', requireBaseline: true, reason: 'Orchestrator returned invalid JSON.',
+  });
+  const html = renderHtmlReport(buildBatchReport([completed, failed], 'main'));
+  assert.match(html, /https:\/\/example\.com\//);
+  assert.match(html, /https:\/\/example\.com\/checkout/);
+  assert.match(html, /This page could not be completed/);
+  assert.match(html, /Orchestrator returned invalid JSON/);
 });

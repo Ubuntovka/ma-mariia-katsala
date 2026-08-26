@@ -27,6 +27,7 @@ export interface QualityGateResult {
   mode: QualityGateMode;
   status: GateStatus;
   reason: string;
+  requireBaseline: boolean;
 }
 
 type ExpectedMovement = 'increase' | 'decrease' | 'preserve' | 'observe';
@@ -107,20 +108,36 @@ export function classifyProfiles(
   });
 }
 
-export function evaluateQualityGate(mode: QualityGateMode, outcomes: readonly ProfileOutcome[]): QualityGateResult {
+export function evaluateQualityGate(
+  mode: QualityGateMode,
+  outcomes: readonly ProfileOutcome[],
+  options: { requireBaseline?: boolean; hasBaseline?: boolean } = {},
+): QualityGateResult {
+  const requireBaseline = options.requireBaseline ?? false;
+  if (requireBaseline && !options.hasBaseline) {
+    return {
+      mode,
+      status: 'fail',
+      reason: 'A compatible baseline is required, but none is available.',
+      requireBaseline,
+    };
+  }
   const opposed = outcomes.filter((profile) => profile.outcome === 'opposed').length;
   const mixed = outcomes.filter((profile) => profile.outcome === 'mixed').length;
   if (mode === 'enforce' && opposed > 0) {
-    return { mode, status: 'fail', reason: `${opposed} profile${opposed === 1 ? '' : 's'} opposed the configured direction.` };
+    return { mode, status: 'fail', reason: `${opposed} profile${opposed === 1 ? '' : 's'} opposed the configured direction.`, requireBaseline };
   }
   if (mode !== 'report' && (opposed > 0 || mixed > 0)) {
-    return { mode, status: 'warning', reason: `${opposed} opposed and ${mixed} mixed profile outcome${opposed + mixed === 1 ? '' : 's'}.` };
+    return { mode, status: 'warning', reason: `${opposed} opposed and ${mixed} mixed profile outcome${opposed + mixed === 1 ? '' : 's'}.`, requireBaseline };
   }
-  return { mode, status: 'pass', reason: outcomes.length === 0 ? 'No assessment profiles are configured.' : 'No profile outcome triggers this quality-gate mode.' };
+  return { mode, status: 'pass', reason: outcomes.length === 0 ? 'No assessment profiles are configured.' : 'No profile outcome triggers this quality-gate mode.', requireBaseline };
 }
 
-export function qualityGateExitCode(gate: Pick<QualityGateResult, 'status'>): 0 | 1 | 2 {
+export function qualityGateExitCode(
+  gate: Pick<QualityGateResult, 'status'>,
+  warningExitCode: 0 | 2 = 2,
+): 0 | 1 | 2 {
   if (gate.status === 'fail') return 1;
-  if (gate.status === 'warning') return 2;
+  if (gate.status === 'warning') return warningExitCode;
   return 0;
 }

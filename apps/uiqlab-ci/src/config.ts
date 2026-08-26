@@ -14,6 +14,7 @@ export interface CiConfig {
   metrics: string[];
   assessment: { mode: 'custom' } | { mode: 'profiles'; profiles: AssessmentProfileSelection[] };
   qualityGateMode: QualityGateMode;
+  requireBaseline: boolean;
   timeoutMs: number;
   pollIntervalMs: number;
 }
@@ -23,6 +24,7 @@ export interface CiPageConfig {
   profiles: AssessmentProfileSelection[];
   metrics: string[];
   qualityGateMode: QualityGateMode;
+  requireBaseline: boolean;
 }
 
 interface ProjectConfigFile {
@@ -33,7 +35,7 @@ interface ProjectConfigFile {
     profiles?: unknown;
     metrics?: unknown;
   };
-  qualityGate?: { mode?: unknown };
+  qualityGate?: { mode?: unknown; requireBaseline?: unknown };
   ci?: {
     branches?: unknown;
     baselineBranch?: unknown;
@@ -63,7 +65,7 @@ function resolvePages(value: unknown, filename: string): CiPageConfig[] {
       profiles?: unknown;
       profile?: unknown;
       direction?: unknown;
-      qualityGate?: { mode?: unknown };
+      qualityGate?: { mode?: unknown; requireBaseline?: unknown };
     };
     if (typeof path !== 'string' || !path.startsWith('/') || path.includes('?') || path.includes('#')) {
       throw new Error(`${location}.path must be a route path starting with "/" and without a query or fragment.`);
@@ -89,8 +91,17 @@ function resolvePages(value: unknown, filename: string): CiPageConfig[] {
     if (qualityGateMode !== 'report' && qualityGateMode !== 'warn' && qualityGateMode !== 'enforce') {
       throw new Error(`${location}.qualityGate.mode must be one of: report, warn, enforce.`);
     }
+    if (qualityGate.requireBaseline !== undefined && typeof qualityGate.requireBaseline !== 'boolean') {
+      throw new Error(`${location}.qualityGate.requireBaseline must be a boolean.`);
+    }
     paths.add(normalizedPath);
-    pages.push({ path: normalizedPath, profiles: resolved.profiles, metrics: resolved.metrics, qualityGateMode });
+    pages.push({
+      path: normalizedPath,
+      profiles: resolved.profiles,
+      metrics: resolved.metrics,
+      qualityGateMode,
+      requireBaseline: qualityGate.requireBaseline ?? false,
+    });
   }
   return pages;
 }
@@ -169,6 +180,9 @@ export async function loadConfig(filename: string): Promise<CiConfig> {
   if (qualityGateMode !== 'report' && qualityGateMode !== 'warn' && qualityGateMode !== 'enforce') {
     throw new Error(`${filename} qualityGate.mode must be one of: report, warn, enforce.`);
   }
+  if (parsed.qualityGate?.requireBaseline !== undefined && typeof parsed.qualityGate.requireBaseline !== 'boolean') {
+    throw new Error(`${filename} qualityGate.requireBaseline must be a boolean.`);
+  }
   const result: CiConfig = {
     projectKey: parsed.projectKey,
     branches,
@@ -179,6 +193,7 @@ export async function loadConfig(filename: string): Promise<CiConfig> {
       ? { mode: 'profiles', profiles: resolvedProfiles.profiles }
       : { mode: 'custom' },
     qualityGateMode,
+    requireBaseline: parsed.qualityGate?.requireBaseline ?? false,
     timeoutMs: typeof parsed.ci?.timeoutMs === 'number' ? parsed.ci.timeoutMs : 300_000,
     pollIntervalMs: typeof parsed.ci?.pollIntervalMs === 'number' ? parsed.ci.pollIntervalMs : 2_000,
   };

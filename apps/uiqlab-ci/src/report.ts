@@ -44,14 +44,29 @@ export interface AssessmentReport {
   rawResults: MetricResult[];
 }
 
+export interface FailedPageAssessmentReport {
+  schemaVersion: 1;
+  status: 'failed';
+  target: string;
+  source: 'ci/cd';
+  branch: string;
+  commitHash?: string;
+  assessment: AssessmentReport['assessment'];
+  profileOutcomes: [];
+  qualityGate: QualityGateResult;
+  reason: string;
+}
+
+export type PageAssessmentReport = AssessmentReport | FailedPageAssessmentReport;
+
 export interface BatchAssessmentReport {
   schemaVersion: 2;
-  status: 'completed';
+  status: 'completed' | 'failed';
   source: 'ci/cd';
   branch: string;
   commitHash?: string;
   qualityGate: { mode: 'per-page'; status: QualityGateResult['status']; reason: string };
-  pages: AssessmentReport[];
+  pages: PageAssessmentReport[];
 }
 
 const METRIC_NAMES: Record<string, string> = {
@@ -167,6 +182,7 @@ interface BuildReportInput {
   history: AssessmentHistory;
   assessment?: AssessmentReport['assessment'];
   qualityGateMode?: QualityGateMode;
+  requireBaseline?: boolean;
 }
 
 export function buildReport(input: BuildReportInput): AssessmentReport {
@@ -215,7 +231,10 @@ export function buildReport(input: BuildReportInput): AssessmentReport {
       Boolean(input.history.baselineRun),
     )
     : [];
-  const qualityGate = evaluateQualityGate(input.qualityGateMode ?? 'warn', profileOutcomes);
+  const qualityGate = evaluateQualityGate(input.qualityGateMode ?? 'warn', profileOutcomes, {
+    requireBaseline: input.requireBaseline ?? false,
+    hasBaseline: Boolean(input.history.baselineRun),
+  });
   const report: AssessmentReport = {
     schemaVersion: 1,
     status: 'completed',
@@ -236,15 +255,51 @@ export function buildReport(input: BuildReportInput): AssessmentReport {
   return report;
 }
 
+export function buildFailedPageReport(input: {
+  target: string;
+  branch: string;
+  commitHash?: string;
+  assessment: AssessmentReport['assessment'];
+  qualityGateMode: QualityGateMode;
+  requireBaseline: boolean;
+  reason: string;
+}): FailedPageAssessmentReport {
+  const report: FailedPageAssessmentReport = {
+    schemaVersion: 1,
+    status: 'failed',
+    target: input.target,
+    source: 'ci/cd',
+    branch: input.branch,
+    assessment: input.assessment,
+    profileOutcomes: [],
+    qualityGate: {
+      mode: input.qualityGateMode,
+      status: 'fail',
+      reason: 'A technical error prevented this page assessment from completing.',
+      requireBaseline: input.requireBaseline,
+    },
+    reason: input.reason,
+  };
+  if (input.commitHash !== undefined) report.commitHash = input.commitHash;
+  return report;
+}
+
 export function buildBatchReport(
-  pages: AssessmentReport[],
+  pages: PageAssessmentReport[],
   branch: string,
   commitHash?: string,
 ): BatchAssessmentReport {
+  const technicalFailures = pages.filter((page) => page.status === 'failed').length;
   const failed = pages.filter((page) => page.qualityGate.status === 'fail').length;
   const warned = pages.filter((page) => page.qualityGate.status === 'warning').length;
   let qualityGate: BatchAssessmentReport['qualityGate'];
-  if (failed > 0) {
+  if (technicalFailures > 0) {
+    qualityGate = {
+      mode: 'per-page',
+      status: 'fail',
+      reason: `${technicalFailures} of ${pages.length} page assessment${pages.length === 1 ? '' : 's'} failed technically.`,
+    };
+  } else if (failed > 0) {
     qualityGate = {
       mode: 'per-page',
       status: 'fail',
@@ -265,7 +320,7 @@ export function buildBatchReport(
   }
   const report: BatchAssessmentReport = {
     schemaVersion: 2,
-    status: 'completed',
+    status: technicalFailures > 0 ? 'failed' : 'completed',
     source: 'ci/cd',
     branch,
     qualityGate,
@@ -275,16 +330,20 @@ export function buildBatchReport(
   return report;
 }
 
-export function formatSummary(report: AssessmentReport, baselineBranch: string): string {
+export function formatSummary(
+  report: AssessmentReport,
+  baselineBranch: string,
+  warningExitCode: 0 | 2 = 2,
+): string {
   const gateDecision = report.qualityGate.status === 'fail'
-    ? 'Blocking failure: enforce mode fails when any profile is opposed.'
+    ? `Blocking failure: ${report.qualityGate.reason}`
     : report.qualityGate.status === 'warning'
       ? `Non-blocking warning: ${report.qualityGate.mode} mode warns when a profile is mixed or opposed.`
       : 'Passed: no profile outcome triggers the configured gate mode.';
   const lines = [
     'Web UI Assessment', '', `Quality gate: ${report.qualityGate.status.toUpperCase()} (${report.qualityGate.mode})`,
     `Decision: ${gateDecision}`,
-    `Exit code: ${qualityGateExitCode(report.qualityGate)}`,
+    `Exit code: ${qualityGateExitCode(report.qualityGate, warningExitCode)}`,
     `Target: ${report.target}`,
     report.comparison ? `Compared with: latest assessment from ${baselineBranch}` : `Compared with: no previous assessment from ${baselineBranch} was available`,
   ];
@@ -318,17 +377,32 @@ export function formatSummary(report: AssessmentReport, baselineBranch: string):
   return lines.join('\n');
 }
 
-export function formatBatchSummary(report: BatchAssessmentReport, baselineBranch: string): string {
+export function formatBatchSummary(
+  report: BatchAssessmentReport,
+  baselineBranch: string,
+  warningExitCode: 0 | 2 = 2,
+): string {
   const lines = [
     'Web UI Assessment', '',
     `Pages assessed: ${report.pages.length}`,
     `Overall quality gate: ${report.qualityGate.status.toUpperCase()} (${report.qualityGate.mode})`,
     `Decision: ${report.qualityGate.reason}`,
-    `Exit code: ${qualityGateExitCode(report.qualityGate)}`,
+    `Exit code: ${qualityGateExitCode(report.qualityGate, warningExitCode)}`,
   ];
   report.pages.forEach((page, index) => {
-    const pageLines = formatSummary(page, baselineBranch).split('\n').slice(2);
-    lines.push('', `Page ${index + 1}/${report.pages.length}: ${page.target}`, ...pageLines);
+    if (page.status === 'completed') {
+      const pageLines = formatSummary(page, baselineBranch, warningExitCode).split('\n').slice(2);
+      lines.push('', `Page ${index + 1}/${report.pages.length}: ${page.target}`, ...pageLines);
+    } else {
+      lines.push(
+        '',
+        `Page ${index + 1}/${report.pages.length}: ${page.target}`,
+        `Quality gate: FAIL (${page.qualityGate.mode})`,
+        'Decision: Technical failure.',
+        'Exit code: 1',
+        `Reason: ${page.reason}`,
+      );
+    }
   });
   return lines.join('\n');
 }
