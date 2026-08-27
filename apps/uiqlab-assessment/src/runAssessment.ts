@@ -156,6 +156,9 @@ import * as http from 'http';
 import * as https from 'https';
 
 const ORCHESTRATOR_BASE = 'http://127.0.0.1:8181';
+const DEFAULT_GET_TIMEOUT_MS = 10_000;
+const RESULT_REQUEST_TIMEOUT_MS = 130_000;
+const RESULT_POLL_TIMEOUT_MS = 300_000;
 // The orchestrator receives both the screenshot and rendered HTML when a DOM
 // metric is selected. It forwards them to the evaluator as separate requests.
 const MAX_MULTIPART_BODY_BYTES = 10 * 1024 * 1024;
@@ -163,7 +166,7 @@ const MAX_MULTIPART_BODY_BYTES = 10 * 1024 * 1024;
 import FormData = require('form-data');
 
 
-async function httpGetJson<T>(url: string, timeoutMs: number = 100): Promise<T> {
+async function httpGetJson<T>(url: string, timeoutMs: number = DEFAULT_GET_TIMEOUT_MS): Promise<T> {
 	const parsed = new URL(url);
 	const lib = parsed.protocol === 'https:' ? https : http;
 
@@ -436,8 +439,11 @@ export function toMetricIds(selectedAssessments: AssessmentName[]): string[] {
 	});
 }
 
-export async function fetchEvaluationResult(wui_id: string): Promise<any> {
-	return await httpGetJson(`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}`);
+export async function fetchEvaluationResult(wui_id: string, timeoutMs: number = RESULT_REQUEST_TIMEOUT_MS): Promise<any> {
+	return await httpGetJson(
+		`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}`,
+		timeoutMs,
+	);
 }
 
 export async function fetchAssessmentHistory(wui_id: string, baselineRunId?: number): Promise<AssessmentHistory> {
@@ -483,7 +489,7 @@ export async function fetchAssessmentExplanation(
 
 /**
  * Poll for evaluation results until the expected number of unique metrics is reached
- * or the maximum number of attempts is exhausted.
+ * or the overall polling deadline / maximum number of attempts is reached.
  */
 export async function pollEvaluationResult(
 	wui_id: string,
@@ -491,24 +497,35 @@ export async function pollEvaluationResult(
 	options: {
 		maxAttempts?: number;
 		intervalMs?: number;
+		timeoutMs?: number;
+		requestTimeoutMs?: number;
 		onUpdate?: (results: any[]) => void;
 		isCancelled?: () => boolean;
+		fetchResult?: (wuiId: string, timeoutMs: number) => Promise<any>;
 	} = {}
 ): Promise<any[]> {
 	const {
-		maxAttempts = 150, // 5 minutes default
+		maxAttempts = 150,
 		intervalMs = 2000,
+		timeoutMs = RESULT_POLL_TIMEOUT_MS,
+		requestTimeoutMs = RESULT_REQUEST_TIMEOUT_MS,
 		onUpdate,
-		isCancelled
+		isCancelled,
+		fetchResult = fetchEvaluationResult,
 	} = options;
 
 	let lastResult: any[] = [];
-	for (let attempt = 0; attempt < maxAttempts; attempt++) {
+	const deadline = Date.now() + timeoutMs;
+	for (let attempt = 0; attempt < maxAttempts && Date.now() < deadline; attempt++) {
 		if (isCancelled && isCancelled()) {
 			break;
 		}
 		try {
-			const result = await fetchEvaluationResult(wui_id);
+			const remainingMs = Math.max(1, deadline - Date.now());
+			const result = await fetchResult(
+				wui_id,
+				Math.min(requestTimeoutMs, remainingMs),
+			);
 			if (Array.isArray(result) && result.length > 0) {
 				lastResult = result;
 				if (onUpdate) {
@@ -523,7 +540,10 @@ export async function pollEvaluationResult(
 		} catch (err) {
 			// ignore and retry
 		}
-		await new Promise((r) => setTimeout(r, intervalMs));
+		const remainingMs = deadline - Date.now();
+		if (remainingMs > 0) {
+			await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, remainingMs)));
+		}
 	}
 	return lastResult;
 }

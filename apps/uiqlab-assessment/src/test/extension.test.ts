@@ -5,6 +5,7 @@ import {
 	collectAssessmentRunRequest,
 	formatAssessmentRunSummary,
 	normalizeAvailableMetricItems,
+	pollEvaluationResult,
 	type QuickPickUi,
 } from '../runAssessment';
 import { getMetricDefinition, METRIC_DEFINITIONS } from '../metricCatalog';
@@ -43,6 +44,41 @@ suite('Run Assessment flow', () => {
 	test('exposes all assessment names and data source options', () => {
 		assert.strictEqual(ASSESSMENTS.length, 14);
 		assert.deepStrictEqual(DATA_SOURCE_OPTIONS, ['Deployment URL', 'Local URL']);
+	});
+
+	test('allows result requests to wait beyond the former 100 ms timeout', async () => {
+		let suppliedRequestTimeout = 0;
+		const results = await pollEvaluationResult('result-1', 2, {
+			timeoutMs: 5_000,
+			intervalMs: 0,
+			fetchResult: async (_resultId, requestTimeoutMs) => {
+				suppliedRequestTimeout = requestTimeoutMs;
+				return [
+					{ metric_id: 'm1_png_file_size', results: [100] },
+					{ metric_id: 'm2_jpeg_file_size', results: [80] },
+				];
+			},
+		});
+
+		assert.strictEqual(results.length, 2);
+		assert.ok(suppliedRequestTimeout > 100);
+	});
+
+	test('caps each result request at the remaining overall polling deadline', async () => {
+		const requestedTimeouts: number[] = [];
+		await pollEvaluationResult('result-2', 1, {
+			timeoutMs: 25,
+			requestTimeoutMs: 130_000,
+			intervalMs: 0,
+			maxAttempts: 1,
+			fetchResult: async (_resultId, requestTimeoutMs) => {
+				requestedTimeouts.push(requestTimeoutMs);
+				return [];
+			},
+		});
+
+		assert.strictEqual(requestedTimeouts.length, 1);
+		assert.ok(requestedTimeouts[0] > 0 && requestedTimeouts[0] <= 25);
 	});
 
 	test('provides an explanation for every assessment metric', () => {
