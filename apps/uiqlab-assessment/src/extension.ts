@@ -88,9 +88,16 @@ async function buildExplanationContext(
 	workspaceRoot: string,
 	shareSourceCode: boolean,
 ) {
+	const sourceContext = shareSourceCode
+		? await collectWorkspaceSourceContext(workspaceRoot, target)
+		: [];
 	const selectedProfiles = normalizeProfileAssessmentSelection(assessmentSelection);
 	if (!selectedProfiles) {
-		return { assessment: assessmentSelection, target };
+		return {
+			assessment: assessmentSelection,
+			target,
+			...(sourceContext.length > 0 ? { sourceContext } : {}),
+		};
 	}
 	const profileAssessment = assessProfilesAgainstHistory(
 		selectedProfiles,
@@ -98,9 +105,6 @@ async function buildExplanationContext(
 		history?.metrics ?? {},
 		Boolean(history?.baselineRun),
 	);
-	const sourceContext = shareSourceCode
-		? await collectWorkspaceSourceContext(workspaceRoot, target)
-		: [];
 	return {
 		assessment: assessmentSelection,
 		profileAssessment,
@@ -1364,6 +1368,12 @@ export function renderCustomMetricLlmFeedback(feedback: CustomMetricLlmFeedback)
 	const materialChangeCount = Number.isInteger(feedback.materialChangeCount) && feedback.materialChangeCount >= 0
 		? feedback.materialChangeCount
 		: 0;
+	const sourceFiles = Array.isArray(feedback.sourceFiles)
+		? feedback.sourceFiles.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 10)
+		: [];
+	const sourceLabel = feedback.sourceContextUsed && sourceFiles.length > 0
+		? `Based on metrics and ${sourceFiles.length} source file${sourceFiles.length === 1 ? '' : 's'}`
+		: 'Based on metrics only';
 	const modeLabel = feedback.analysisMode === 'comparison'
 		? `Baseline comparison · ${materialChangeCount} material change${materialChangeCount === 1 ? '' : 's'}`
 		: 'Current-state analysis';
@@ -1371,6 +1381,9 @@ export function renderCustomMetricLlmFeedback(feedback: CustomMetricLlmFeedback)
 		? `<div class="custom-finding-list">${findings.map((finding, index) => {
 			const metricIds = Array.isArray(finding.metricIds)
 				? finding.metricIds.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 6)
+				: [];
+			const files = Array.isArray(finding.files)
+				? finding.files.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 4)
 				: [];
 			return `<article class="custom-finding-card">
 				<div class="custom-finding-index" aria-hidden="true">${index + 1}</div>
@@ -1380,7 +1393,7 @@ export function renderCustomMetricLlmFeedback(feedback: CustomMetricLlmFeedback)
 					<div class="analysis-connector" aria-hidden="true">↓</div>
 					<div class="analysis-step interpretation-step"><span class="analysis-step-label">Technical interpretation</span><p>${escapeHtml(finding.interpretation)}</p></div>
 					<div class="analysis-connector" aria-hidden="true">↓</div>
-					<div class="analysis-step recommendation-step"><span class="analysis-step-label">Practical next step</span><p>${escapeHtml(finding.recommendation)}</p></div>
+					<div class="analysis-step recommendation-step"><span class="analysis-step-label">Practical next step</span><p>${escapeHtml(finding.recommendation)}</p>${files.length > 0 ? `<div class="file-chips">${files.map((file) => `<code>${escapeHtml(file)}</code>`).join('')}</div>` : ''}</div>
 				</div>
 			</article>`;
 		}).join('')}</div>`
@@ -1391,8 +1404,8 @@ export function renderCustomMetricLlmFeedback(feedback: CustomMetricLlmFeedback)
 	return `<section class="custom-ai-feedback" aria-labelledby="custom-ai-title">
 		<div class="custom-ai-heading">
 			<div class="custom-ai-icon" aria-hidden="true">AI</div>
-			<div><span class="custom-eyebrow">AI custom-metric analysis</span><h2 id="custom-ai-title">Technical assessment interpretation</h2></div>
-			<span class="analysis-mode-badge">${modeLabel}</span>
+			<div class="custom-ai-title"><span class="custom-eyebrow">AI custom-metric analysis</span><h2 id="custom-ai-title">Technical assessment interpretation</h2></div>
+			<div class="custom-ai-badges"><span class="analysis-mode-badge">${modeLabel}</span><span class="context-badge" title="Source context supplied to the configured LLM provider">${escapeHtml(sourceLabel)}</span></div>
 		</div>
 		<p class="custom-ai-summary">${escapeHtml(feedback.summary)}</p>
 		<div class="custom-analysis-key"><span><i class="key-evidence"></i>Observation</span><span><i class="key-interpretation"></i>Interpretation</span><span><i class="key-recommendation"></i>Practical action</span></div>
@@ -1473,9 +1486,12 @@ export function generateResultsHtml(
 			--surface-accent: #e5f3f0;
 			--surface-muted: #e4eaee;
 			--surface-warning: #fff8e9;
-			--surface-evidence: #f0f5f8;
-			--surface-interpretation: #fcf7ed;
-			--surface-recommendation: #edf8f3;
+			--surface-evidence: #edf0f2;
+			--surface-interpretation: #e8f2f7;
+			--surface-recommendation: #e5f3f0;
+			--step-evidence: #60717b;
+			--step-interpretation: #1f688c;
+			--step-recommendation: #0b746f;
 			--ink: #101b24;
 			--ink-soft: #334550;
 			--muted: #52626d;
@@ -1605,17 +1621,19 @@ export function generateResultsHtml(
 		.no-suggestions { margin-bottom: 14px; color: var(--muted); font-size: 13px; }
 		.profile-ai-feedback .ai-note { margin-top: 4px; }
 		.custom-ai-feedback { margin-bottom: 26px; padding: 22px; border: 1px solid var(--border); border-top: 5px solid var(--accent); border-radius: 10px; background: var(--surface); }
-		.custom-ai-heading { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
-		.custom-ai-icon { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 9px; background: var(--navy-light); color: #fff; font-size: 12px; font-weight: 800; letter-spacing: .04em; }
+		.custom-ai-heading { display: grid; grid-template-areas: "icon title" "icon badges"; grid-template-columns: auto minmax(0, 1fr); align-items: start; column-gap: 12px; row-gap: 8px; }
+		.custom-ai-title { grid-area: title; min-width: 0; }
+		.custom-ai-badges { display: flex; grid-area: badges; flex-wrap: wrap; justify-content: flex-start; gap: 6px; }
+		.custom-ai-icon { display: grid; grid-area: icon; width: 40px; height: 40px; place-items: center; border-radius: 9px; background: var(--navy-light); color: #fff; font-size: 12px; font-weight: 800; letter-spacing: .04em; }
 		.custom-eyebrow { color: var(--accent-strong); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 		.custom-ai-heading h2 { margin-top: 3px; color: var(--navy); font-size: 20px; }
 		.analysis-mode-badge { padding: 5px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: 12px; font-weight: 700; white-space: nowrap; }
 		.custom-ai-summary { margin: 18px 0 14px; color: var(--ink-soft); font-size: 16px; line-height: 1.55; }
 		.custom-analysis-key { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 14px; padding: 9px 11px; border-radius: 6px; background: var(--surface-muted); color: var(--muted); font-size: 11px; }
 		.custom-analysis-key i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; }
-		.key-evidence { background: var(--navy-light); }
-		.key-interpretation { background: var(--warning); }
-		.key-recommendation { background: var(--success); }
+		.key-evidence { background: var(--step-evidence); }
+		.key-interpretation { background: var(--step-interpretation); }
+		.key-recommendation { background: var(--step-recommendation); }
 		.custom-finding-list { display: grid; gap: 12px; margin-bottom: 14px; }
 		.custom-finding-card { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
 		.custom-finding-index { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 7px; background: var(--navy-light); color: #fff; font-size: 12px; font-weight: 700; }
@@ -1627,12 +1645,12 @@ export function generateResultsHtml(
 		.analysis-step { padding: 10px 12px; border-left: 3px solid; border-radius: 5px; }
 		.analysis-step-label { display: block; margin-bottom: 4px; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 		.analysis-step p { color: var(--ink); font-size: 13px; line-height: 1.5; }
-		.evidence-step { border-color: var(--navy-light); background: var(--surface-evidence); }
-		.evidence-step .analysis-step-label { color: var(--navy-light); }
-		.interpretation-step { border-color: var(--warning); background: var(--surface-interpretation); }
-		.interpretation-step .analysis-step-label { color: var(--warning); }
-		.recommendation-step { border-color: var(--success); background: var(--surface-recommendation); }
-		.recommendation-step .analysis-step-label { color: var(--success); }
+		.evidence-step { border-color: var(--step-evidence); background: var(--surface-evidence); }
+		.evidence-step .analysis-step-label { color: var(--step-evidence); }
+		.interpretation-step { border-color: var(--step-interpretation); background: var(--surface-interpretation); }
+		.interpretation-step .analysis-step-label { color: var(--step-interpretation); }
+		.recommendation-step { border-color: var(--step-recommendation); background: var(--surface-recommendation); }
+		.recommendation-step .analysis-step-label { color: var(--step-recommendation); }
 		.analysis-connector { height: 17px; padding-left: 14px; color: #8a969e; font-size: 13px; line-height: 17px; }
 		.custom-no-findings { margin-bottom: 14px; padding: 14px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-subtle); }
 		.custom-no-findings strong { display: block; margin-bottom: 4px; color: var(--navy); font-size: 14px; }
@@ -1647,8 +1665,7 @@ export function generateResultsHtml(
 			.profile-ai-heading { grid-template-columns: auto 1fr; }
 			.profile-ai-status { grid-column: 1 / -1; width: fit-content; }
 			.suggestions-heading { align-items: flex-start; flex-direction: column; }
-			.custom-ai-heading { grid-template-columns: auto 1fr; }
-			.analysis-mode-badge { grid-column: 1 / -1; width: fit-content; }
+			.custom-ai-badges { gap: 5px; }
 			.custom-finding-heading { align-items: flex-start; flex-direction: column; }
 			.metric-chips { justify-content: flex-start; }
 		}

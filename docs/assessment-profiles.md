@@ -56,16 +56,15 @@ structured analysis panel that separates measured evidence, technical
 interpretation, and practical implementation actions.
 
 The sidebar provides a separate **Allow LLM to use source code (Demo)** toggle.
-This experimental feature is available only for profile runs with LLM feedback,
-stored per workspace, and off by default. With permission, the IDE extension
+This experimental feature is available for profile and custom-metric runs with
+LLM feedback, stored per workspace, and off by default. With permission, the IDE extension
 selects up to 10 relevant frontend files, limited to 24 KiB per file and 100 KiB
 total. The files are supplied to the LLM to produce more precise,
-project-specific suggestions. The active editor and assessed route are
+project-specific interpretations and suggestions. The active editor and assessed route are
 prioritized; generated directories, dependencies, minified JavaScript, and
 source maps are excluded. The LLM cannot search the project, and the captured
 page HTML is not used as this source context. Without permission, the same
-profile summary is generated from assessment/history data and suggestions use
-metrics only.
+explanation is generated from assessment/history data and uses metrics only.
 
 The history comparison lists every metric requested by the current assessment,
 not only metrics shared with the baseline. A requested metric without a

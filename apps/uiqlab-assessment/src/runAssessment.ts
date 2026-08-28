@@ -100,6 +100,7 @@ export interface CustomMetricLlmFinding {
 	observation: string;
 	interpretation: string;
 	recommendation: string;
+	files: string[];
 }
 
 export interface CustomMetricLlmFeedback {
@@ -107,6 +108,8 @@ export interface CustomMetricLlmFeedback {
 	findings: CustomMetricLlmFinding[];
 	analysisMode: 'comparison' | 'current-state';
 	materialChangeCount: number;
+	sourceContextUsed: boolean;
+	sourceFiles: string[];
 }
 
 export interface ProfileLlmSuggestion {

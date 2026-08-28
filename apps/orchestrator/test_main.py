@@ -247,6 +247,12 @@ class LlmExplanationTests(unittest.TestCase):
             {'metrics': {
                 'm9_edge_density': {'results': [0.18], 'createdAt': '2026-01-01T12:00:00Z'}
             }},
+            {'mode': 'custom'},
+            target='http://localhost:3000/dashboard',
+            source_context=[{
+                'path': 'src/pages/dashboard.tsx',
+                'content': '<main className="dashboard">Dashboard</main>',
+            }],
         )
 
         self.assertIn('software engineers', messages[0]['content'])
@@ -261,6 +267,11 @@ class LlmExplanationTests(unittest.TestCase):
         self.assertIn('what to change in the interface or implementation', messages[0]['content'])
         self.assertIn('Retesting may confirm a change', messages[0]['content'])
         self.assertIn('primary action is to analyze', messages[0]['content'])
+        self.assertIn('potential user', messages[0]['content'])
+        self.assertIn('what may draw attention', messages[0]['content'])
+        self.assertIn('code-informed hypothesis', messages[0]['content'])
+        self.assertIn('src/pages/dashboard.tsx', messages[1]['content'])
+        self.assertIn('http://localhost:3000/dashboard', messages[1]['content'])
 
     def test_extracts_and_filters_structured_custom_metric_feedback(self):
         feedback = extract_custom_metric_llm_feedback({
@@ -272,15 +283,17 @@ class LlmExplanationTests(unittest.TestCase):
                 "metricIds": ["m9_edge_density", "m10", "m99"],
                 "observation": "Edge density and feature congestion increased.",
                 "interpretation": "The measurements indicate greater visual information density.",
-                "recommendation": "Isolate one layout change and repeat both measurements."
+                "recommendation": "Isolate one layout change and repeat both measurements.",
+                "files": ["src/pages/dashboard.tsx", "invented.tsx"]
               }]
             }
             ```'''}}]
-        }, ['m9', 'm10'])
+        }, ['m9', 'm10'], ['src/pages/dashboard.tsx'])
 
         self.assertEqual(feedback['summary'], 'The clutter indicators increased relative to the baseline.')
         self.assertEqual(feedback['findings'][0]['metricIds'], ['M9', 'M10'])
         self.assertNotIn('M99', feedback['findings'][0]['metricIds'])
+        self.assertEqual(feedback['findings'][0]['files'], ['src/pages/dashboard.tsx'])
 
     def test_replaces_research_only_custom_recommendation_with_practical_action(self):
         feedback = extract_custom_metric_llm_feedback({
@@ -453,13 +466,41 @@ class LlmExplanationTimeoutTests(unittest.IsolatedAsyncioTestCase):
             'main.LLM_API_KEY', 'test-key'
         ), patch('main.LLM_MODEL', 'test-model'), patch(
             'main.LLM_TIMEOUT_SECONDS', 0.01
-        ), patch('main.httpx.AsyncClient', return_value=HangingClient()):
+        ), patch('main.LLM_CONNECT_TIMEOUT_SECONDS', 60.0), patch(
+            'main.httpx.AsyncClient', return_value=HangingClient()
+        ) as client_constructor:
             with self.assertRaises(HTTPException) as raised:
                 await explain_assessment(payload)
 
         self.assertEqual(raised.exception.status_code, 504)
         self.assertIn('did not finish within', raised.exception.detail)
         self.assertIs(posted_request['json']['stream'], False)
+        self.assertEqual(client_constructor.call_args.kwargs['timeout'].connect, 60.0)
+
+    async def test_reports_configured_provider_connection_timeout(self):
+        class ConnectTimeoutClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, _exc_type, _exc, _traceback):
+                return None
+
+            async def post(self, *_args, **_kwargs):
+                raise httpx.ConnectTimeout('provider connection timed out')
+
+        payload = ExplainAssessmentInput(
+            currentResults=[{'metric_id': 'm9_edge_density', 'results': [0.2]}],
+        )
+        with patch('main.LLM_API_URL', 'https://provider.example/v1'), patch(
+            'main.LLM_API_KEY', 'test-key'
+        ), patch('main.LLM_MODEL', 'test-model'), patch(
+            'main.LLM_CONNECT_TIMEOUT_SECONDS', 60.0
+        ), patch('main.httpx.AsyncClient', return_value=ConnectTimeoutClient()):
+            with self.assertRaises(HTTPException) as raised:
+                await explain_assessment(payload)
+
+        self.assertEqual(raised.exception.status_code, 504)
+        self.assertIn('within 60 seconds', raised.exception.detail)
 
 
 if __name__ == '__main__':

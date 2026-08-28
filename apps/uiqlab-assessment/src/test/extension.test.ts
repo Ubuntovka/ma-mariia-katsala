@@ -143,20 +143,26 @@ suite('Run Assessment flow', () => {
 
 	test('renders structured custom-metric analysis as evidence-to-action cards', () => {
 		const html = renderCustomMetricLlmFeedback({
-			summary: 'Two independent clutter indicators increased relative to the baseline.',
+			summary: 'A potential user may experience a denser interface with more competing visual information.',
 			analysisMode: 'comparison',
 			materialChangeCount: 2,
+			sourceContextUsed: true,
+			sourceFiles: ['src/pages/dashboard.tsx'],
 			findings: [{
 				title: 'Corroborating visual-density measurements',
 				metricIds: ['M9', 'M10'],
 				observation: 'Edge density and feature congestion increased.',
 				interpretation: 'The measurements indicate increased visual information density.',
 				recommendation: 'Isolate one layout change and repeat both measurements. <script>alert(1)</script>',
+				files: ['src/pages/dashboard.tsx'],
 			}],
 		});
 
 		assert.match(html, /custom-ai-feedback/);
 		assert.match(html, /Baseline comparison · 2 material changes/);
+		assert.match(html, /Based on metrics and 1 source file/);
+		assert.match(html, /potential user may experience a denser interface/);
+		assert.match(html, /src\/pages\/dashboard\.tsx/);
 		assert.match(html, /Measured evidence/);
 		assert.match(html, /Technical interpretation/);
 		assert.match(html, /Practical next step/);

@@ -85,6 +85,7 @@ The integration uses these variables:
 | `LLM_API_URL` | Yes | OpenAI-compatible API base URL or full Chat Completions URL. |
 | `LLM_API_KEY` | Yes | Secret bearer token used only by the orchestrator. |
 | `LLM_MODEL` | Yes | Provider-specific model name. |
+| `LLM_CONNECT_TIMEOUT_SECONDS` | No | Time allowed to establish the provider connection. Defaults to 60 seconds, with a minimum of 10 seconds. |
 | `LLM_TIMEOUT_SECONDS` | No | End-to-end provider request deadline. Defaults to 180 seconds, with a minimum of 10 seconds. |
 
 Example university configuration:
@@ -93,6 +94,7 @@ Example university configuration:
 LLM_API_URL=https://university-provider.example/v1
 LLM_API_KEY=replace-with-the-real-secret
 LLM_MODEL=replace-with-the-university-model-name
+LLM_CONNECT_TIMEOUT_SECONDS=60
 LLM_TIMEOUT_SECONDS=180
 ```
 
@@ -102,6 +104,7 @@ Example OpenAI configuration:
 LLM_API_URL=https://api.openai.com/v1
 LLM_API_KEY=replace-with-an-openai-api-key
 LLM_MODEL=replace-with-a-chat-completions-model
+LLM_CONNECT_TIMEOUT_SECONDS=60
 LLM_TIMEOUT_SECONDS=180
 ```
 
@@ -163,13 +166,13 @@ remain stored per workspace.
 History is included only when the history endpoint finds a comparable previous
 run. Screenshot-based comparisons require matching screenshot dimensions.
 
-Profile mode additionally shows **Allow LLM to use source code (Demo)**. This
-experimental feature is an independent permission, is off by default, and is
-disabled outside profile mode or when LLM explanations are disabled. Turning it
-on permits selected source files to leave the developer's machine and reach the
-configured LLM provider. The files are used to produce more precise,
-project-specific suggestions. Profile guidance still works with metric/history
-data when it is off; suggestions then use metrics only.
+Both profile and custom-metric modes show **Allow LLM to use source code
+(Demo)**. This experimental feature is an independent permission, is off by
+default, and is disabled when LLM explanations are disabled. Turning it on
+permits selected source files to leave the developer's machine and reach the
+configured LLM provider. The files are used for more precise, project-specific
+interpretations and suggestions. Explanations still work with metric/history
+data when it is off.
 
 ## Orchestrator API contract
 
@@ -214,8 +217,9 @@ Content-Type: application/json
 ```
 
 `assessment`, `profileAssessment`, `target`, and `sourceContext` are optional.
-They are supplied for profile guidance; custom metric calls remain compatible
-with the original `currentResults` and `history` request.
+`profileAssessment` is supplied only for profile guidance; `target` and the
+separately permitted `sourceContext` can be supplied for profile or custom
+metric explanations.
 
 ### Successful response
 
@@ -241,8 +245,9 @@ with the original `currentResults` and `history` request.
 
 Custom metric assessments return `explanation` for compatibility and a
 `customFeedback` object containing `summary`, `analysisMode`,
-`materialChangeCount`, and up to six validated `findings`. Each finding contains
-`title`, `metricIds`, `observation`, `interpretation`, and `recommendation`.
+`materialChangeCount`, `sourceContextUsed`, `sourceFiles`, and up to six
+validated `findings`. Each finding contains `title`, `metricIds`, `observation`,
+`interpretation`, `recommendation`, and up to four validated source-file paths.
 
 ### Important response codes
 
@@ -262,6 +267,10 @@ from client-facing errors.
 
 - For custom metrics, a system message requires precise professional
   computer-science and HCI language without slang or colloquialisms. It tells
+  the model to begin with a qualified interpretation of likely user perception,
+  scanning effort, visual density, and predicted attention when supported. It
+  prevents specific attention claims without M7 evidence or relevant source.
+  The prompt then tells
   the model to cover every preselected comparison finding, combine overlaps,
   distinguish observations from interpretations, and provide concrete,
   reversible interface or implementation changes. Recommendations cannot use
@@ -271,10 +280,11 @@ from client-facing errors.
   previous results as JSON data. It also contains a deterministic comparison
   selection produced before the model is called.
 
-For profile mode, the prompt treats the deterministic profile outcome as
-authoritative and asks for compact JSON rather than Markdown. The LLM may
-explain that outcome but cannot redefine whether the goal was achieved. It must
-relate suggestions to the chosen profile directions. When source is supplied,
+For profile mode, the prompt likewise starts with likely user perception, then
+treats the deterministic profile outcome as authoritative and asks for compact
+JSON rather than Markdown. The LLM may explain that outcome but cannot redefine
+whether the goal was achieved. It must relate suggestions to the chosen profile
+directions. When source is supplied in either mode,
 it may cite only actual supplied paths; the orchestrator removes invented paths
 from the response. Source contents and assessment values are explicitly marked
 as untrusted data rather than instructions.
@@ -317,8 +327,8 @@ basic limits:
 - lists and dictionaries are limited to 50 entries at each level;
 - content nested deeper than six levels is omitted;
 - custom-mode serialized assessment data is limited to 30,000 characters;
-- profile-mode data has a 140,000-character ceiling to accommodate the
-  separately bounded opt-in source context.
+- explanation data has a 140,000-character ceiling to accommodate the
+  separately bounded opt-in source context in either mode.
 
 Opt-in source context has separate hard limits:
 
@@ -331,8 +341,9 @@ Opt-in source context has separate hard limits:
 - the orchestrator reapplies the file and byte limits before calling the
   provider.
 
-The response is limited to 1,600 tokens in the provider request so all material
-findings can be covered without forcing repetitive detail. The integration
+Profile responses are limited to 900 tokens and custom-metric responses to
+1,800 tokens so all material findings can be covered without forcing repetitive
+detail. The integration
 does not currently cache explanations or store them in PostgreSQL; a new
 explanation is requested for every completed assessment.
 
@@ -341,8 +352,9 @@ explanation is requested for every completed assessment.
 The results panel has four explanation states:
 
 1. While assessment metrics are still arriving, no explanation block is shown.
-2. After a successful custom-metric LLM call, a **Plain-language explanation**
-   section is rendered above the raw values.
+2. After a successful custom-metric LLM call, an **AI custom-metric analysis**
+   panel shows a user-perception summary, evidence-to-action findings, relevant
+   file chips, and whether metrics only or metrics plus source files were used.
 3. After a successful profile LLM call, an **AI profile guidance** panel shows
    the authoritative goal status, short summary, change observations, numbered
    suggestion cards, relevant file chips, and whether the model used metrics
@@ -361,7 +373,7 @@ but model-generated HTML cannot execute in the webview.
 | `apps/orchestrator/test_main.py` | Unit tests for URL normalization, prompt contents, URL omission, and response extraction. |
 | `apps/uiqlab-assessment/src/runAssessment.ts` | Client function that calls the orchestrator explanation endpoint and enforces the extension timeout. |
 | `apps/uiqlab-assessment/src/extension.ts` | Calls the explanation function after assessment completion and renders success or failure states. |
-| `apps/uiqlab-assessment/src/sourceContext.ts` | Selects and bounds opt-in frontend source context for profile suggestions. |
+| `apps/uiqlab-assessment/src/sourceContext.ts` | Selects and bounds opt-in frontend source context for profile and custom-metric explanations. |
 | `apps/uiqlab-assessment/src/assessmentSidebar.ts` | Stores and enforces the per-workspace source-sharing permission toggle. |
 | `docker-compose.yml` | Passes LLM variables into the orchestrator container. |
 | `.env.example` | Documents non-secret example configuration. |
@@ -395,6 +407,10 @@ network traffic cannot keep the request alive indefinitely. If the model
 legitimately needs longer, increase `LLM_TIMEOUT_SECONDS` and recreate the
 orchestrator. The extension currently waits 210 seconds, so keep the server
 timeout below that or increase both values together.
+
+If the error specifically says that the provider connection could not be
+established, increase `LLM_CONNECT_TIMEOUT_SECONDS`. Its default is 60 seconds;
+it remains bounded by the overall `LLM_TIMEOUT_SECONDS` deadline.
 
 ### `httpx.ReadTimeout` while polling `/eval/result/...`
 
