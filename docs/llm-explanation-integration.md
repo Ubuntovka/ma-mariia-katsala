@@ -85,7 +85,7 @@ The integration uses these variables:
 | `LLM_API_URL` | Yes | OpenAI-compatible API base URL or full Chat Completions URL. |
 | `LLM_API_KEY` | Yes | Secret bearer token used only by the orchestrator. |
 | `LLM_MODEL` | Yes | Provider-specific model name. |
-| `LLM_TIMEOUT_SECONDS` | No | Provider response timeout. Defaults to 180 seconds, with a minimum of 10 seconds. |
+| `LLM_TIMEOUT_SECONDS` | No | End-to-end provider request deadline. Defaults to 180 seconds, with a minimum of 10 seconds. |
 
 Example university configuration:
 
@@ -143,6 +143,8 @@ sent directly to `/v1` and the university web server returned HTTP 403.
 7. It reduces and sanitizes the assessment payload, adds metric definitions,
    and builds system and user messages.
 8. It calls the provider using bearer authentication and the configured model.
+   The request explicitly disables streaming so compatible gateways return one
+   complete JSON response.
 9. Custom runs validate structured JSON containing a summary and technical
    findings. Profile runs validate structured JSON containing a summary, change
    observations, and suggestions.
@@ -387,10 +389,12 @@ when one is available.
 
 ### HTTP 504 or timeout
 
-Verify the university VPN and endpoint availability. If the model legitimately
-needs longer, increase `LLM_TIMEOUT_SECONDS` and recreate the orchestrator. The
-extension currently waits 210 seconds, so keep the server timeout below that or
-increase both values together.
+Verify the university VPN and endpoint availability. The deadline covers the
+whole provider call, including connection setup and response reading, so partial
+network traffic cannot keep the request alive indefinitely. If the model
+legitimately needs longer, increase `LLM_TIMEOUT_SECONDS` and recreate the
+orchestrator. The extension currently waits 210 seconds, so keep the server
+timeout below that or increase both values together.
 
 ### `httpx.ReadTimeout` while polling `/eval/result/...`
 

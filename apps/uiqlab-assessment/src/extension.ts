@@ -1321,8 +1321,8 @@ export function renderProfileLlmFeedback(feedback: ProfileLlmFeedback): string {
 		? feedback.sourceFiles.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 10)
 		: [];
 	const sourceLabel = feedback.sourceContextUsed && sourceFiles.length > 0
-		? `Metrics and ${sourceFiles.length} source file${sourceFiles.length === 1 ? '' : 's'}`
-		: 'Metrics only';
+		? `Based on metrics and ${sourceFiles.length} source file${sourceFiles.length === 1 ? '' : 's'}`
+		: 'Based on metrics only';
 	const changesHtml = changes.length > 0
 		? `<div class="feedback-changes">${changes.map((change) => `<div class="change-chip"><span aria-hidden="true">↳</span><span>${escapeHtml(change)}</span></div>`).join('')}</div>`
 		: '';
@@ -1589,8 +1589,8 @@ export function generateResultsHtml(
 		.status-partial .profile-ai-status { background: #faedcf; color: #87550e; }
 		.profile-ai-summary { margin: 18px 0 14px; font-size: 16px; line-height: 1.55; color: var(--ink-soft); }
 		.feedback-changes { display: grid; gap: 8px; margin-bottom: 20px; }
-		.change-chip { display: grid; grid-template-columns: auto 1fr; gap: 8px; padding: 9px 11px; border-radius: 6px; background: var(--surface-accent); color: var(--ink-soft); font-size: 13px; line-height: 1.45; }
-		.change-chip > span:first-child { color: var(--accent); font-weight: 700; }
+		.change-chip { display: grid; grid-template-columns: auto 1fr; gap: 8px; padding: 9px 11px; border-radius: 6px; background: var(--surface-muted); color: var(--ink-soft); font-size: 13px; line-height: 1.45; }
+		.change-chip > span:first-child { color: var(--muted); font-weight: 700; }
 		.suggestions-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 18px 0 10px; }
 		.suggestions-heading h3 { color: var(--navy); font-size: 16px; }
 		.context-badge { background: var(--surface-muted); color: var(--ink-soft); font-weight: 600; }

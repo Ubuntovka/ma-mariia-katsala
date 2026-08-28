@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from datetime import datetime, timezone
 from fastapi import HTTPException
@@ -14,6 +15,8 @@ from main import (
     extract_custom_metric_llm_feedback,
     extract_llm_explanation,
     extract_profile_llm_feedback,
+    ExplainAssessmentInput,
+    explain_assessment,
     fetch_merged_backend_results,
     merge_metric_results,
     metric_result_index,
@@ -426,6 +429,37 @@ class LlmExplanationTests(unittest.TestCase):
         })
 
         self.assertEqual(feedback['summary'], 'Metrics moved toward the goal.')
+
+
+class LlmExplanationTimeoutTests(unittest.IsolatedAsyncioTestCase):
+    async def test_enforces_end_to_end_provider_deadline(self):
+        posted_request = {}
+
+        class HangingClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, _exc_type, _exc, _traceback):
+                return None
+
+            async def post(self, *_args, **kwargs):
+                posted_request.update(kwargs)
+                await asyncio.Event().wait()
+
+        payload = ExplainAssessmentInput(
+            currentResults=[{'metric_id': 'm9_edge_density', 'results': [0.2]}],
+        )
+        with patch('main.LLM_API_URL', 'https://provider.example/v1'), patch(
+            'main.LLM_API_KEY', 'test-key'
+        ), patch('main.LLM_MODEL', 'test-model'), patch(
+            'main.LLM_TIMEOUT_SECONDS', 0.01
+        ), patch('main.httpx.AsyncClient', return_value=HangingClient()):
+            with self.assertRaises(HTTPException) as raised:
+                await explain_assessment(payload)
+
+        self.assertEqual(raised.exception.status_code, 504)
+        self.assertIn('did not finish within', raised.exception.detail)
+        self.assertIs(posted_request['json']['stream'], False)
 
 
 if __name__ == '__main__':

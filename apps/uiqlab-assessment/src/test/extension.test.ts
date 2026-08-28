@@ -121,10 +121,24 @@ suite('Run Assessment flow', () => {
 
 		assert.match(html, /profile-ai-feedback status-partial/);
 		assert.match(html, /Suggested next steps/);
-		assert.match(html, /Metrics and 1 source file/);
+		assert.match(html, /Based on metrics and 1 source file/);
 		assert.match(html, /src\/pages\/home\.tsx/);
 		assert.doesNotMatch(html, /<script>/);
 		assert.match(html, /&lt;script&gt;content&lt;\/script&gt;/);
+	});
+
+	test('labels profile guidance that uses metrics without shared source files', () => {
+		const html = renderProfileLlmFeedback({
+			goalStatus: 'achieved',
+			goalTitle: 'Profile goal achieved',
+			summary: 'The selected metrics moved in the requested direction.',
+			changes: [],
+			suggestions: [],
+			sourceContextUsed: false,
+			sourceFiles: [],
+		});
+
+		assert.match(html, /Based on metrics only/);
 	});
 
 	test('renders structured custom-metric analysis as evidence-to-action cards', () => {

@@ -889,58 +889,68 @@ async def explain_assessment(payload: ExplainAssessmentInput):
     try:
         source_context = compact_source_context(payload.sourceContext)
         profile_mode = is_profile_explanation(payload.assessment, payload.profileAssessment)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                resolve_llm_chat_completions_url(LLM_API_URL),
-                headers={
-                    "Authorization": f"Bearer {LLM_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": LLM_MODEL,
-                    "messages": build_explanation_messages(
-                        payload.currentResults,
-                        payload.history,
-                        payload.assessment,
-                        payload.profileAssessment,
-                        payload.target,
-                        source_context,
-                    ),
-                    "temperature": 0,
-                    "max_tokens": 900 if profile_mode else 1800,
-                },
-            )
-            response.raise_for_status()
-            response_data = response.json()
-            if profile_mode:
-                source_files = [item["path"] for item in source_context]
-                feedback = extract_profile_llm_feedback(response_data, source_files)
-                profile_assessment = payload.profileAssessment or {}
+        # httpx timeouts apply to individual network operations. Enforce a
+        # separate wall-clock deadline so partial provider traffic cannot keep
+        # the request alive until the IDE's longer client timeout expires.
+        async with asyncio.timeout(LLM_TIMEOUT_SECONDS):
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    resolve_llm_chat_completions_url(LLM_API_URL),
+                    headers={
+                        "Authorization": f"Bearer {LLM_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": LLM_MODEL,
+                        "messages": build_explanation_messages(
+                            payload.currentResults,
+                            payload.history,
+                            payload.assessment,
+                            payload.profileAssessment,
+                            payload.target,
+                            source_context,
+                        ),
+                        "temperature": 0,
+                        "max_tokens": 900 if profile_mode else 1800,
+                        "stream": False,
+                    },
+                )
+                response.raise_for_status()
+                response_data = response.json()
+                if profile_mode:
+                    source_files = [item["path"] for item in source_context]
+                    feedback = extract_profile_llm_feedback(response_data, source_files)
+                    profile_assessment = payload.profileAssessment or {}
+                    return {
+                        "explanation": feedback["summary"],
+                        "profileFeedback": {
+                            "goalStatus": str(profile_assessment.get("status", "not-comparable")),
+                            "goalTitle": str(profile_assessment.get("title", "Profile assessment")),
+                            **feedback,
+                            "sourceContextUsed": bool(source_files),
+                            "sourceFiles": source_files,
+                        },
+                    }
+                allowed_metric_ids = sorted({
+                    result.get("metric_id", "").split("_", 1)[0]
+                    for result in payload.currentResults
+                    if isinstance(result, dict) and isinstance(result.get("metric_id"), str)
+                })
+                feedback = extract_custom_metric_llm_feedback(response_data, allowed_metric_ids)
+                comparison = select_comparison_findings(payload.currentResults, payload.history)
                 return {
                     "explanation": feedback["summary"],
-                    "profileFeedback": {
-                        "goalStatus": str(profile_assessment.get("status", "not-comparable")),
-                        "goalTitle": str(profile_assessment.get("title", "Profile assessment")),
+                    "customFeedback": {
                         **feedback,
-                        "sourceContextUsed": bool(source_files),
-                        "sourceFiles": source_files,
+                        "analysisMode": "comparison" if comparison["comparableMetricCount"] > 0 else "current-state",
+                        "materialChangeCount": comparison["materialChangeCount"],
                     },
                 }
-            allowed_metric_ids = sorted({
-                result.get("metric_id", "").split("_", 1)[0]
-                for result in payload.currentResults
-                if isinstance(result, dict) and isinstance(result.get("metric_id"), str)
-            })
-            feedback = extract_custom_metric_llm_feedback(response_data, allowed_metric_ids)
-            comparison = select_comparison_findings(payload.currentResults, payload.history)
-            return {
-                "explanation": feedback["summary"],
-                "customFeedback": {
-                    **feedback,
-                    "analysisMode": "comparison" if comparison["comparableMetricCount"] > 0 else "current-state",
-                    "materialChangeCount": comparison["materialChangeCount"],
-                },
-            }
+    except TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail=f"The LLM provider did not finish within {LLM_TIMEOUT_SECONDS:g} seconds",
+        )
     except httpx.ConnectTimeout:
         raise HTTPException(
             status_code=504,
