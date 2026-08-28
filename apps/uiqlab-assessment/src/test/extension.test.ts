@@ -38,6 +38,7 @@ import {
 	requestedHistoryMetricIds,
 } from '../extension';
 import { getPngDimensions } from '../playwrightCapture';
+import { formatAssessmentRunLabel } from '../assessmentSidebar';
 import { PNG } from 'pngjs';
 
 suite('Run Assessment flow', () => {
@@ -325,6 +326,39 @@ suite('Run Assessment flow', () => {
 				},
 			}),
 			'Selected assessments: NIMA, accessibility. Deployment URL: https://example.com.',
+		);
+	});
+
+	test('labels previous assessments with the page path, date time, and working state', () => {
+		const createdAt = '2026-08-28T10:15:00.000Z';
+		assert.strictEqual(
+			formatAssessmentRunLabel({
+				id: 12,
+				createdAt,
+				commitHash: '1234567890abcdef',
+				gitDirty: true,
+				assessedTarget: '/checkout',
+				screenshotDimensions: { width: 1440, height: 900 },
+			}),
+			`/checkout · ${new Date(createdAt).toLocaleString()} · commit 12345678 + changes`,
+		);
+		assert.strictEqual(
+			formatAssessmentRunLabel({
+				id: 13,
+				createdAt,
+				commitHash: 'abcdef1234567890',
+				gitDirty: false,
+				assessedTarget: '/checkout',
+			}),
+			`/checkout · ${new Date(createdAt).toLocaleString()} · commit abcdef12`,
+		);
+		assert.strictEqual(
+			formatAssessmentRunLabel({
+				id: 14,
+				createdAt,
+				assessedTarget: '/checkout',
+			}),
+			`/checkout · ${new Date(createdAt).toLocaleString()}`,
 		);
 	});
 

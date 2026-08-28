@@ -358,14 +358,14 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	}
 }
 
-function formatAssessmentRunLabel(run: AssessmentRunSummary): string {
-	const commit = run.commitHash ? run.commitHash.slice(0, 8) : 'no commit';
-	const dirty = run.gitDirty ? ' + working changes' : '';
-	const target = run.assessedTarget ? ` · ${run.assessedTarget}` : '';
-	const dimensions = run.screenshotDimensions
-		? ` · ${run.screenshotDimensions.width}×${run.screenshotDimensions.height}`
-		: '';
-	return `${commit}${dirty} · ${new Date(run.createdAt).toLocaleString()}${target}${dimensions}`;
+export function formatAssessmentRunLabel(run: AssessmentRunSummary): string {
+	const pagePath = run.assessedTarget || '/';
+	const dateTime = new Date(run.createdAt).toLocaleString();
+	if (!run.commitHash) {
+		return `${pagePath} · ${dateTime}`;
+	}
+	const sourceState = `commit ${run.commitHash.slice(0, 8)}${run.gitDirty ? ' + changes' : ''}`;
+	return `${pagePath} · ${dateTime} · ${sourceState}`;
 }
 
 function toSidebarAssessmentRun(run: AssessmentRunSummary): {
