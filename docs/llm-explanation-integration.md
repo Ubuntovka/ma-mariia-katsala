@@ -434,6 +434,7 @@ Run the orchestrator tests in an environment with its dependencies installed:
 
 ```bash
 cd apps/orchestrator
+python -m pip install -r requirements.txt
 python -m unittest test_main.py
 ```
 
