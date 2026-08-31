@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { isEligibleSourcePath, scoreSourceCandidate } from '../sourceContext';
+import { isEligibleSourcePath, scoreSourceCandidate } from '../sourceContextSelection';
 
 suite('Profile suggestion source context', () => {
 	test('prioritizes the active file and files matching the assessed route', () => {

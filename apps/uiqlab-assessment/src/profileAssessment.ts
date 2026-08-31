@@ -3,6 +3,7 @@ import {
 	resolveProfiles,
 	type AssessmentProfileSelection,
 } from './assessmentProfiles';
+import type { AssessmentMetricResult } from './runAssessment';
 
 export type ProfileOutcomeKind = 'aligned' | 'opposed' | 'mixed' | 'unchanged' | 'not-comparable';
 export type ProfileGoalStatus = 'achieved' | 'not-achieved' | 'partial' | 'unchanged' | 'observed' | 'not-comparable';
@@ -132,7 +133,7 @@ export function primaryProfileMetricValue(metricId: string, rawValue: unknown): 
 }
 
 export function buildProfileMetricComparisons(
-	currentResults: readonly any[],
+	currentResults: readonly AssessmentMetricResult[],
 	historyMetrics: Readonly<Record<string, { results: unknown }>>,
 ): ProfileMetricComparison[] {
 	return currentResults.map((result): ProfileMetricComparison => {
@@ -306,7 +307,7 @@ export function summarizeProfileAssessment(outcomes: ProfileOutcome[]): ProfileA
 
 export function assessProfilesAgainstHistory(
 	profiles: readonly AssessmentProfileSelection[],
-	currentResults: readonly any[],
+	currentResults: readonly AssessmentMetricResult[],
 	historyMetrics: Readonly<Record<string, { results: unknown }>>,
 	hasBaseline: boolean,
 ): ProfileAssessmentSummary {

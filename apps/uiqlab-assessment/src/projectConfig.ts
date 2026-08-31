@@ -13,6 +13,10 @@ export interface ProjectConfig {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+	return error instanceof Error;
+}
+
 function parseProjectConfig(contents: string, configPath: string): ProjectConfig {
 	let value: unknown;
 	try {
@@ -72,8 +76,8 @@ export async function getOrCreateProjectConfig(workspaceRoot: string): Promise<P
 	const configPath = path.join(workspaceRoot, PROJECT_CONFIG_FILENAME);
 	try {
 		return parseProjectConfig(await fs.readFile(configPath, 'utf8'), configPath);
-	} catch (error: any) {
-		if (error?.code !== 'ENOENT') {
+	} catch (error) {
+		if (!isNodeError(error) || error.code !== 'ENOENT') {
 			throw error;
 		}
 	}
@@ -86,9 +90,9 @@ export async function getOrCreateProjectConfig(workspaceRoot: string): Promise<P
 	try {
 		await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
 		return config;
-	} catch (error: any) {
+	} catch (error) {
 		// Another extension window may have created it between our read and write.
-		if (error?.code === 'EEXIST') {
+		if (isNodeError(error) && error.code === 'EEXIST') {
 			return parseProjectConfig(await fs.readFile(configPath, 'utf8'), configPath);
 		}
 		throw error;

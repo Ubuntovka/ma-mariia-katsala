@@ -1,4 +1,5 @@
 import { chromium, Browser, Page } from 'playwright-core';
+import { errorMessage, logDiagnostic } from './diagnostics';
 
 // Reserve space below Nginx's default 1 MiB request-body limit for the
 // multipart boundaries, metric IDs, and project metadata.
@@ -102,8 +103,8 @@ export async function capturePage(url: string, timeoutMs = 30000): Promise<Captu
   try {
     try {
       browser = await chromium.launch({ headless: true });
-    } catch (err: any) {
-      throw new Error(`Failed to launch browser: ${err?.message ?? err}`);
+    } catch (error) {
+      throw new Error(`Failed to launch browser: ${errorMessage(error)}`);
     }
 
     const context = await browser.newContext({
@@ -121,15 +122,15 @@ export async function capturePage(url: string, timeoutMs = 30000): Promise<Captu
       if (!response) {
         throw new Error('Navigation failed: no response received');
       }
-    } catch (err: any) {
-      throw new Error(`Navigation failed: ${err?.message ?? err}`);
+    } catch (error) {
+      throw new Error(`Navigation failed: ${errorMessage(error)}`);
     }
 
     // Wait until document.readyState === 'complete'
     try {
       await page.waitForFunction(() => document.readyState === 'complete', null, { timeout: timeoutMs });
-    } catch (err: any) {
-      // continue; we'll still wait extra time below
+    } catch (error) {
+      logDiagnostic('The page did not reach readyState=complete before capture', error);
     }
 
     // Wait additional 5 seconds for dynamic content
@@ -153,16 +154,16 @@ export async function capturePage(url: string, timeoutMs = 30000): Promise<Captu
         viewport.width,
         viewport.height,
       );
-    } catch (err: any) {
-      throw new Error(`Screenshot failed: ${err?.message ?? err}`);
+    } catch (error) {
+      throw new Error(`Screenshot failed: ${errorMessage(error)}`);
     }
 
     // Capture rendered HTML
     let html: string;
     try {
       html = await page.content();
-    } catch (err: any) {
-      throw new Error(`Failed to get page content: ${err?.message ?? err}`);
+    } catch (error) {
+      throw new Error(`Failed to get page content: ${errorMessage(error)}`);
     }
 
     const finalUrl = page.url();

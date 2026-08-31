@@ -13,6 +13,19 @@ Installation (development):
 
   npx playwright install chromium
 
+Development quality checks:
+
+```bash
+npm test              # type-check, lint, build, and run unit tests
+npm run package       # production bundle
+npm run test:integration  # optional VS Code-hosted integration suite
+```
+
+The extension entry point only registers commands and views. Assessment execution lives in
+`assessmentRunner.ts`; metric algorithms are grouped into basic, visual, and quality modules;
+history data preparation and rendering are separate; and webview escaping/CSP rules are shared
+through dedicated formatting and security modules. Tests mirror these boundaries under `src/test`.
+
 Note: The extension depends on playwright-core. The browser binary is not bundled into the VSIX. For releases that include the browser, you must ensure the packaging step includes the browser binary or instruct users to run the above install command. Capture runs wherever the VS Code extension host is running — in Remote SSH/Codespaces/container environments capture executes there and must be able to reach the target localhost endpoint.
 
 How to start a local web application (example):

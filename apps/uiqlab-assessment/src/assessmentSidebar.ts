@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { errorMessage, logDiagnostic } from './diagnostics';
 import {
 	AssessmentRunRequest,
 	AssessmentRunSummary,
@@ -10,6 +11,7 @@ import {
 	type AssessmentProfileSelection,
 } from './assessmentProfiles';
 import { METRIC_DEFINITIONS } from './metricCatalog';
+import { formatAssessmentRunLabel } from './sidebarFormatting';
 
 export type SidebarInitialSelection =
 	| { mode: 'profiles'; profiles: AssessmentProfileSelection[] }
@@ -94,8 +96,9 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 				void view.webview.postMessage({ type: 'running', value: true });
 				try {
 					await this.comparePastAssessments(message.currentRunId, message.baselineRunId);
-				} catch (error: any) {
-					void vscode.window.showErrorMessage(`Could not compare assessments: ${error?.message ?? error}`);
+				} catch (error) {
+					logDiagnostic('Could not compare assessments from the sidebar', error);
+					void vscode.window.showErrorMessage(`Could not compare assessments: ${errorMessage(error)}`);
 				} finally {
 					void view.webview.postMessage({ type: 'running', value: false });
 				}
@@ -117,8 +120,8 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 			let selection: ReturnType<typeof resolveSidebarAssessmentSelection>;
 			try {
 				selection = resolveSidebarAssessmentSelection(message);
-			} catch (error: any) {
-				void vscode.window.showErrorMessage(error?.message ?? 'Choose at least one profile or metric to run.');
+			} catch (error) {
+				void vscode.window.showErrorMessage(errorMessage(error) || 'Choose at least one profile or metric to run.');
 				return;
 			}
 
@@ -165,7 +168,9 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 				try {
 					const runs = (await this.fetchAssessmentRuns()).map(toSidebarAssessmentRun);
 					void view.webview.postMessage({ type: 'assessmentRuns', runs });
-				} catch { }
+				} catch (error) {
+					logDiagnostic('Could not refresh assessment history in the sidebar', error);
+				}
 			}
 		});
 	}
@@ -356,16 +361,6 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	updateSelectionMode(); updateHistoricalSelectors(); updateMode();
 </script></body></html>`;
 	}
-}
-
-export function formatAssessmentRunLabel(run: AssessmentRunSummary): string {
-	const pagePath = run.assessedTarget || '/';
-	const dateTime = new Date(run.createdAt).toLocaleString();
-	if (!run.commitHash) {
-		return `${pagePath} · ${dateTime}`;
-	}
-	const sourceState = `commit ${run.commitHash.slice(0, 8)}${run.gitDirty ? ' + changes' : ''}`;
-	return `${pagePath} · ${dateTime} · ${sourceState}`;
 }
 
 function toSidebarAssessmentRun(run: AssessmentRunSummary): {
