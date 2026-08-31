@@ -32,6 +32,13 @@ import {
 	type ProfileOutcome,
 } from './profileAssessment';
 import { collectWorkspaceSourceContext } from './sourceContext';
+import {
+	buildWebviewContentSecurityPolicy,
+	createWebviewNonce,
+	escapeHtml,
+	safeHttpUrl,
+	safeWebviewImageUrl,
+} from './webviewSecurity';
 
 function getGitInfo(workspaceRoot: string, projectConfig: ProjectConfig): GitInfo {
 	let repositoryUrl = '';
@@ -856,7 +863,7 @@ function readM9Result(value: unknown): { density: number; edgeImageUrl?: string 
 	if (Array.isArray(value)) {
 		const density = finiteNumber(value[0]);
 		return density !== undefined && density >= 0 && density <= 1
-			? { density, edgeImageUrl: typeof value[1] === 'string' ? value[1] : undefined }
+			? { density, edgeImageUrl: safeWebviewImageUrl(value[1]) }
 			: undefined;
 	}
 	if (typeof value !== 'object' || value === null) { return undefined; }
@@ -868,7 +875,7 @@ function readM9Result(value: unknown): { density: number; edgeImageUrl?: string 
 	);
 	const edgeImage = fields.get('edgeimage') ?? fields.get('edgeimageurl') ?? fields.get('image');
 	return density !== undefined && density >= 0 && density <= 1
-		? { density, edgeImageUrl: typeof edgeImage === 'string' ? edgeImage : undefined }
+		? { density, edgeImageUrl: safeWebviewImageUrl(edgeImage) }
 		: undefined;
 }
 
@@ -928,7 +935,7 @@ function readM10Result(value: unknown): { congestion: number; mapUrl?: string } 
 	if (Array.isArray(value)) {
 		const congestion = finiteNumber(value[0]);
 		return congestion !== undefined
-			? { congestion, mapUrl: typeof value[1] === 'string' ? value[1] : undefined }
+			? { congestion, mapUrl: safeWebviewImageUrl(value[1]) }
 			: undefined;
 	}
 	if (typeof value !== 'object' || value === null) { return undefined; }
@@ -940,7 +947,7 @@ function readM10Result(value: unknown): { congestion: number; mapUrl?: string } 
 	);
 	const map = fields.get('congestionmap') ?? fields.get('mapurl') ?? fields.get('visualization') ?? fields.get('image');
 	return congestion !== undefined
-		? { congestion, mapUrl: typeof map === 'string' ? map : undefined }
+		? { congestion, mapUrl: safeWebviewImageUrl(map) }
 		: undefined;
 }
 
@@ -1423,15 +1430,17 @@ export function generateResultsHtml(
 	profileFeedback?: ProfileLlmFeedback,
 	customFeedback?: CustomMetricLlmFeedback,
 ): string {
+	const inputResults = Array.isArray(results) ? results : [];
+	const imageUrls = new Set<string>();
 	// Filter out results that are completely empty, but keep them if they are the only ones for a metric
-	const filteredResults = results.filter((r, i) => {
-		if (Array.isArray(r.results) && r.results.length > 0) {
+	const filteredResults = inputResults.filter((r, i) => {
+		if (Array.isArray(r?.results) && r.results.length > 0) {
 			return true;
 		}
 		// If it's empty, check if there's any other non-empty result for the same metric_id
-		const hasNonEmpty = results.some((other, j) =>
+		const hasNonEmpty = inputResults.some((other, j) =>
 			i !== j &&
-			other.metric_id === r.metric_id &&
+			other?.metric_id === r?.metric_id &&
 			Array.isArray(other.results) &&
 			other.results.length > 0
 		);
@@ -1439,22 +1448,31 @@ export function generateResultsHtml(
 	});
 
 	const resultItems = (filteredResults.length > 0 ? filteredResults : []).map((r) => {
-		const metric = getMetricInfoById(r.metric_id);
-		const metricName = metric?.name || r.metric_id;
-		const resultValues = Array.isArray(r.results) ? r.results : [r.results];
+		const metricId = typeof r?.metric_id === 'string' ? r.metric_id : 'Unknown metric';
+		const metric = getMetricInfoById(metricId);
+		const metricName = metric?.name || metricId;
+		const resultValues = Array.isArray(r?.results) ? r.results : [r?.results];
 
 		return `
 		<div class="metric-result">
-			<h3>${metricName}</h3>
+			<h3>${escapeHtml(metricName)}</h3>
 			<div class="result-values">
 				${resultValues.map((val: any, i: number) => {
 			let displayVal = '';
-			if (typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://')) && (val.toLowerCase().endsWith('.png') || val.toLowerCase().endsWith('.jpg') || val.toLowerCase().endsWith('.jpeg'))) {
-				displayVal = `<img class="result-image" src="${val}" alt="Result ${i + 1} visual output" />`;
+			const imageUrl = safeWebviewImageUrl(val);
+			if (imageUrl) {
+				imageUrls.add(imageUrl);
+				displayVal = `<img class="result-image" src="${escapeHtml(imageUrl)}" alt="Result ${i + 1} visual output" />`;
 			} else if (typeof val === 'object' && val !== null) {
-				displayVal = `<pre class="result-json">${JSON.stringify(val, null, 2)}</pre>`;
+				let serialized: string;
+				try {
+					serialized = JSON.stringify(val, null, 2) ?? String(val);
+				} catch {
+					serialized = '[Result could not be serialized]';
+				}
+				displayVal = `<pre class="result-json">${escapeHtml(serialized)}</pre>`;
 			} else {
-				displayVal = val;
+				displayVal = escapeHtml(String(val ?? ''));
 			}
 			return `<div class="result-item"><strong>Result ${i + 1}:</strong> ${displayVal}</div>`;
 		}).join('')}
@@ -1471,14 +1489,17 @@ export function generateResultsHtml(
 				: explanation === undefined ? '' : explanation
 					? `<section class="ai-explanation"><h2>Plain-language explanation</h2>${renderExplanationHtml(explanation)}<p class="ai-note">AI-generated interpretation. Verify important decisions against the metric values below.</p></section>`
 					: `<section class="ai-explanation unavailable"><h2>Plain-language explanation</h2><p>${escapeHtml(explanationError || 'The AI explanation is unavailable.')} The assessment results are still shown below.</p></section>`;
+	const nonce = createWebviewNonce();
+	const contentSecurityPolicy = buildWebviewContentSecurityPolicy(nonce, imageUrls);
 
 	return `<!DOCTYPE html>
 <html>
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<meta http-equiv="Content-Security-Policy" content="${escapeHtml(contentSecurityPolicy)}">
 	<title>Evaluation Results</title>
-	<style>
+	<style nonce="${nonce}">
 		:root {
 			--canvas: #f1f4f6;
 			--surface: #ffffff;
@@ -1945,25 +1966,26 @@ function findM14HistoryComparison(
 
 function readM7ImageUrls(value: unknown): { heatmap: string; overlay?: string } | undefined {
 	if (Array.isArray(value)) {
-		const urls = value.filter((item): item is string =>
-			typeof item === 'string' && /^https?:\/\//.test(item)
-		);
+		const urls = value.map(safeWebviewImageUrl).filter((item): item is string => Boolean(item));
 		if (urls.length > 0) { return { heatmap: urls[0], overlay: urls[1] }; }
 	}
 	if (typeof value !== 'object' || value === null) { return undefined; }
 	const fields = value as Record<string, unknown>;
 	const heatmap = fields.heatmap ?? fields.saliencyHeatmap ?? fields.saliency_heatmap;
 	const overlay = fields.overlay ?? fields.heatmapOverlay ?? fields.heatmap_overlay;
-	return typeof heatmap === 'string'
-		? { heatmap, overlay: typeof overlay === 'string' ? overlay : undefined }
+	const heatmapUrl = safeWebviewImageUrl(heatmap);
+	return heatmapUrl
+		? { heatmap: heatmapUrl, overlay: safeWebviewImageUrl(overlay) }
 		: undefined;
 }
 
 async function fetchImageBuffer(url: string): Promise<Buffer> {
+	const safeUrl = safeWebviewImageUrl(url);
+	if (!safeUrl) { throw new Error('Image URL must be an HTTP(S) raster image URL'); }
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), 10_000);
 	try {
-		const response = await fetch(url, { signal: controller.signal });
+		const response = await fetch(safeUrl, { signal: controller.signal });
 		if (!response.ok) { throw new Error(`HTTP ${response.status} fetching saliency heatmap`); }
 		const content = Buffer.from(await response.arrayBuffer());
 		if (content.length > 20 * 1024 * 1024) { throw new Error('Saliency heatmap exceeds 20 MiB'); }
@@ -2127,23 +2149,12 @@ function signedNumber(value: number, maximumFractionDigits: number = 0): string 
 	return `${value > 0 ? '+' : ''}${value.toLocaleString(undefined, { maximumFractionDigits })}`;
 }
 
-function escapeHtml(value: string): string {
-	return value
-		.replace(/&/g, '&amp;')
-		.replace(/</g, '&lt;')
-		.replace(/>/g, '&gt;')
-		.replace(/"/g, '&quot;')
-		.replace(/'/g, '&#39;');
-}
-
 function renderTargetLink(value: string): string {
 	const escapedValue = escapeHtml(value);
-	try {
-		const protocol = new URL(value).protocol;
-		if (protocol === 'http:' || protocol === 'https:') {
-			return `<a class="target-link" href="${escapedValue}" target="_blank" rel="noopener noreferrer" title="Open target in browser">${escapedValue}</a>`;
-		}
-	} catch { }
+	const safeUrl = safeHttpUrl(value);
+	if (safeUrl) {
+		return `<a class="target-link" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" title="Open target in browser">${escapedValue}</a>`;
+	}
 	return `<span>${escapedValue}</span>`;
 }
 
@@ -2313,16 +2324,17 @@ function goalStatusPresentation(status: ProfileGoalStatus): { label: string; ico
 
 function renderProfileOutcomeTrack(outcome: ProfileOutcome): string {
 	if (outcome.comparableMetrics.length === 0) {
-		return '<div class="outcome-track"><span class="track-neutral" style="width:100%"></span></div>';
+		return '<div class="outcome-track"><span class="track-neutral"></span></div>';
 	}
 	const total = outcome.comparableMetrics.length;
-	const alignedWidth = (outcome.alignedMetrics.length / total) * 100;
-	const opposedWidth = (outcome.opposedMetrics.length / total) * 100;
-	const unchangedWidth = Math.max(0, 100 - alignedWidth - opposedWidth);
+	const unchangedCount = Math.max(0, total - outcome.alignedMetrics.length - outcome.opposedMetrics.length);
+	const segments = [
+		...Array.from({ length: outcome.alignedMetrics.length }, () => '<span class="track-aligned"></span>'),
+		...Array.from({ length: unchangedCount }, () => '<span class="track-unchanged"></span>'),
+		...Array.from({ length: outcome.opposedMetrics.length }, () => '<span class="track-opposed"></span>'),
+	].join('');
 	return `<div class="outcome-track" aria-label="${outcome.alignedMetrics.length} aligned, ${outcome.opposedMetrics.length} opposed, ${total - outcome.meaningfulMetrics.length} unchanged">
-		${alignedWidth > 0 ? `<span class="track-aligned" style="width:${alignedWidth}%"></span>` : ''}
-		${unchangedWidth > 0 ? `<span class="track-unchanged" style="width:${unchangedWidth}%"></span>` : ''}
-		${opposedWidth > 0 ? `<span class="track-opposed" style="width:${opposedWidth}%"></span>` : ''}
+		${segments}
 	</div>`;
 }
 
@@ -2769,12 +2781,22 @@ async function showHistoryComparison(
 		},
 		historyMetricIds,
 	);
+	const historyImageUrls = [
+		m7Match?.previousHeatmapUrl,
+		m7Match?.currentHeatmapUrl,
+		m9Match?.previousEdgeImageUrl,
+		m9Match?.currentEdgeImageUrl,
+		m10Match?.previousMapUrl,
+		m10Match?.currentMapUrl,
+	].filter((value): value is string => Boolean(value));
+	const nonce = createWebviewNonce();
+	const contentSecurityPolicy = buildWebviewContentSecurityPolicy(nonce, historyImageUrls);
 
 	const panel = vscode.window.createWebviewPanel(
 		'historyComparison',
 		'Assessment History Comparison',
 		vscode.ViewColumn.Beside,
-		{}
+		{ enableScripts: false }
 	);
 
 	panel.webview.html = `<!DOCTYPE html>
@@ -2782,8 +2804,9 @@ async function showHistoryComparison(
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<meta http-equiv="Content-Security-Policy" content="${escapeHtml(contentSecurityPolicy)}">
 	<title>Assessment History Comparison</title>
-	<style>
+	<style nonce="${nonce}">
 		:root {
 			--canvas: #f1f4f6;
 			--surface: #ffffff;
@@ -2895,7 +2918,7 @@ async function showHistoryComparison(
 		.profile-direction { margin: 0; color: var(--muted); font-size: 12px; }
 		.status-pill { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--goal-color); border-radius: 999px; color: var(--goal-color); font-size: 11px; font-weight: 700; }
 		.outcome-track { display: flex; width: 100%; height: 9px; margin: 15px 0 8px; overflow: hidden; border-radius: 999px; background: var(--border); }
-		.outcome-track span { min-width: 2px; }
+		.outcome-track span { flex: 1; min-width: 2px; }
 		.track-aligned, .legend-aligned { background: var(--vscode-testing-iconPassed, var(--success)); }
 		.track-unchanged, .legend-unchanged { background: var(--muted); }
 		.track-opposed, .legend-opposed { background: var(--vscode-testing-iconFailed, var(--danger)); }
@@ -3027,7 +3050,7 @@ export function activate(context: vscode.ExtensionContext) {
 								const completedCount = new Set(currentResults.map((result: any) => result.metric_id.split('_')[0])).size;
 								progress.report({ message: `Step 2 of 3: Running assessments (${Math.min(completedCount, expectedCount)} of ${expectedCount} complete)` });
 								if (!panel) {
-									panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
+									panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, { enableScripts: false });
 								}
 								createResultsWebview(panel, currentResults, deploymentUrl, false);
 							},
@@ -3037,7 +3060,7 @@ export function activate(context: vscode.ExtensionContext) {
 						if (results.length > 0) {
 							progress.report({ message: useLlmExplanation ? 'Step 3 of 3: Explaining results' : 'Step 3 of 3: Preparing results' });
 							if (!panel) {
-								panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
+								panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, { enableScripts: false });
 							}
 							let history: AssessmentHistory | undefined;
 							let explanation: string | null | undefined;
@@ -3120,7 +3143,7 @@ export function activate(context: vscode.ExtensionContext) {
 							const completedCount = new Set(currentResults.map((currentResult: any) => currentResult.metric_id.split('_')[0])).size;
 							progress.report({ message: `Step 3 of 4: Running assessments (${Math.min(completedCount, expectedCount)} of ${expectedCount} complete)` });
 							if (!panel) {
-								panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
+								panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, { enableScripts: false });
 							}
 							createResultsWebview(panel, currentResults, localUrl, false);
 						},
@@ -3130,7 +3153,7 @@ export function activate(context: vscode.ExtensionContext) {
 					if (resultData && resultData.length > 0) {
 						progress.report({ message: useLlmExplanation ? 'Step 4 of 4: Explaining results' : 'Step 4 of 4: Preparing results' });
 						if (!panel) {
-							panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, {});
+							panel = vscode.window.createWebviewPanel('evaluationResults', 'Evaluation Results', vscode.ViewColumn.One, { enableScripts: false });
 						}
 						let history: AssessmentHistory | undefined;
 						const hasComparableResult = resultData.some(

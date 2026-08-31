@@ -40,6 +40,11 @@ import {
 import { getPngDimensions } from '../playwrightCapture';
 import { formatAssessmentRunLabel } from '../assessmentSidebar';
 import { PNG } from 'pngjs';
+import {
+	buildWebviewContentSecurityPolicy,
+	safeHttpUrl,
+	safeWebviewImageUrl,
+} from '../webviewSecurity';
 
 suite('Run Assessment flow', () => {
 	test('exposes all assessment names and data source options', () => {
@@ -203,6 +208,69 @@ suite('Run Assessment flow', () => {
 		assert.match(html, /1 metric/);
 		assert.doesNotMatch(html, /#667eea|#764ba2|linear-gradient\(/);
 		assert.doesNotMatch(generateResultsHtml([], 'javascript:alert(1)'), /class="target-link"/);
+	});
+
+	test('escapes every backend-controlled result value before rendering it', () => {
+		const html = generateResultsHtml([{
+			metric_id: 'unknown</h3><script>alert(1)</script>',
+			results: [
+				'</div><script>alert(2)</script>',
+				{ payload: '</pre><img src=x onerror=alert(3)>' },
+				'https://images.example/result.png" onerror="alert(4)',
+			],
+		}], 'https://example.com/" onclick="alert(5)');
+
+		assert.doesNotMatch(html, /<script>|<img src=x|onclick="alert|onerror="alert/);
+		assert.match(html, /unknown&lt;\/h3&gt;&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+		assert.match(html, /&lt;\/div&gt;&lt;script&gt;alert\(2\)&lt;\/script&gt;/);
+		assert.match(html, /&lt;\/pre&gt;&lt;img src=x onerror=alert\(3\)&gt;/);
+		assert.match(html, /&quot; onerror=&quot;alert\(4\)/);
+	});
+
+	test('renders only validated HTTP images and scopes CSP to their origins', () => {
+		const html = generateResultsHtml([{
+			metric_id: 'm9_edge_density',
+			results: [
+				'https://images.example/output.PNG?revision=2',
+				'data:image/png;base64,unsafe',
+				'javascript:alert(1).png',
+				'https://user:password@images.example/private.png',
+			],
+		}], 'https://example.com');
+		const nonceMatch = html.match(/<style nonce="([^"]+)">/);
+
+		assert.ok(nonceMatch, 'Expected a nonce on the result webview style element');
+		assert.match(html, /<meta http-equiv="Content-Security-Policy"/);
+		assert.match(html, /default-src &#39;none&#39;/);
+		assert.match(html, /script-src &#39;none&#39;/);
+		assert.ok(html.includes(`style-src &#39;nonce-${nonceMatch[1]}&#39;`));
+		assert.match(html, /img-src https:\/\/images\.example/);
+		assert.match(html, /src="https:\/\/images\.example\/output\.PNG\?revision=2"/);
+		assert.doesNotMatch(html, /<img[^>]+(?:data:|javascript:|user:password)/);
+	});
+
+	test('centralizes URL and CSP validation for results and history webviews', () => {
+		assert.strictEqual(safeHttpUrl('http://localhost:3000'), 'http://localhost:3000');
+		assert.strictEqual(safeHttpUrl('file:///tmp/result.png'), undefined);
+		assert.strictEqual(safeHttpUrl('https://user:secret@example.com/result.png'), undefined);
+		assert.strictEqual(safeWebviewImageUrl('https://example.com/result.webp?run=1'), 'https://example.com/result.webp?run=1');
+		assert.strictEqual(safeWebviewImageUrl('https://example.com/result.svg'), undefined);
+
+		const policy = buildWebviewContentSecurityPolicy('fixed-nonce', [
+			'https://images.example/a.png',
+			'https://images.example/b.jpg',
+			'javascript:alert(1)',
+		]);
+		assert.match(policy, /default-src 'none'/);
+		assert.match(policy, /script-src 'none'/);
+		assert.match(policy, /style-src 'nonce-fixed-nonce'/);
+		assert.match(policy, /img-src https:\/\/images\.example/);
+		assert.doesNotMatch(policy, /javascript:/);
+		assert.doesNotMatch(policy, /unsafe-inline|unsafe-eval/);
+		assert.throws(
+			() => buildWebviewContentSecurityPolicy("bad'; img-src *", []),
+			/Invalid webview CSP nonce/,
+		);
 	});
 
 	test('renders profile goal feedback as a visual status dashboard', () => {
