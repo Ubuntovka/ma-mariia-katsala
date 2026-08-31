@@ -1,48 +1,102 @@
-# Orchestrator and PostgreSQL Docker Setup
+# UIQLab
 
-See [LLM-Based Assessment Explanations](docs/llm-explanation-integration.md)
-for the implementation architecture, configuration, security model, and
-troubleshooting guide.
+UIQLab assesses web interfaces from a VS Code extension or CI/CD pipeline. This
+repository contains the orchestrator, PostgreSQL storage, the extension, and the
+CI client. The metric-evaluation backend is a separate service.
 
-See [CI Integration](docs/ci-integration.md) for pipeline triggers,
-merge-request behavior, GitLab and GitHub examples, failure handling, and
-troubleshooting. The [UIQLab CI client](apps/uiqlab-ci/README.md) also contains
-a compact client reference.
+## Installation
 
-This setup allows you to run the Orchestrator application and a PostgreSQL database using Docker Compose.
+### Prerequisites
 
-## Prerequisites
+| Platform | Install |
+| --- | --- |
+| macOS | Git, Node.js 20.19+, VS Code 1.125+, and Docker Desktop |
+| Linux | Git, Node.js 20.19+, VS Code 1.125+, Docker Engine, and the Docker Compose plugin |
+| Windows | Git, Node.js 20.19+, VS Code 1.125+, and Docker Desktop with WSL 2 enabled |
 
-- Docker and Docker Compose installed on your machine.
+Confirm that `git`, `node`, `npm`, `docker`, and `docker compose` are available
+in your terminal. Start Docker Desktop first on macOS and Windows.
 
-## Configuration
-
-Environment variables are managed in a `.env` file in the root directory.
-
-1.  **Create `.env` file**: You can use the provided `.env.example` as a template.
-    ```bash
-    cp .env.example .env
-    ```
-2.  **Adjust variables**: Open the `.env` file and modify any values if necessary (e.g., database credentials or ports).
-
-    To enable structured assessment explanations, set `LLM_API_URL`,
-    `LLM_API_KEY`, and `LLM_MODEL`. The URL can be an OpenAI-compatible API base
-    URL (such as one ending in `/v1`) or a full Chat Completions endpoint. These values are passed only to the orchestrator and
-    are never included in extension or webview responses.
-
-## Running the Services
-
-To build and start the services, run the following command from the project root:
+### 1. Get the project
 
 ```bash
-docker compose up --build
+git clone https://github.com/Ubuntovka/ma-mariia-katsala.git
+cd ma-mariia-katsala
 ```
 
-- **Orchestrator**: Available at `http://localhost:8181`
-- **PostgreSQL**: Available at `localhost:5433` (isolated from `ma-rui-feng` setup)
+Install the extension and CI client dependencies:
 
-To stop the services:
+```bash
+npm ci --prefix apps/uiqlab-assessment
+npm ci --prefix apps/uiqlab-ci
+npx --prefix apps/uiqlab-assessment playwright-core install chromium
+```
+
+On Linux, install Chromium's system libraries if local capture fails:
+
+```bash
+npx --prefix apps/uiqlab-assessment playwright-core install-deps chromium
+```
+
+### 2. Configure the services
+
+The orchestrator requires the separate metric-evaluation backend. Create its
+shared Docker network once if it does not already exist:
+
+```bash
+docker network create thesis-network
+```
+
+Then start the backend on `thesis-network`.
+
+Copy the environment template:
+
+```bash
+# macOS/Linux, Git Bash, or WSL
+cp .env.example .env
+```
+
+```powershell
+# Windows PowerShell
+Copy-Item .env.example .env
+```
+
+Edit `.env` and set `BACKEND_URL` to the backend's Docker service name and port.
+The default, `http://nginx`, assumes the backend uses the service name `nginx`
+on `thesis-network`. LLM settings are optional and are needed only for AI
+explanations.
+
+### 3. Start UIQLab
+
+```bash
+docker compose up --build -d
+```
+
+The orchestrator is available at <http://localhost:8181> and its API docs at
+<http://localhost:8181/docs>. PostgreSQL is exposed on port `5433`.
+
+Open `apps/uiqlab-assessment` in VS Code and press `F5` to build and launch the
+extension. Its local-capture workflow expects the orchestrator at
+`http://127.0.0.1:8181`.
+
+Stop the services with:
 
 ```bash
 docker compose down
 ```
+
+## Development checks
+
+```bash
+npm test --prefix apps/uiqlab-assessment
+npm test --prefix apps/uiqlab-ci
+docker compose config --quiet
+```
+
+## Documentation
+
+- [Assessment profiles](docs/assessment-profiles.md)
+- [CI integration](docs/ci-integration.md)
+- [LLM explanations](docs/llm-explanation-integration.md)
+- [Extension usage](apps/uiqlab-assessment/README.md)
+- [CI client reference](apps/uiqlab-ci/README.md)
