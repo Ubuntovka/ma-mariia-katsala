@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { errorMessage, logDiagnostic } from './diagnostics';
 import {
 	AssessmentRunRequest,
 	AssessmentRunSummary,
@@ -10,6 +11,7 @@ import {
 	type AssessmentProfileSelection,
 } from './assessmentProfiles';
 import { METRIC_DEFINITIONS } from './metricCatalog';
+import { formatAssessmentRunLabel } from './sidebarFormatting';
 
 export type SidebarInitialSelection =
 	| { mode: 'profiles'; profiles: AssessmentProfileSelection[] }
@@ -94,8 +96,9 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 				void view.webview.postMessage({ type: 'running', value: true });
 				try {
 					await this.comparePastAssessments(message.currentRunId, message.baselineRunId);
-				} catch (error: any) {
-					void vscode.window.showErrorMessage(`Could not compare assessments: ${error?.message ?? error}`);
+				} catch (error) {
+					logDiagnostic('Could not compare assessments from the sidebar', error);
+					void vscode.window.showErrorMessage(`Could not compare assessments: ${errorMessage(error)}`);
 				} finally {
 					void view.webview.postMessage({ type: 'running', value: false });
 				}
@@ -117,8 +120,8 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 			let selection: ReturnType<typeof resolveSidebarAssessmentSelection>;
 			try {
 				selection = resolveSidebarAssessmentSelection(message);
-			} catch (error: any) {
-				void vscode.window.showErrorMessage(error?.message ?? 'Choose at least one profile or metric to run.');
+			} catch (error) {
+				void vscode.window.showErrorMessage(errorMessage(error) || 'Choose at least one profile or metric to run.');
 				return;
 			}
 
@@ -158,14 +161,16 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 					request,
 					Boolean(message.shareDeployment),
 					Boolean(message.useLlmExplanation),
-					selection.assessment.mode === 'profiles' && Boolean(message.shareSourceCode),
+					Boolean(message.shareSourceCode),
 				);
 			} finally {
 				void view.webview.postMessage({ type: 'running', value: false });
 				try {
 					const runs = (await this.fetchAssessmentRuns()).map(toSidebarAssessmentRun);
 					void view.webview.postMessage({ type: 'assessmentRuns', runs });
-				} catch { }
+				} catch (error) {
+					logDiagnostic('Could not refresh assessment history in the sidebar', error);
+				}
 			}
 		});
 	}
@@ -308,8 +313,8 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 			<div class="preference-copy"><label class="preference-title" for="llm-explanation">Use LLM explanation</label><span class="preference-description">Generate a structured technical interpretation and practical implementation steps.</span></div>
 			<label class="switch" aria-label="Use LLM explanation"><input id="llm-explanation" type="checkbox"${useLlmExplanation ? ' checked' : ''}><span class="slider"></span></label>
 		</div><div class="preference" id="source-sharing-row">
-			<div class="preference-copy"><label class="preference-title" for="share-source-code">Allow LLM to use source code <span class="demo-badge">Demo</span></label><span class="preference-description">Experimental feature for profile-based assessments only. Allows up to 10 relevant frontend files (100 KiB total) to be sent to the configured LLM provider and used to provide more precise, project-specific suggestions. When off, suggestions use metrics only.</span></div>
-			<label class="switch" aria-label="Allow LLM to use source code for profile suggestions"><input id="share-source-code" type="checkbox"${shareSourceCode ? ' checked' : ''}><span class="slider"></span></label>
+			<div class="preference-copy"><label class="preference-title" for="share-source-code">Allow LLM to use source code <span class="demo-badge">Demo</span></label><span class="preference-description">Allows up to 10 relevant frontend files (100 KiB total) to be sent to the configured LLM provider for more project-specific profile guidance or custom-metric analysis. When off, explanations use metrics only.</span></div>
+			<label class="switch" aria-label="Allow LLM to use source code for personalized explanations"><input id="share-source-code" type="checkbox"${shareSourceCode ? ' checked' : ''}><span class="slider"></span></label>
 		</div><details class="ai-privacy-notice">
 			<summary>Privacy and AI notice</summary>
 			<div class="ai-privacy-content">
@@ -340,7 +345,7 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	function compatible(a, b) { return a.id !== b.id && a.target === b.target && a.width === b.width && a.height === b.height; }
 	function updateHistoricalSelectors() { const target = normalizedTarget(url.value); const local = source() === 'local-url'; const currentCandidates = assessmentRuns.filter(item => (!target || item.target === target) && (local ? item.width !== undefined : item.width === undefined)); setOptions(document.getElementById('selected-baseline'), currentCandidates, saved.selectedBaseline); document.getElementById('selected-empty').classList.toggle('hidden', currentCandidates.length > 0); const currentSelect = document.getElementById('past-current'); setOptions(currentSelect, assessmentRuns, saved.pastCurrent); const selectedCurrent = assessmentRuns.find(item => item.id === Number(currentSelect.value)); const baselines = selectedCurrent ? assessmentRuns.filter(item => compatible(selectedCurrent, item)) : []; setOptions(document.getElementById('past-baseline'), baselines, saved.pastBaseline); document.getElementById('past-empty').classList.toggle('hidden', assessmentRuns.length >= 2 && baselines.length > 0); }
 	function updateMode() { const mode = comparison(); const past = mode === 'past-past'; document.getElementById('current-assessment-fields').classList.toggle('hidden', past); document.getElementById('selected-baseline-panel').classList.toggle('hidden', mode !== 'current-selected'); document.getElementById('past-comparison-panel').classList.toggle('hidden', !past); run.textContent = past ? 'Compare assessments' : 'Run and compare'; updateHistoricalSelectors(); save(); }
-	function updateSourceSharingAvailability() { const enabled = selectionMode() === 'profiles' && document.getElementById('llm-explanation').checked; document.getElementById('share-source-code').disabled = !enabled; document.getElementById('source-sharing-row').classList.toggle('disabled', !enabled); }
+	function updateSourceSharingAvailability() { const enabled = document.getElementById('llm-explanation').checked; document.getElementById('share-source-code').disabled = !enabled; document.getElementById('source-sharing-row').classList.toggle('disabled', !enabled); }
 	function updateSelectionMode() { const profiles = selectionMode() === 'profiles'; document.getElementById('profiles-panel').classList.toggle('hidden', !profiles); document.getElementById('metrics-panel').classList.toggle('hidden', profiles); if (profiles) { document.querySelectorAll('input[name="metric"]').forEach(input => input.checked = false); } else { document.querySelectorAll('input[name="profile"]').forEach(input => { input.checked = false; document.querySelector('select[data-profile-direction="' + input.value + '"]').disabled = true; }); } updateSourceSharingAvailability(); save(); }
 	function updateSource() { const local = source() === 'local-url'; const share = document.getElementById('share'); document.getElementById('url-label').textContent = local ? 'Local URL' : 'Deployment URL'; url.placeholder = local ? 'http://localhost:3000' : 'https://example.com'; document.getElementById('share-row').style.display = local ? 'none' : 'flex'; share.required = !local; updateHistoricalSelectors(); save(); }
 	function selectedId(id) { const value = document.getElementById(id).value; return value ? Number(value) : null; }
@@ -356,16 +361,6 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	updateSelectionMode(); updateHistoricalSelectors(); updateMode();
 </script></body></html>`;
 	}
-}
-
-function formatAssessmentRunLabel(run: AssessmentRunSummary): string {
-	const commit = run.commitHash ? run.commitHash.slice(0, 8) : 'no commit';
-	const dirty = run.gitDirty ? ' + working changes' : '';
-	const target = run.assessedTarget ? ` · ${run.assessedTarget}` : '';
-	const dimensions = run.screenshotDimensions
-		? ` · ${run.screenshotDimensions.width}×${run.screenshotDimensions.height}`
-		: '';
-	return `${commit}${dirty} · ${new Date(run.createdAt).toLocaleString()}${target}${dimensions}`;
 }
 
 function toSidebarAssessmentRun(run: AssessmentRunSummary): {

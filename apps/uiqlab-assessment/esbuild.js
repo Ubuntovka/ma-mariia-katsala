@@ -35,13 +35,16 @@ async function main() {
 		sourcesContent: false,
 		platform: 'node',
 		outfile: 'dist/extension.js',
-		external: ['vscode'],
 		logLevel: 'silent',
 		plugins: [
 			/* add to the end of plugins array */
 			esbuildProblemMatcherPlugin,
 		],
-		external: ['vscode', 'playwright-core', 'form-data'],	});
+		// VS Code provides `vscode`. Playwright is kept external because it
+		// resolves browser assets relative to its package at runtime; .vscodeignore
+		// explicitly includes that production dependency in the VSIX.
+		external: ['vscode', 'playwright-core'],
+	});
 	if (watch) {
 		await ctx.watch();
 	} else {

@@ -1,5 +1,6 @@
 import { getMetricDefinition } from './metricCatalog';
 import type { AssessmentProfileSelection } from './assessmentProfiles';
+import { logDiagnostic } from './diagnostics';
 
 export const ASSESSMENTS = [
 	'PNG file size',
@@ -58,8 +59,17 @@ export interface GitInfo {
 
 export type AssessmentSelection = { mode: 'custom' } | { mode: 'profiles'; profiles: AssessmentProfileSelection[] };
 
+export interface AssessmentMetricResult {
+	metric_id: string;
+	results: unknown;
+}
+
+export interface EvaluationSubmission {
+	result_id?: string;
+}
+
 export interface HistoricalMetricResult {
-	results: any;
+	results: unknown;
 	createdAt: string;
 }
 
@@ -82,7 +92,7 @@ export interface AssessmentRunSummary {
 }
 
 export interface AssessmentRunComparison {
-	currentResults: any[];
+	currentResults: AssessmentMetricResult[];
 	history: AssessmentHistory;
 	current: AssessmentRunSummary;
 	baseline: AssessmentRunSummary;
@@ -100,6 +110,7 @@ export interface CustomMetricLlmFinding {
 	observation: string;
 	interpretation: string;
 	recommendation: string;
+	files: string[];
 }
 
 export interface CustomMetricLlmFeedback {
@@ -107,6 +118,8 @@ export interface CustomMetricLlmFeedback {
 	findings: CustomMetricLlmFinding[];
 	analysisMode: 'comparison' | 'current-state';
 	materialChangeCount: number;
+	sourceContextUsed: boolean;
+	sourceFiles: string[];
 }
 
 export interface ProfileLlmSuggestion {
@@ -156,21 +169,33 @@ import * as http from 'http';
 import * as https from 'https';
 
 const ORCHESTRATOR_BASE = 'http://127.0.0.1:8181';
+const DEFAULT_GET_TIMEOUT_MS = 10_000;
+const RESULT_REQUEST_TIMEOUT_MS = 130_000;
+const RESULT_POLL_TIMEOUT_MS = 300_000;
 // The orchestrator receives both the screenshot and rendered HTML when a DOM
 // metric is selected. It forwards them to the evaluator as separate requests.
 const MAX_MULTIPART_BODY_BYTES = 10 * 1024 * 1024;
 
 import FormData = require('form-data');
 
+function responseErrorDetail(data: string): string {
+	try {
+		const body = JSON.parse(data) as { detail?: unknown };
+		return typeof body.detail === 'string' ? body.detail : '';
+	} catch {
+		return '';
+	}
+}
 
-async function httpGetJson<T>(url: string, timeoutMs: number = 100): Promise<T> {
+
+async function httpGetJson<T>(url: string, timeoutMs: number = DEFAULT_GET_TIMEOUT_MS): Promise<T> {
 	const parsed = new URL(url);
 	const lib = parsed.protocol === 'https:' ? https : http;
 
 	return new Promise<T>((resolve, reject) => {
-		const req = lib.get(parsed, (res: any) => {
+		const req = lib.get(parsed, (res) => {
 			let data = '';
-			res.on('data', (chunk: any) => { data += chunk; });
+			res.on('data', (chunk) => { data += chunk; });
 			res.on('end', () => {
 				try {
 					if (res.statusCode && res.statusCode >= 400) {
@@ -192,12 +217,12 @@ async function httpGetJson<T>(url: string, timeoutMs: number = 100): Promise<T> 
 	});
 }
 
-async function httpPostJson<T>(url: string, body: any, timeoutMs: number = 130_000): Promise<T> {
+async function httpPostJson<T>(url: string, body: unknown, timeoutMs: number = 130_000): Promise<T> {
 	const parsed = new URL(url);
 	const lib = parsed.protocol === 'https:' ? https : http;
 	const payload = JSON.stringify(body);
 
-	const opts: any = {
+	const opts: http.RequestOptions = {
 		host: parsed.hostname,
 		port: parsed.port,
 		path: parsed.pathname + parsed.search,
@@ -209,17 +234,13 @@ async function httpPostJson<T>(url: string, body: any, timeoutMs: number = 130_0
 	};
 
 	return new Promise<T>((resolve, reject) => {
-		const req = lib.request(opts, (res: any) => {
+		const req = lib.request(opts, (res) => {
 			let data = '';
-			res.on('data', (chunk: any) => { data += chunk; });
+			res.on('data', (chunk) => { data += chunk; });
 			res.on('end', () => {
 				try {
 					if (res.statusCode && res.statusCode >= 400) {
-						let detail = '';
-						try {
-							const errorBody = JSON.parse(data);
-							detail = typeof errorBody?.detail === 'string' ? errorBody.detail : '';
-						} catch { }
+						const detail = responseErrorDetail(data);
 						reject(new Error(detail || `HTTP ${res.statusCode} from ${url}`));
 						return;
 					}
@@ -279,15 +300,15 @@ export function normalizeAvailableMetricItems(items: unknown[]): MetricInfo[] {
  */
 export async function fetchAvailableAssessments(): Promise<AssessmentName[]> {
 	try {
-		const resp: any = await httpGetJson(`${ORCHESTRATOR_BASE}/eval/mm`);
-
-		let items: any[] = [];
+		const resp = await httpGetJson<unknown>(`${ORCHESTRATOR_BASE}/eval/mm`);
+		let items: unknown[] = [];
 
 		if (Array.isArray(resp)) {
 			items = resp;
-		} else if (resp && typeof resp === 'object') {
+		} else if (typeof resp === 'object' && resp !== null) {
 			// Handle { metrics: { m1: {...}, m2: {...} } } or { metrics: [...] }
-			const metrics = resp.metrics || resp.available_metrics || resp.items || resp;
+			const fields = resp as Record<string, unknown>;
+			const metrics = fields.metrics ?? fields.available_metrics ?? fields.items ?? resp;
 			if (Array.isArray(metrics)) {
 				items = metrics;
 			} else if (typeof metrics === 'object' && metrics !== null) {
@@ -304,8 +325,9 @@ export async function fetchAvailableAssessments(): Promise<AssessmentName[]> {
 
 		const names = cachedMetrics.map((m) => m.name);
 		return names.length > 0 ? names : Array.from(ASSESSMENTS) as AssessmentName[];
-	} catch (err) {
+	} catch (error) {
 		// On failure, fall back to full list so user can still proceed.
+		logDiagnostic('Could not load available assessments; using the built-in catalog', error);
 		return Array.from(ASSESSMENTS) as AssessmentName[];
 	}
 }
@@ -319,7 +341,7 @@ export async function submitUrlForEvaluation(
 	selectedAssessments: AssessmentName[],
 	gitInfo: GitInfo,
 	assessment?: AssessmentSelection
-): Promise<any> {
+): Promise<EvaluationSubmission> {
 	const metrics = toMetricIds(selectedAssessments);
 
 	const payload = {
@@ -341,7 +363,7 @@ export async function submitFileForEvaluation(
 	screenshotDimensions?: { width: number; height: number },
 	htmlContent?: string,
 	assessment?: AssessmentSelection
-): Promise<any> {
+): Promise<EvaluationSubmission> {
 	if (!Buffer.isBuffer(fileData)) {
 		throw new Error('fileData must be a Buffer');
 	}
@@ -356,12 +378,12 @@ export async function submitFileForEvaluation(
 	form.append('file', fileData, {
 		filename: fileName,
 		contentType: contentType,
-	} as any);
+	});
 	if (needsHtml && htmlContent !== undefined) {
 		form.append('html', Buffer.from(htmlContent, 'utf8'), {
 			filename: 'capture.html',
 			contentType: 'text/html',
-		} as any);
+		});
 	}
 	metricIds.forEach((m) => {
 		form.append('mm', m);
@@ -393,7 +415,7 @@ export async function submitFileForEvaluation(
 		);
 	}
 	headers['content-length'] = String(bodyLength);
-	const opts: any = {
+	const opts: http.RequestOptions = {
 		host: parsed.hostname,
 		port: parsed.port,
 		path: parsed.pathname + parsed.search,
@@ -401,10 +423,10 @@ export async function submitFileForEvaluation(
 		headers,
 	};
 
-	return new Promise<any>((resolve, reject) => {
-		const req = lib.request(opts, (res: any) => {
+	return new Promise<EvaluationSubmission>((resolve, reject) => {
+		const req = lib.request(opts, (res) => {
 			let data = '';
-			res.on('data', (chunk: any) => { data += chunk; });
+			res.on('data', (chunk) => { data += chunk; });
 			res.on('end', () => {
 			  try {
 			    if (res.statusCode && res.statusCode >= 400) {
@@ -418,7 +440,7 @@ export async function submitFileForEvaluation(
 			});
 		});
 		req.on('error', reject);
-		(form as any).pipe(req);
+		form.pipe(req);
 	});
 }
 
@@ -428,7 +450,7 @@ export function toMetricIds(selectedAssessments: AssessmentName[]): string[] {
 		if (cached) {
 			return cached.id;
 		}
-		const idx = ASSESSMENTS.indexOf(name as any);
+		const idx = (ASSESSMENTS as readonly string[]).indexOf(name);
 		if (idx >= 0) {
 			return `m${idx + 1}`;
 		}
@@ -436,8 +458,11 @@ export function toMetricIds(selectedAssessments: AssessmentName[]): string[] {
 	});
 }
 
-export async function fetchEvaluationResult(wui_id: string): Promise<any> {
-	return await httpGetJson(`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}`);
+export async function fetchEvaluationResult(wui_id: string, timeoutMs: number = RESULT_REQUEST_TIMEOUT_MS): Promise<unknown> {
+	return await httpGetJson<unknown>(
+		`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}`,
+		timeoutMs,
+	);
 }
 
 export async function fetchAssessmentHistory(wui_id: string, baselineRunId?: number): Promise<AssessmentHistory> {
@@ -466,7 +491,7 @@ export async function fetchAssessmentRunComparison(
 }
 
 export async function fetchAssessmentExplanation(
-	currentResults: any[],
+	currentResults: AssessmentMetricResult[],
 	history?: AssessmentHistory,
 	context: AssessmentExplanationContext = {},
 ): Promise<AssessmentExplanation> {
@@ -481,9 +506,19 @@ export async function fetchAssessmentExplanation(
 	return { ...response, explanation: response.explanation.trim() };
 }
 
+export function isAssessmentMetricResult(value: unknown): value is AssessmentMetricResult {
+	if (typeof value !== 'object' || value === null) { return false; }
+	return typeof (value as { metric_id?: unknown }).metric_id === 'string'
+		&& Object.prototype.hasOwnProperty.call(value, 'results');
+}
+
+function isAssessmentMetricResultArray(value: unknown): value is AssessmentMetricResult[] {
+	return Array.isArray(value) && value.every(isAssessmentMetricResult);
+}
+
 /**
  * Poll for evaluation results until the expected number of unique metrics is reached
- * or the maximum number of attempts is exhausted.
+ * or the overall polling deadline / maximum number of attempts is reached.
  */
 export async function pollEvaluationResult(
 	wui_id: string,
@@ -491,39 +526,55 @@ export async function pollEvaluationResult(
 	options: {
 		maxAttempts?: number;
 		intervalMs?: number;
-		onUpdate?: (results: any[]) => void;
+		timeoutMs?: number;
+		requestTimeoutMs?: number;
+		onUpdate?: (results: AssessmentMetricResult[]) => void;
 		isCancelled?: () => boolean;
+		fetchResult?: (wuiId: string, timeoutMs: number) => Promise<unknown>;
+		onError?: (error: unknown) => void;
 	} = {}
-): Promise<any[]> {
+): Promise<AssessmentMetricResult[]> {
 	const {
-		maxAttempts = 150, // 5 minutes default
+		maxAttempts = 150,
 		intervalMs = 2000,
+		timeoutMs = RESULT_POLL_TIMEOUT_MS,
+		requestTimeoutMs = RESULT_REQUEST_TIMEOUT_MS,
 		onUpdate,
-		isCancelled
+		isCancelled,
+		fetchResult = fetchEvaluationResult,
+		onError,
 	} = options;
 
-	let lastResult: any[] = [];
-	for (let attempt = 0; attempt < maxAttempts; attempt++) {
+	let lastResult: AssessmentMetricResult[] = [];
+	const deadline = Date.now() + timeoutMs;
+	for (let attempt = 0; attempt < maxAttempts && Date.now() < deadline; attempt++) {
 		if (isCancelled && isCancelled()) {
 			break;
 		}
 		try {
-			const result = await fetchEvaluationResult(wui_id);
-			if (Array.isArray(result) && result.length > 0) {
+			const remainingMs = Math.max(1, deadline - Date.now());
+			const result = await fetchResult(
+				wui_id,
+				Math.min(requestTimeoutMs, remainingMs),
+			);
+			if (isAssessmentMetricResultArray(result) && result.length > 0) {
 				lastResult = result;
 				if (onUpdate) {
 					onUpdate(result);
 				}
 				// Count unique base metric IDs (e.g., "m1" from "m1_png_file_size")
-				const uniqueMetricIds = new Set(result.map((r: any) => r.metric_id.split('_')[0]));
+				const uniqueMetricIds = new Set(result.map((item) => item.metric_id.split('_')[0]));
 				if (uniqueMetricIds.size >= expectedCount) {
 					return result;
 				}
 			}
-		} catch (err) {
-			// ignore and retry
+		} catch (error) {
+			onError?.(error);
 		}
-		await new Promise((r) => setTimeout(r, intervalMs));
+		const remainingMs = deadline - Date.now();
+		if (remainingMs > 0) {
+			await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, remainingMs)));
+		}
 	}
 	return lastResult;
 }
@@ -632,9 +683,4 @@ function toAssessmentNames(values: readonly string[]): AssessmentName[] {
 	// (possibly driven by the orchestrator) or tests — avoid strict runtime
 	// validation here so dynamic names are supported.
 	return Array.from(values) as AssessmentName[];
-}
-
-function isAssessmentName(_value: string): _value is AssessmentName {
-	// Kept for compatibility, but treat any string as a valid AssessmentName.
-	return true;
 }
