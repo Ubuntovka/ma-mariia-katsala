@@ -9,6 +9,7 @@ import {
 import { getOrCreateProjectConfig, type ProjectConfig } from './projectConfig';
 import { generateResultsHtml } from './resultsWebview';
 import {
+	createDirectComparisonHistory,
 	fetchAssessmentExplanation,
 	fetchAssessmentHistory,
 	formatAssessmentRunSummary,
@@ -21,6 +22,7 @@ import {
 	type AssessmentRunRequest,
 	type AssessmentSelection,
 	type CustomMetricLlmFeedback,
+	type DeploymentUrlComparisonDataSource,
 	type GitInfo,
 	type ProfileLlmFeedback,
 } from './runAssessment';
@@ -141,6 +143,120 @@ function hasComparableResult(results: AssessmentMetricResult[]): boolean {
 	return results.some((result) => COMPARABLE_METRICS.has(result.metric_id.split('_')[0]));
 }
 
+async function runDeploymentUrlComparison(
+	dataSource: DeploymentUrlComparisonDataSource,
+	request: AssessmentRunRequest,
+	assessmentSelection: AssessmentSelection,
+	workspaceRoot: string,
+	projectConfig: ProjectConfig,
+	useLlmExplanation: boolean,
+	progress: vscode.Progress<{ message?: string }>,
+	token: vscode.CancellationToken,
+): Promise<AssessmentMetricResult[]> {
+	const gitInfo = getGitInfo(workspaceRoot, projectConfig);
+	const expectedCount = new Set(toMetricIds(request.assessments)).size;
+	progress.report({ message: 'Step 1 of 5: Submitting the baseline deployment' });
+	const baselineSubmission = await submitUrlForEvaluation(
+		dataSource.baselineDeploymentUrl,
+		request.assessments,
+		gitInfo,
+		assessmentSelection,
+	);
+	if (!baselineSubmission.result_id) {
+		throw new Error('The evaluation service did not return a baseline result ID.');
+	}
+
+	progress.report({ message: `Step 2 of 5: Assessing baseline deployment (0 of ${expectedCount} complete)` });
+	const baselineResults = await pollEvaluationResult(baselineSubmission.result_id, expectedCount, {
+		onUpdate: (updates) => {
+			const completedCount = new Set(updates.map((result) => result.metric_id.split('_')[0])).size;
+			progress.report({ message: `Step 2 of 5: Assessing baseline deployment (${Math.min(completedCount, expectedCount)} of ${expectedCount} complete)` });
+		},
+		isCancelled: () => token.isCancellationRequested,
+		onError: (error) => logDiagnostic('Baseline evaluation result polling failed; retrying', error),
+	});
+	if (baselineResults.length === 0 || token.isCancellationRequested) {
+		return [];
+	}
+
+	progress.report({ message: 'Step 3 of 5: Submitting the current deployment' });
+	const currentSubmission = await submitUrlForEvaluation(
+		dataSource.currentDeploymentUrl,
+		request.assessments,
+		gitInfo,
+		assessmentSelection,
+	);
+	if (!currentSubmission.result_id) {
+		throw new Error('The evaluation service did not return a current result ID.');
+	}
+
+	let panel: vscode.WebviewPanel | undefined;
+	progress.report({ message: `Step 4 of 5: Assessing current deployment (0 of ${expectedCount} complete)` });
+	const currentResults = await pollEvaluationResult(currentSubmission.result_id, expectedCount, {
+		onUpdate: (updates) => {
+			const completedCount = new Set(updates.map((result) => result.metric_id.split('_')[0])).size;
+			progress.report({ message: `Step 4 of 5: Assessing current deployment (${Math.min(completedCount, expectedCount)} of ${expectedCount} complete)` });
+			panel = ensureResultsPanel(panel);
+			renderResults(panel, updates, dataSource.currentDeploymentUrl, false);
+		},
+		isCancelled: () => token.isCancellationRequested,
+		onError: (error) => logDiagnostic('Current evaluation result polling failed; retrying', error),
+	});
+	if (currentResults.length === 0 || token.isCancellationRequested) {
+		return [];
+	}
+
+	progress.report({ message: `Step 5 of 5: ${useLlmExplanation ? 'Explaining comparison' : 'Preparing comparison'}` });
+	panel = ensureResultsPanel(panel);
+	const history = createDirectComparisonHistory(
+		baselineResults,
+		dataSource.baselineDeploymentUrl,
+		dataSource.currentDeploymentUrl,
+		assessmentSelection,
+	);
+	let explanation: string | undefined;
+	let explanationError: string | undefined;
+	let profileFeedback: ProfileLlmFeedback | undefined;
+	let customFeedback: CustomMetricLlmFeedback | undefined;
+	if (useLlmExplanation) {
+		try {
+			const explanationContext = await buildExplanationContext(
+				assessmentSelection,
+				currentResults,
+				history,
+				dataSource.currentDeploymentUrl,
+				workspaceRoot,
+				false,
+			);
+			const response = await fetchAssessmentExplanation(currentResults, history, explanationContext);
+			explanation = response.explanation;
+			profileFeedback = response.profileFeedback;
+			customFeedback = response.customFeedback;
+		} catch (error) {
+			explanationError = errorMessage(error);
+			logDiagnostic('Could not generate the deployment comparison explanation', error);
+		}
+	}
+	renderResults(
+		panel,
+		currentResults,
+		dataSource.currentDeploymentUrl,
+		true,
+		explanation,
+		explanationError,
+		profileFeedback,
+		customFeedback,
+	);
+	await showHistoryComparison(
+		currentResults,
+		history,
+		dataSource.currentDeploymentUrl,
+		toMetricIds(request.assessments),
+		assessmentSelection,
+	);
+	return currentResults;
+}
+
 async function submitAssessment(
 	request: AssessmentRunRequest,
 	assessmentSelection: AssessmentSelection,
@@ -162,6 +278,9 @@ async function submitAssessment(
 		return { resultId: response.result_id, target: request.dataSource.deploymentUrl, totalSteps: 3 };
 	}
 
+	if (request.dataSource.kind !== 'local-url') {
+		throw new Error('Two-deployment comparisons must use the comparison runner.');
+	}
 	const target = request.dataSource.localUrl;
 	progress.report({ message: 'Step 1 of 4: Opening the local page' });
 	const { capturePage } = await import('./playwrightCapture.js');
@@ -189,7 +308,7 @@ async function submitAssessment(
 
 export function createAssessmentRunner(context: vscode.ExtensionContext): RunConfiguredAssessment {
 	return async (request, shareDeployment, useLlmExplanation, shareSourceCode): Promise<void> => {
-		if (request.dataSource.kind === 'deployment-url' && !shareDeployment) { return; }
+		if (request.dataSource.kind !== 'local-url' && !shareDeployment) { return; }
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 		let projectConfig: ProjectConfig;
 		try {
@@ -204,8 +323,11 @@ export function createAssessmentRunner(context: vscode.ExtensionContext): RunCon
 				: { mode: 'custom' });
 		void vscode.window.showInformationMessage(formatAssessmentRunSummary(request));
 
-		if (request.dataSource.kind === 'deployment-url') {
-			void context.workspaceState.update('uiqlab.lastUrl', request.dataSource.deploymentUrl).then(
+		if (request.dataSource.kind !== 'local-url') {
+			const lastUrl = request.dataSource.kind === 'deployment-url'
+				? request.dataSource.deploymentUrl
+				: request.dataSource.currentDeploymentUrl;
+			void context.workspaceState.update('uiqlab.lastUrl', lastUrl).then(
 				undefined,
 				(error) => logDiagnostic('Could not persist the last assessment URL', error),
 			);
@@ -217,6 +339,18 @@ export function createAssessmentRunner(context: vscode.ExtensionContext): RunCon
 				title: 'Running UIQLab assessment',
 				cancellable: true,
 			}, async (progress, token) => {
+				if (request.dataSource.kind === 'deployment-url-comparison') {
+					return runDeploymentUrlComparison(
+						request.dataSource,
+						request,
+						assessmentSelection,
+						workspaceRoot,
+						projectConfig,
+						useLlmExplanation,
+						progress,
+						token,
+					);
+				}
 				const submission = await submitAssessment(
 					request, assessmentSelection, workspaceRoot, projectConfig, progress, token,
 				);

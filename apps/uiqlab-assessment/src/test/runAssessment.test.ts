@@ -3,6 +3,7 @@ import {
 	ASSESSMENTS,
 	DATA_SOURCE_OPTIONS,
 	collectAssessmentRunRequest,
+	createDirectComparisonHistory,
 	formatAssessmentRunSummary,
 	isAssessmentMetricResult,
 	normalizeAvailableMetricItems,
@@ -152,6 +153,42 @@ suite('Run assessment requests', () => {
 			}),
 			'Selected assessments: NIMA, accessibility. Deployment URL: https://example.com.',
 		);
+	});
+
+	test('formats a two-deployment comparison summary', () => {
+		assert.strictEqual(
+			formatAssessmentRunSummary({
+				assessments: ['Colorfulness', 'Accessibility checks'],
+				dataSource: {
+					kind: 'deployment-url-comparison',
+					baselineDeploymentUrl: 'https://before.example.com',
+					currentDeploymentUrl: 'https://after.example.com',
+				},
+			}),
+			'Selected assessments: Colorfulness, Accessibility checks. Deployment URLs: https://before.example.com → https://after.example.com.',
+		);
+	});
+
+	test('uses the first deployed URL results as direct comparison history', () => {
+		const assessment = { mode: 'custom' as const };
+		const history = createDirectComparisonHistory(
+			[
+				{ metric_id: 'm1_png_file_size', results: [1200] },
+				{ metric_id: 'm3_colorfulness', results: [42] },
+			],
+			'https://before.example.com',
+			'https://after.example.com',
+			assessment,
+			'2026-09-04T12:00:00.000Z',
+		);
+
+		assert.deepStrictEqual(history.metrics, {
+			m1_png_file_size: { results: [1200], createdAt: '2026-09-04T12:00:00.000Z' },
+			m3_colorfulness: { results: [42], createdAt: '2026-09-04T12:00:00.000Z' },
+		});
+		assert.strictEqual(history.baselineRun?.assessedTarget, 'https://before.example.com');
+		assert.strictEqual(history.currentRun?.assessedTarget, 'https://after.example.com');
+		assert.strictEqual(history.baselineRun?.assessment, assessment);
 	});
 
 	test('labels previous assessments with the page path, date time, and working state', () => {

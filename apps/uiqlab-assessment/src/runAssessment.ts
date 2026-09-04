@@ -37,10 +37,16 @@ export interface LocalUrlDataSource {
 	localUrl: string;
 }
 
+export interface DeploymentUrlComparisonDataSource {
+	kind: 'deployment-url-comparison';
+	baselineDeploymentUrl: string;
+	currentDeploymentUrl: string;
+}
+
 export interface AssessmentRunRequest {
 	assessments: AssessmentName[];
 	assessment?: AssessmentSelection;
-	dataSource: DeploymentUrlDataSource | LocalUrlDataSource;
+	dataSource: DeploymentUrlDataSource | LocalUrlDataSource | DeploymentUrlComparisonDataSource;
 	comparison?:
 		| { kind: 'latest' }
 		| { kind: 'selected'; baselineRunId: number };
@@ -78,6 +84,23 @@ export interface AssessmentHistory {
 	screenshotDimensions?: { width: number; height: number };
 	currentRun?: AssessmentRunSummary;
 	baselineRun?: AssessmentRunSummary;
+}
+
+export function createDirectComparisonHistory(
+	baselineResults: AssessmentMetricResult[],
+	baselineUrl: string,
+	currentUrl: string,
+	assessment: AssessmentSelection,
+	createdAt: string = new Date().toISOString(),
+): AssessmentHistory {
+	return {
+		metrics: Object.fromEntries(baselineResults.map((result) => [result.metric_id, {
+			results: result.results,
+			createdAt,
+		}])),
+		baselineRun: { id: -1, createdAt, assessedTarget: baselineUrl, assessment },
+		currentRun: { id: -2, createdAt, assessedTarget: currentUrl, assessment },
+	};
 }
 
 export interface AssessmentRunSummary {
@@ -662,7 +685,9 @@ export async function collectAssessmentRunRequest(ui: QuickPickUi): Promise<Asse
 export function formatAssessmentRunSummary(request: AssessmentRunRequest): string {
 	const dataSourceText = request.dataSource.kind === 'deployment-url'
 		? `Deployment URL: ${request.dataSource.deploymentUrl}`
-		: `Local URL: ${request.dataSource.localUrl}`;
+		: request.dataSource.kind === 'local-url'
+			? `Local URL: ${request.dataSource.localUrl}`
+			: `Deployment URLs: ${request.dataSource.baselineDeploymentUrl} → ${request.dataSource.currentDeploymentUrl}`;
 	const selectionText = request.assessment?.mode === 'profiles'
 		? `Selected profiles: ${request.assessment.profiles.map((profile) => `${profile.id} (${profile.direction})`).join(', ')}`
 		: `Selected assessments: ${request.assessments.join(', ')}`;
