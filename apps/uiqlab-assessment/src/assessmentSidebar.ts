@@ -21,10 +21,11 @@ interface RunMessageBase {
 	type: 'runAssessment';
 	dataSource: 'deployment-url' | 'local-url';
 	url: string;
+	baselineUrl?: string;
 	shareDeployment: boolean;
 	useLlmExplanation: boolean;
 	shareSourceCode: boolean;
-	comparisonMode: 'current-latest' | 'current-selected';
+	comparisonMode: 'current-latest' | 'current-selected' | 'deployment-urls';
 	baselineRunId?: number;
 }
 
@@ -126,10 +127,18 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 			}
 
 			const url = typeof message.url === 'string' ? message.url.trim() : '';
+			const baselineUrl = typeof message.baselineUrl === 'string' ? message.baselineUrl.trim() : '';
 			try {
 				new URL(url);
+				if (message.comparisonMode === 'deployment-urls') {
+					new URL(baselineUrl);
+				}
 			} catch {
-				void vscode.window.showErrorMessage('Enter a valid URL before running the assessment.');
+				void vscode.window.showErrorMessage(
+					message.comparisonMode === 'deployment-urls'
+						? 'Enter two valid deployment URLs before running the assessment.'
+						: 'Enter a valid URL before running the assessment.',
+				);
 				return;
 			}
 
@@ -141,7 +150,17 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 				void vscode.window.showErrorMessage('Choose a previous assessment to compare with the current state.');
 				return;
 			}
-			const request: AssessmentRunRequest = message.dataSource === 'local-url'
+			const request: AssessmentRunRequest = message.comparisonMode === 'deployment-urls'
+				? {
+					assessments: selection.metrics,
+					assessment: selection.assessment,
+					dataSource: {
+						kind: 'deployment-url-comparison',
+						baselineDeploymentUrl: baselineUrl,
+						currentDeploymentUrl: url,
+					},
+				}
+				: message.dataSource === 'local-url'
 				? {
 					assessments: selection.metrics,
 					assessment: selection.assessment,
@@ -161,7 +180,7 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 					request,
 					Boolean(message.shareDeployment),
 					Boolean(message.useLlmExplanation),
-					Boolean(message.shareSourceCode),
+					message.comparisonMode === 'deployment-urls' ? false : Boolean(message.shareSourceCode),
 				);
 			} finally {
 				void view.webview.postMessage({ type: 'running', value: false });
@@ -287,6 +306,7 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 		<fieldset><legend>What do you want to compare?</legend><div class="comparison-options">
 			<label class="source-option"><input type="radio" name="comparison" value="current-latest" checked>Current state vs latest assessment</label>
 			<label class="source-option"><input type="radio" name="comparison" value="current-selected">Current state vs selected assessment</label>
+			<label class="source-option"><input type="radio" name="comparison" value="deployment-urls">Two deployed URLs</label>
 			<label class="source-option"><input type="radio" name="comparison" value="past-past">Two previous assessments</label>
 		</div>
 		<div class="mode-panel hidden" id="selected-baseline-panel"><label class="select-label" for="selected-baseline">Previous assessment</label><select id="selected-baseline"></select><p class="empty-history hidden" id="selected-empty">No previous assessment matches this page.</p></div>
@@ -296,10 +316,14 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 			<p class="empty-history hidden" id="past-empty">Two compatible completed assessments are required.</p>
 		</div></fieldset>
 		<div id="current-assessment-fields">
-		<fieldset><legend>Page source</legend><div class="source-options">
+		<fieldset><legend>Page source</legend><div id="single-source-fields"><div class="source-options">
 			<label class="source-option"><input type="radio" name="source" value="deployment-url" checked>Deployment</label>
 			<label class="source-option"><input type="radio" name="source" value="local-url">Local URL</label>
-		</div><label for="url" id="url-label">Deployment URL</label><input id="url" type="url" required placeholder="https://example.com" value="${escapeHtml(lastUrl)}">
+		</div><label for="url" id="url-label">Deployment URL</label><input id="url" type="url" required placeholder="https://example.com" value="${escapeHtml(lastUrl)}"></div>
+		<div class="hidden" id="deployment-url-fields">
+			<label for="baseline-url" class="select-label">Baseline deployment URL</label><input id="baseline-url" type="url" placeholder="https://before.example.com">
+			<label for="comparison-url" class="select-label">Current deployment URL</label><input id="comparison-url" type="url" placeholder="https://after.example.com" value="${escapeHtml(lastUrl)}">
+		</div>
 			<label class="share" id="share-row"><input id="share" type="checkbox" required checked><span>Allow this URL and the selected metrics to be sent to the evaluation service (required to run).</span></label></fieldset>
 		<fieldset><legend>What do you want to assess?</legend><div class="selection-options">
 			<label class="source-option"><input type="radio" name="assessment-mode" value="profiles"${initialMode === 'profiles' ? ' checked' : ''}>Profiles</label>
@@ -328,10 +352,12 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 <script nonce="${nonce}">
 	const vscode = acquireVsCodeApi();
 	let assessmentRuns = ${runOptions};
-	const form = document.getElementById('assessment-form'); const url = document.getElementById('url'); const error = document.getElementById('error'); const run = document.getElementById('run');
+	const form = document.getElementById('assessment-form'); const url = document.getElementById('url'); const baselineUrl = document.getElementById('baseline-url'); const comparisonUrl = document.getElementById('comparison-url'); const error = document.getElementById('error'); const run = document.getElementById('run');
 	const saved = vscode.getState() || {};
 	if (saved.source) document.querySelector('input[name="source"][value="' + saved.source + '"]').checked = true;
 	if (saved.url) url.value = saved.url;
+	if (saved.baselineUrl) baselineUrl.value = saved.baselineUrl;
+	if (saved.comparisonUrl) comparisonUrl.value = saved.comparisonUrl;
 	if (Array.isArray(saved.profiles)) document.querySelectorAll('input[name="profile"]').forEach(i => { const profile = saved.profiles.find(item => item && item.id === i.value); i.checked = Boolean(profile); const direction = document.querySelector('select[data-profile-direction="' + i.value + '"]'); direction.disabled = !i.checked; if (profile && typeof profile.direction === 'string' && [...direction.options].some(option => option.value === profile.direction)) direction.value = profile.direction; });
 	if (Array.isArray(saved.metrics)) document.querySelectorAll('input[name="metric"]').forEach(i => i.checked = saved.metrics.includes(i.value));
 	if (typeof saved.share === 'boolean') document.getElementById('share').checked = saved.share;
@@ -344,19 +370,19 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	function setOptions(select, items, savedId) { const existingId = Number(select.value); const preferredId = items.some(item => item.id === existingId) ? existingId : Number(savedId); select.textContent = ''; for (const item of items) { const option = document.createElement('option'); option.value = String(item.id); option.textContent = item.label; option.selected = preferredId === item.id; select.appendChild(option); } select.disabled = items.length === 0; }
 	function compatible(a, b) { return a.id !== b.id && a.target === b.target && a.width === b.width && a.height === b.height; }
 	function updateHistoricalSelectors() { const target = normalizedTarget(url.value); const local = source() === 'local-url'; const currentCandidates = assessmentRuns.filter(item => (!target || item.target === target) && (local ? item.width !== undefined : item.width === undefined)); setOptions(document.getElementById('selected-baseline'), currentCandidates, saved.selectedBaseline); document.getElementById('selected-empty').classList.toggle('hidden', currentCandidates.length > 0); const currentSelect = document.getElementById('past-current'); setOptions(currentSelect, assessmentRuns, saved.pastCurrent); const selectedCurrent = assessmentRuns.find(item => item.id === Number(currentSelect.value)); const baselines = selectedCurrent ? assessmentRuns.filter(item => compatible(selectedCurrent, item)) : []; setOptions(document.getElementById('past-baseline'), baselines, saved.pastBaseline); document.getElementById('past-empty').classList.toggle('hidden', assessmentRuns.length >= 2 && baselines.length > 0); }
-	function updateMode() { const mode = comparison(); const past = mode === 'past-past'; document.getElementById('current-assessment-fields').classList.toggle('hidden', past); document.getElementById('selected-baseline-panel').classList.toggle('hidden', mode !== 'current-selected'); document.getElementById('past-comparison-panel').classList.toggle('hidden', !past); run.textContent = past ? 'Compare assessments' : 'Run and compare'; updateHistoricalSelectors(); save(); }
-	function updateSourceSharingAvailability() { const enabled = document.getElementById('llm-explanation').checked; document.getElementById('share-source-code').disabled = !enabled; document.getElementById('source-sharing-row').classList.toggle('disabled', !enabled); }
+	function updateMode() { const mode = comparison(); const past = mode === 'past-past'; const deployedUrls = mode === 'deployment-urls'; document.getElementById('current-assessment-fields').classList.toggle('hidden', past); document.getElementById('selected-baseline-panel').classList.toggle('hidden', mode !== 'current-selected'); document.getElementById('past-comparison-panel').classList.toggle('hidden', !past); document.getElementById('single-source-fields').classList.toggle('hidden', deployedUrls); document.getElementById('deployment-url-fields').classList.toggle('hidden', !deployedUrls); url.required = !past && !deployedUrls; baselineUrl.required = deployedUrls; comparisonUrl.required = deployedUrls; run.textContent = past ? 'Compare assessments' : 'Run and compare'; updateSource(); updateSourceSharingAvailability(); updateHistoricalSelectors(); save(); }
+	function updateSourceSharingAvailability() { const available = comparison() !== 'deployment-urls'; const enabled = available && document.getElementById('llm-explanation').checked; document.getElementById('share-source-code').disabled = !enabled; document.getElementById('source-sharing-row').style.display = available ? 'flex' : 'none'; document.getElementById('source-sharing-row').classList.toggle('disabled', !enabled); }
 	function updateSelectionMode() { const profiles = selectionMode() === 'profiles'; document.getElementById('profiles-panel').classList.toggle('hidden', !profiles); document.getElementById('metrics-panel').classList.toggle('hidden', profiles); if (profiles) { document.querySelectorAll('input[name="metric"]').forEach(input => input.checked = false); } else { document.querySelectorAll('input[name="profile"]').forEach(input => { input.checked = false; document.querySelector('select[data-profile-direction="' + input.value + '"]').disabled = true; }); } updateSourceSharingAvailability(); save(); }
-	function updateSource() { const local = source() === 'local-url'; const share = document.getElementById('share'); document.getElementById('url-label').textContent = local ? 'Local URL' : 'Deployment URL'; url.placeholder = local ? 'http://localhost:3000' : 'https://example.com'; document.getElementById('share-row').style.display = local ? 'none' : 'flex'; share.required = !local; updateHistoricalSelectors(); save(); }
+	function updateSource() { const deployedUrls = comparison() === 'deployment-urls'; const local = !deployedUrls && source() === 'local-url'; const share = document.getElementById('share'); document.getElementById('url-label').textContent = local ? 'Local URL' : 'Deployment URL'; url.placeholder = local ? 'http://localhost:3000' : 'https://example.com'; document.getElementById('share-row').style.display = local ? 'none' : 'flex'; document.querySelector('#share-row span').textContent = deployedUrls ? 'Allow both URLs and the selected metrics to be sent to the evaluation service (required to run).' : 'Allow this URL and the selected metrics to be sent to the evaluation service (required to run).'; share.required = !local; updateHistoricalSelectors(); save(); }
 	function selectedId(id) { const value = document.getElementById(id).value; return value ? Number(value) : null; }
 	function selectedProfiles() { return [...document.querySelectorAll('input[name="profile"]:checked')].map(input => ({ id: input.value, direction: document.querySelector('select[data-profile-direction="' + input.value + '"]').value })); }
 	function selectedMetrics() { return [...document.querySelectorAll('input[name="metric"]:checked')].map(input => input.value); }
-	function save() { vscode.setState({ source: source(), comparison: comparison(), selectionMode: selectionMode(), url: url.value, profiles: selectedProfiles(), metrics: selectedMetrics(), share: document.getElementById('share').checked, useLlmExplanation: document.getElementById('llm-explanation').checked, shareSourceCode: document.getElementById('share-source-code').checked, selectedBaseline: selectedId('selected-baseline'), pastCurrent: selectedId('past-current'), pastBaseline: selectedId('past-baseline') }); }
-	document.querySelectorAll('input').forEach(i => i.addEventListener('change', () => { if (i.name === 'source') updateSource(); else if (i.name === 'comparison') updateMode(); else if (i.name === 'assessment-mode') updateSelectionMode(); else { if (i.name === 'profile') document.querySelector('select[data-profile-direction="' + i.value + '"]').disabled = !i.checked; if (i.id === 'llm-explanation') { updateSourceSharingAvailability(); vscode.postMessage({ type: 'setLlmExplanation', value: i.checked }); } if (i.id === 'share-source-code') vscode.postMessage({ type: 'setSourceCodeSharing', value: i.checked }); save(); } })); document.querySelectorAll('select[data-profile-direction]').forEach(select => select.addEventListener('change', save)); url.addEventListener('input', () => { updateHistoricalSelectors(); save(); });
+	function save() { vscode.setState({ source: source(), comparison: comparison(), selectionMode: selectionMode(), url: url.value, baselineUrl: baselineUrl.value, comparisonUrl: comparisonUrl.value, profiles: selectedProfiles(), metrics: selectedMetrics(), share: document.getElementById('share').checked, useLlmExplanation: document.getElementById('llm-explanation').checked, shareSourceCode: document.getElementById('share-source-code').checked, selectedBaseline: selectedId('selected-baseline'), pastCurrent: selectedId('past-current'), pastBaseline: selectedId('past-baseline') }); }
+	document.querySelectorAll('input').forEach(i => i.addEventListener('change', () => { if (i.name === 'source') updateSource(); else if (i.name === 'comparison') updateMode(); else if (i.name === 'assessment-mode') updateSelectionMode(); else { if (i.name === 'profile') document.querySelector('select[data-profile-direction="' + i.value + '"]').disabled = !i.checked; if (i.id === 'llm-explanation') { updateSourceSharingAvailability(); vscode.postMessage({ type: 'setLlmExplanation', value: i.checked }); } if (i.id === 'share-source-code') vscode.postMessage({ type: 'setSourceCodeSharing', value: i.checked }); save(); } })); document.querySelectorAll('select[data-profile-direction]').forEach(select => select.addEventListener('change', save)); url.addEventListener('input', () => { updateHistoricalSelectors(); save(); }); baselineUrl.addEventListener('input', save); comparisonUrl.addEventListener('input', save);
 	document.getElementById('past-current').addEventListener('change', () => { updateHistoricalSelectors(); save(); }); document.getElementById('past-baseline').addEventListener('change', save); document.getElementById('selected-baseline').addEventListener('change', save);
 	document.getElementById('select-all-metrics').addEventListener('click', () => { document.querySelectorAll('input[name="metric"]').forEach(input => input.checked = true); save(); }); document.getElementById('select-no-metrics').addEventListener('click', () => { document.querySelectorAll('input[name="metric"]').forEach(input => input.checked = false); save(); });
-	form.addEventListener('submit', event => { event.preventDefault(); const mode = comparison(); if (mode === 'past-past') { const currentRunId = selectedId('past-current'); const baselineRunId = selectedId('past-baseline'); if (!Number.isInteger(currentRunId) || !Number.isInteger(baselineRunId)) { error.textContent = 'Choose two compatible assessments.'; error.style.display = 'block'; return; } error.style.display = 'none'; save(); vscode.postMessage({ type: 'comparePastAssessments', currentRunId, baselineRunId }); return; } const activeSelectionMode = selectionMode(); const profiles = selectedProfiles(); const metrics = selectedMetrics(); if (activeSelectionMode === 'profiles' && !profiles.length) { error.textContent = 'Select at least one profile.'; error.style.display = 'block'; return; } if (activeSelectionMode === 'custom' && !metrics.length) { error.textContent = 'Select at least one metric.'; error.style.display = 'block'; return; } if (!url.checkValidity()) { error.textContent = 'Enter a valid URL.'; error.style.display = 'block'; return; } const baselineRunId = mode === 'current-selected' ? selectedId('selected-baseline') : undefined; if (mode === 'current-selected' && !Number.isInteger(baselineRunId)) { error.textContent = 'Choose a previous assessment.'; error.style.display = 'block'; return; } const assessmentSelection = activeSelectionMode === 'profiles' ? { selectionMode: 'profiles', profiles } : { selectionMode: 'custom', metrics }; error.style.display = 'none'; save(); vscode.postMessage({ type: 'runAssessment', ...assessmentSelection, dataSource: source(), url: url.value, comparisonMode: mode, baselineRunId, shareDeployment: document.getElementById('share').checked, useLlmExplanation: document.getElementById('llm-explanation').checked, shareSourceCode: document.getElementById('share-source-code').checked }); });
-	window.addEventListener('message', event => { if (event.data.type === 'running') { run.disabled = event.data.value; if (event.data.value) run.textContent = comparison() === 'past-past' ? 'Comparing…' : 'Assessment running…'; else updateMode(); } if (event.data.type === 'setComparisonMode') { const input = document.querySelector('input[name="comparison"][value="' + event.data.value + '"]'); if (input) { input.checked = true; updateMode(); } } if (event.data.type === 'assessmentRuns' && Array.isArray(event.data.runs)) { assessmentRuns = event.data.runs; updateHistoricalSelectors(); save(); } });
+	form.addEventListener('submit', event => { event.preventDefault(); const mode = comparison(); if (mode === 'past-past') { const currentRunId = selectedId('past-current'); const baselineRunId = selectedId('past-baseline'); if (!Number.isInteger(currentRunId) || !Number.isInteger(baselineRunId)) { error.textContent = 'Choose two compatible assessments.'; error.style.display = 'block'; return; } error.style.display = 'none'; save(); vscode.postMessage({ type: 'comparePastAssessments', currentRunId, baselineRunId }); return; } const activeSelectionMode = selectionMode(); const profiles = selectedProfiles(); const metrics = selectedMetrics(); if (activeSelectionMode === 'profiles' && !profiles.length) { error.textContent = 'Select at least one profile.'; error.style.display = 'block'; return; } if (activeSelectionMode === 'custom' && !metrics.length) { error.textContent = 'Select at least one metric.'; error.style.display = 'block'; return; } const deployedUrls = mode === 'deployment-urls'; if (deployedUrls ? !baselineUrl.checkValidity() || !comparisonUrl.checkValidity() : !url.checkValidity()) { error.textContent = deployedUrls ? 'Enter two valid deployment URLs.' : 'Enter a valid URL.'; error.style.display = 'block'; return; } const baselineRunId = mode === 'current-selected' ? selectedId('selected-baseline') : undefined; if (mode === 'current-selected' && !Number.isInteger(baselineRunId)) { error.textContent = 'Choose a previous assessment.'; error.style.display = 'block'; return; } const assessmentSelection = activeSelectionMode === 'profiles' ? { selectionMode: 'profiles', profiles } : { selectionMode: 'custom', metrics }; error.style.display = 'none'; save(); vscode.postMessage({ type: 'runAssessment', ...assessmentSelection, dataSource: deployedUrls ? 'deployment-url' : source(), url: deployedUrls ? comparisonUrl.value : url.value, baselineUrl: deployedUrls ? baselineUrl.value : undefined, comparisonMode: mode, baselineRunId, shareDeployment: document.getElementById('share').checked, useLlmExplanation: document.getElementById('llm-explanation').checked, shareSourceCode: deployedUrls ? false : document.getElementById('share-source-code').checked }); });
+	window.addEventListener('message', event => { if (event.data.type === 'running') { run.disabled = event.data.value; if (event.data.value) run.textContent = comparison() === 'past-past' ? 'Comparing…' : comparison() === 'deployment-urls' ? 'Comparing deployments…' : 'Assessment running…'; else updateMode(); } if (event.data.type === 'setComparisonMode') { const input = document.querySelector('input[name="comparison"][value="' + event.data.value + '"]'); if (input) { input.checked = true; updateMode(); } } if (event.data.type === 'assessmentRuns' && Array.isArray(event.data.runs)) { assessmentRuns = event.data.runs; updateHistoricalSelectors(); save(); } });
 	updateSource();
 	updateSelectionMode(); updateHistoricalSelectors(); updateMode();
 </script></body></html>`;

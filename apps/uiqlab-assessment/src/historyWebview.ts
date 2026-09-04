@@ -81,6 +81,9 @@ function accessibilityIssueList(issues: AccessibilityIssue[]): string {
 }
 
 function comparisonRunText(run: AssessmentRunSummary): string {
+	if (run.id < 0 && run.assessedTarget) {
+		return run.assessedTarget;
+	}
 	const commit = run.commitHash ? run.commitHash.slice(0, 8) : 'no commit';
 	const dirty = run.gitDirty ? ' + working changes' : '';
 	return `${commit}${dirty} · ${new Date(run.createdAt).toLocaleString()}`;

@@ -29,9 +29,11 @@ URL being assessed.
 ## Usage
 
 1. Open **UIQLab Assessment** in the Activity Bar.
-2. Select **Deployment** or **Local URL** and enter the page URL.
+2. Choose a comparison mode. **Two deployed URLs** accepts a baseline URL and
+   a current URL; the other current-state modes let you select **Deployment**
+   or **Local URL** as the page source.
 3. Select one or more assessment profiles, or choose custom metrics.
-4. Choose a comparison mode and run the assessment.
+4. Run the assessment.
 
 Local capture waits for the page to load, disables animations, and uploads a
 fixed-viewport screenshot plus rendered HTML. Sidebar choices affect the current
@@ -44,7 +46,8 @@ configured by the orchestrator. **Allow LLM to use source code** additionally
 sends at most 10 relevant frontend files (100 KiB total). Both options are off
 by default. Do not send secrets, personal data, or confidential code without
 authorisation. AI explanations may be inaccurate; measured results remain the
-source of truth.
+source of truth. Source-code sharing is not available when comparing two
+deployed URLs; those explanations use assessment metrics only.
 
 ## Checks
 
