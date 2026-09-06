@@ -47,6 +47,8 @@ suite('Webview rendering', () => {
 		});
 
 		assert.match(html, /profile-ai-feedback status-partial/);
+		assert.match(html, /<h2 id="profile-ai-title">AI-generated explanation<\/h2>/);
+		assert.match(html, /profile-ai-goal">Profile goals partially achieved/);
 		assert.match(html, /Suggested next steps/);
 		assert.match(html, /Based on metrics and 1 source file/);
 		assert.match(html, /src\/pages\/home\.tsx/);
@@ -86,6 +88,7 @@ suite('Webview rendering', () => {
 		});
 
 		assert.match(html, /custom-ai-feedback/);
+		assert.match(html, /AI-generated technical explanation/);
 		assert.match(html, /Baseline comparison · 2 material changes/);
 		assert.match(html, /Based on metrics and 1 source file/);
 		assert.match(html, /potential user may experience a denser interface/);
@@ -148,7 +151,7 @@ suite('Webview rendering', () => {
 			},
 		);
 
-		const explanationIndex = html.indexOf('Plain-language explanation');
+		const explanationIndex = html.indexOf('AI-generated explanation');
 		const profileIndex = html.indexOf('Profile evaluation');
 		const comparisonIndex = html.indexOf('Comparison details');
 		const rawMetricsIndex = html.indexOf('<span class="raw-metrics-label">Raw metrics</span>');
