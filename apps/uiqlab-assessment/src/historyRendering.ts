@@ -1,10 +1,12 @@
 import { getMetricDefinition } from './metricCatalog';
+import { ASSESSMENT_PROFILES } from './assessmentProfiles';
 import type { ProfileAssessmentSummary, ProfileGoalStatus, ProfileOutcome } from './profileAssessment';
 import type { AssessmentMetricResult } from './runAssessment';
 import { escapeHtml } from './webviewSecurity';
 
 export interface HistoryComparisonContent {
 	profileOverviewHtml: string;
+	comparisonSummaryHtml: string;
 	comparisonHtml: string;
 	imageUrls: string[];
 }
@@ -81,6 +83,35 @@ function renderProfileOutcomeTrack(outcome: ProfileOutcome): string {
 	</div>`;
 }
 
+function renderProfileMetrics(outcome: ProfileOutcome): string {
+	const assessedMetrics = ASSESSMENT_PROFILES[outcome.id]?.metrics ?? outcome.comparableMetrics;
+	const items = assessedMetrics.map((metricId) => {
+		const definition = getMetricDefinition(metricId);
+		const metricName = definition?.name ?? metricId.toUpperCase();
+		let className = 'not-comparable';
+		let icon = '?';
+		let contribution = 'Not comparable';
+		if (outcome.alignedMetrics.includes(metricId)) {
+			className = 'aligned';
+			icon = '✓';
+			contribution = outcome.direction === 'observe' ? 'Contributed to observed change' : 'Contributed to goal';
+		} else if (outcome.opposedMetrics.includes(metricId)) {
+			className = 'opposed';
+			icon = '×';
+			contribution = 'Worked against goal';
+		} else if (outcome.comparableMetrics.includes(metricId)) {
+			className = 'unchanged';
+			icon = '—';
+			contribution = 'No meaningful change';
+		}
+		return `<li class="profile-metric metric-${className}">
+			<span class="profile-metric-name"><strong>${escapeHtml(metricId.toUpperCase())}</strong>${escapeHtml(metricName)}</span>
+			<span class="profile-metric-impact"><i aria-hidden="true">${icon}</i>${contribution}</span>
+		</li>`;
+	}).join('');
+	return `<div class="profile-metrics"><p class="profile-metrics-title">Metrics assessed</p><ul>${items}</ul></div>`;
+}
+
 export function renderProfileAssessmentOverview(summary: ProfileAssessmentSummary): string {
 	const overall = goalStatusPresentation(summary.status);
 	const outcomeCards = summary.outcomes.map((outcome) => {
@@ -92,6 +123,7 @@ export function renderProfileAssessmentOverview(summary: ProfileAssessmentSummar
 			<div class="profile-card-heading"><div><h3>${escapeHtml(profileDisplayName(outcome.id))}</h3><p class="profile-direction">Chosen direction: <strong>${escapeHtml(outcome.direction)}</strong></p></div><span class="status-pill"><span aria-hidden="true">${presentation.icon}</span> ${presentation.label}</span></div>
 			${renderProfileOutcomeTrack(outcome)}
 			${metricLegend}
+			${renderProfileMetrics(outcome)}
 			<p class="profile-reason">${escapeHtml(outcome.reason)}</p>
 		</article>`;
 	}).join('');

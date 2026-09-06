@@ -30,6 +30,7 @@ import {
 } from './metricComparisons';
 import { escapeHtml } from './webviewSecurity';
 import { generateResultsHtml } from './resultsWebview';
+import { renderTargetLink } from './webviewFormatting';
 import {
 	baseMetricId,
 	type HistoryComparisonContent,
@@ -93,6 +94,13 @@ function comparisonRunText(run: AssessmentRunSummary): string {
 	const commit = run.commitHash ? run.commitHash.slice(0, 8) : 'no commit';
 	const dirty = run.gitDirty ? ' + working changes' : '';
 	return `${commit}${dirty} · ${new Date(run.createdAt).toLocaleString()}`;
+}
+
+function comparisonPreviewTarget(label: string, run: AssessmentRunSummary | undefined): string {
+	const target = run?.assessedTarget
+		? renderTargetLink(run.assessedTarget)
+		: escapeHtml(run ? comparisonRunText(run) : 'Not available');
+	return `<span class="comparison-preview-item"><span class="comparison-preview-label">${label}</span><span class="comparison-preview-target">${target}</span></span>`;
 }
 
 export async function buildHistoryComparisonContent(
@@ -520,6 +528,7 @@ export async function buildHistoryComparisonContent(
 	].filter((value): value is string => Boolean(value));
 	return {
 		profileOverviewHtml: profileOverview,
+		comparisonSummaryHtml: `${comparisonPreviewTarget('Baseline', history.baselineRun)}<span class="comparison-preview-arrow" aria-hidden="true">→</span>${comparisonPreviewTarget('Current', history.currentRun)}`,
 		comparisonHtml: `<p class="context"><strong>Comparison scope · </strong>${dimensions ? `${dimensions.width} × ${dimensions.height} px · only completed runs with identical screenshot dimensions are compared` : 'Screenshot dimensions unavailable'}</p>${runContext}${requestedMetricSections}`,
 		imageUrls: historyImageUrls,
 	};

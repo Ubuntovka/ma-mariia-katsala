@@ -142,6 +142,7 @@ suite('Webview rendering', () => {
 			undefined,
 			{
 				profileOverviewHtml: '<section class="profile-overview">Profile evaluation</section>',
+				comparisonSummaryHtml: '<span>Baseline link → Current link</span>',
 				comparisonHtml: '<section class="metric-section">Comparison value</section>',
 				imageUrls: [],
 			},
@@ -158,8 +159,12 @@ suite('Webview rendering', () => {
 		assert.doesNotMatch(html, /<details class="raw-metrics" open>/);
 		assert.match(html, /class="raw-metrics-toggle"[^>]*>▶<\/span>/);
 		assert.match(html, /raw-metrics\[open\] \.raw-metrics-toggle \{ transform: rotate\(90deg\)/);
-		assert.match(html, /--surface-llm: #f4f0e6/);
+		assert.match(html, /--surface-llm: #fbf9f3/);
 		assert.match(html, /--surface-comparison-block: #edf5f8/);
+		assert.match(html, /\.profile-overview \{[^}]*background: var\(--surface-comparison-block\)/);
+		assert.match(html, /<details class="comparison-block">/);
+		assert.match(html, /Baseline link → Current link/);
+		assert.doesNotMatch(html, /<details class="comparison-block" open>/);
 	});
 
 	test('keeps raw metrics expanded while an assessment is in progress', () => {
@@ -258,6 +263,10 @@ suite('Webview rendering', () => {
 		assert.match(html, /outcome-track/);
 		assert.match(html, /2 aligned/);
 		assert.match(html, /Chosen direction: <strong>decrease<\/strong>/);
+		assert.match(html, /Metrics assessed/);
+		assert.match(html, /<strong>M9<\/strong>Edge density/);
+		assert.match(html, /<strong>M10<\/strong>Feature congestion/);
+		assert.strictEqual((html.match(/Contributed to goal/g) ?? []).length, 2);
 	});
 
 	test('keeps every requested metric in history comparison when only some have baselines', () => {
