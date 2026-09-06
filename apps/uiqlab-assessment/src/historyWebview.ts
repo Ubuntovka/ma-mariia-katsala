@@ -25,7 +25,6 @@ import {
 	getM4ComparisonUnavailableReason,
 	summarizeM13Comparison,
 	type AccessibilityCountComparison,
-	type AccessibilityIssue,
 	type NumericChange,
 } from './metricComparisons';
 import { escapeHtml } from './webviewSecurity';
@@ -34,6 +33,7 @@ import { renderTargetLink } from './webviewFormatting';
 import {
 	baseMetricId,
 	type HistoryComparisonContent,
+	renderAccessibilityIssueList,
 	renderProfileAssessmentOverview,
 	renderRequestedHistoryMetricSections,
 	requestedHistoryMetricIds,
@@ -74,12 +74,6 @@ function structuralAction(count: number, action: string, types: string[]): strin
 
 function accessibilityBreakdownRows(rows: AccessibilityCountComparison[]): string {
 	return rows.map((row) => `<tr><th scope="row">${escapeHtml(row.key)}</th><td>${row.previous}</td><td>${row.current}</td><td>${signedNumber(row.delta)}</td></tr>`).join('');
-}
-
-function accessibilityIssueList(issues: AccessibilityIssue[]): string {
-	if (issues.length === 0) { return '<p>None</p>'; }
-	return `<ul class="issue-list">${issues.map((issue) => `
-		<li><strong>${escapeHtml(issue.ruleId)}</strong> · ${escapeHtml(issue.impact)}<br><code>${escapeHtml(issue.target)}</code>${issue.description ? `<br><span>${escapeHtml(issue.description)}</span>` : ''}</li>`).join('')}</ul>`;
 }
 
 function linkedComparisonImage(url: string, alt: string): string {
@@ -466,9 +460,9 @@ export async function buildHistoryComparisonContent(
 			<div class="table-wrap"><table><thead><tr><th>Impact</th><th>Previous</th><th>Current</th><th>Delta</th></tr></thead><tbody>${accessibilityBreakdownRows(m13Match.comparison.byImpact)}</tbody></table></div>
 			<h3>Counts by rule</h3>
 			<div class="table-wrap"><table><thead><tr><th>Rule</th><th>Previous</th><th>Current</th><th>Delta</th></tr></thead><tbody>${accessibilityBreakdownRows(m13Match.comparison.byRule)}</tbody></table></div>
-			<details><summary>New violations · regressions (${m13Match.comparison.newIssues.length})</summary>${accessibilityIssueList(m13Match.comparison.newIssues)}</details>
-			<details><summary>Resolved violations · improvements (${m13Match.comparison.resolvedIssues.length})</summary>${accessibilityIssueList(m13Match.comparison.resolvedIssues)}</details>
-			<details><summary>Persistent violations (${m13Match.comparison.persistentIssues.length})</summary>${accessibilityIssueList(m13Match.comparison.persistentIssues)}</details>
+			<details class="issue-group issue-group-new"><summary><span>New violations</span><span class="issue-group-note">Regressions · ${m13Match.comparison.newIssues.length}</span></summary>${renderAccessibilityIssueList(m13Match.comparison.newIssues)}</details>
+			<details class="issue-group issue-group-resolved"><summary><span>Resolved violations</span><span class="issue-group-note">Improvements · ${m13Match.comparison.resolvedIssues.length}</span></summary>${renderAccessibilityIssueList(m13Match.comparison.resolvedIssues)}</details>
+			<details class="issue-group issue-group-persistent"><summary><span>Persistent violations</span><span class="issue-group-note">Still present · ${m13Match.comparison.persistentIssues.length}</span></summary>${renderAccessibilityIssueList(m13Match.comparison.persistentIssues)}</details>
 			<div class="explanation"><p>Each issue is identified by its accessibility rule ID and affected element target. Current issues absent from the previous run are new regressions; previous issues absent from the current run are resolved improvements; their intersection is persistent. Totals are also grouped independently by impact level and rule, so a stable overall count cannot hide one resolved issue being replaced by a different new issue.</p></div>
 		</section>` : '';
 

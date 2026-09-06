@@ -2,6 +2,7 @@ import { getMetricDefinition } from './metricCatalog';
 import { ASSESSMENT_PROFILES } from './assessmentProfiles';
 import type { ProfileAssessmentSummary, ProfileGoalStatus, ProfileOutcome } from './profileAssessment';
 import type { AssessmentMetricResult } from './runAssessment';
+import type { AccessibilityIssue } from './metricComparisons';
 import { escapeHtml } from './webviewSecurity';
 
 export interface HistoryComparisonContent {
@@ -49,6 +50,17 @@ export function renderRequestedHistoryMetricSections(
 		comparableSections[metricId]
 			|| renderUnavailableHistoryMetricSection(metricId, baselineFamilies.has(metricId))
 	).join('');
+}
+
+export function renderAccessibilityIssueList(issues: readonly AccessibilityIssue[]): string {
+	if (issues.length === 0) {
+		return '<p class="issue-empty">No violations in this group.</p>';
+	}
+	return `<ol class="issue-list">${issues.map((issue) => `<li class="issue-card">
+		<div class="issue-card-heading"><strong class="issue-rule">${escapeHtml(issue.ruleId)}</strong><span class="issue-impact">${escapeHtml(issue.impact)}</span></div>
+		<div class="issue-target"><span class="issue-field-label">Affected element</span><code>${escapeHtml(issue.target)}</code></div>
+		${issue.description ? `<p class="issue-description">${escapeHtml(issue.description)}</p>` : ''}
+	</li>`).join('')}</ol>`;
 }
 
 function profileDisplayName(id: string): string {

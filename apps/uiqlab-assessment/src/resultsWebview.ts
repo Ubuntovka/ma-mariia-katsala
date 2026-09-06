@@ -470,9 +470,23 @@ export function generateResultsHtml(
 		.metric-section summary { cursor: pointer; color: var(--ink-soft); font-weight: 600; }
 		.type-details { display: grid; grid-template-columns: max-content 1fr; gap: 7px 14px; margin: 14px 0 0; }
 		.type-details dt { color: var(--muted); }
-		.issue-list { margin: 12px 0 0; padding-left: 22px; }
-		.issue-list li { margin-bottom: 12px; line-height: 1.45; }
-		.issue-list code { color: var(--accent-strong); word-break: break-all; }
+		.issue-group { --issue-group-color: var(--muted); overflow: hidden; padding: 0 !important; border-left: 4px solid var(--issue-group-color) !important; }
+		.issue-group-new { --issue-group-color: var(--danger); }
+		.issue-group-resolved { --issue-group-color: var(--success); }
+		.issue-group-persistent { --issue-group-color: var(--warning); }
+		.issue-group > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: #f7f9fa; list-style-position: inside; }
+		.issue-group[open] > summary { border-bottom: 1px solid var(--border); }
+		.issue-group-note { color: var(--issue-group-color); font-size: 11px; font-weight: 750; }
+		.issue-list { display: grid; gap: 9px; margin: 0; padding: 12px; list-style: none; }
+		.issue-card { min-width: 0; padding: 12px; border: 1px solid #d6dfe3; border-radius: 7px; background: #fff; line-height: 1.4; }
+		.issue-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+		.issue-rule { color: var(--navy); font-size: 13px; line-height: 1.25; }
+		.issue-impact { flex: 0 0 auto; padding: 3px 7px; border-radius: 999px; background: var(--surface-muted); color: var(--ink-soft); font-size: 10px; font-weight: 750; text-transform: capitalize; }
+		.issue-target { display: grid; gap: 4px; }
+		.issue-field-label { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+		.issue-target code { display: block; max-width: 100%; padding: 7px 8px; border: 1px solid #d5dee2; border-radius: 5px; background: #f1f4f5; color: #075e5a; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; white-space: pre-wrap; }
+		.issue-description { margin-top: 8px !important; color: var(--ink-soft); font-size: 12px; line-height: 1.45; }
+		.issue-empty { padding: 14px; color: var(--muted); font-size: 12px; }
 		.heatmap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 18px; }
 		.heatmap-grid .image-zoom-link { display: block; margin-top: 0; }
 		figure img { display: block; width: 100%; max-height: 280px; object-fit: contain; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }

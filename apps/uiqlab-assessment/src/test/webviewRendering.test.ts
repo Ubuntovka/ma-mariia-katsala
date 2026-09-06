@@ -6,6 +6,7 @@ import {
 } from '../resultsWebview';
 import {
 	renderProfileAssessmentOverview,
+	renderAccessibilityIssueList,
 	renderRequestedHistoryMetricSections,
 	renderUnavailableHistoryMetricSection,
 	requestedHistoryMetricIds,
@@ -270,6 +271,23 @@ suite('Webview rendering', () => {
 		assert.match(html, /<strong>M9<\/strong>Edge density/);
 		assert.match(html, /<strong>M10<\/strong>Feature congestion/);
 		assert.strictEqual((html.match(/Contributed to goal/g) ?? []).length, 2);
+	});
+
+	test('renders accessibility violations as compact structured issue cards', () => {
+		const html = renderAccessibilityIssueList([{
+			identity: 'skip-link::a[href="#calendar"]',
+			ruleId: 'skip-link',
+			target: 'a[href="#calendar"]',
+			impact: 'moderate',
+			description: 'The skip-link target should exist and be focusable',
+		}]);
+		assert.match(html, /class="issue-card"/);
+		assert.match(html, /class="issue-rule">skip-link/);
+		assert.match(html, /class="issue-impact">moderate/);
+		assert.match(html, /Affected element/);
+		assert.match(html, /a\[href=&quot;#calendar&quot;\]/);
+		assert.match(html, /class="issue-description">The skip-link target should exist and be focusable/);
+		assert.doesNotMatch(html, /<br>|<ul/);
 	});
 
 	test('keeps every requested metric in history comparison when only some have baselines', () => {
