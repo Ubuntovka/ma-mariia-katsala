@@ -1,6 +1,7 @@
 import { getMetricDefinition } from './metricCatalog';
 import type { AssessmentProfileSelection } from './assessmentProfiles';
 import { logDiagnostic } from './diagnostics';
+import { readUiedDimensions } from './visualMetricComparisons';
 
 export const ASSESSMENTS = [
 	'PNG file size',
@@ -86,20 +87,46 @@ export interface AssessmentHistory {
 	baselineRun?: AssessmentRunSummary;
 }
 
+export interface DirectComparisonHistoryOptions {
+	createdAt?: string;
+	currentResults?: AssessmentMetricResult[];
+}
+
 export function createDirectComparisonHistory(
 	baselineResults: AssessmentMetricResult[],
 	baselineUrl: string,
 	currentUrl: string,
 	assessment: AssessmentSelection,
-	createdAt: string = new Date().toISOString(),
+	options: DirectComparisonHistoryOptions = {},
 ): AssessmentHistory {
+	const createdAt = options.createdAt ?? new Date().toISOString();
+	const baselineDimensions = baselineResults
+		.filter((result) => result.metric_id.split('_')[0] === 'm6')
+		.map((result) => readUiedDimensions(result.results))
+		.find((dimensions) => dimensions !== undefined);
+	const currentDimensions = (options.currentResults ?? [])
+		.filter((result) => result.metric_id.split('_')[0] === 'm6')
+		.map((result) => readUiedDimensions(result.results))
+		.find((dimensions) => dimensions !== undefined);
+	const screenshotDimensions = baselineDimensions && currentDimensions
+		&& baselineDimensions.width === currentDimensions.width
+		&& baselineDimensions.height === currentDimensions.height
+		? currentDimensions
+		: undefined;
 	return {
 		metrics: Object.fromEntries(baselineResults.map((result) => [result.metric_id, {
 			results: result.results,
 			createdAt,
 		}])),
-		baselineRun: { id: -1, createdAt, assessedTarget: baselineUrl, assessment },
-		currentRun: { id: -2, createdAt, assessedTarget: currentUrl, assessment },
+		...(screenshotDimensions ? { screenshotDimensions } : {}),
+		baselineRun: {
+			id: -1, createdAt, assessedTarget: baselineUrl, assessment,
+			screenshotDimensions: baselineDimensions,
+		},
+		currentRun: {
+			id: -2, createdAt, assessedTarget: currentUrl, assessment,
+			screenshotDimensions: currentDimensions,
+		},
 	};
 }
 
