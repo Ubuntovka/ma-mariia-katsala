@@ -28,10 +28,11 @@ import {
 	type AccessibilityIssue,
 	type NumericChange,
 } from './metricComparisons';
-import { buildWebviewContentSecurityPolicy, createWebviewNonce, escapeHtml } from './webviewSecurity';
-import { renderTargetLink } from './webviewFormatting';
+import { escapeHtml } from './webviewSecurity';
+import { generateResultsHtml } from './resultsWebview';
 import {
 	baseMetricId,
+	type HistoryComparisonContent,
 	renderProfileAssessmentOverview,
 	renderRequestedHistoryMetricSections,
 	requestedHistoryMetricIds,
@@ -80,6 +81,11 @@ function accessibilityIssueList(issues: AccessibilityIssue[]): string {
 		<li><strong>${escapeHtml(issue.ruleId)}</strong> · ${escapeHtml(issue.impact)}<br><code>${escapeHtml(issue.target)}</code>${issue.description ? `<br><span>${escapeHtml(issue.description)}</span>` : ''}</li>`).join('')}</ul>`;
 }
 
+function linkedComparisonImage(url: string, alt: string): string {
+	const safeUrl = escapeHtml(url);
+	return `<a class="image-zoom-link" href="${safeUrl}" target="_blank" rel="noopener noreferrer" aria-label="Open ${escapeHtml(alt)} at full size" title="Open full-size image"><img src="${safeUrl}" alt="${escapeHtml(alt)}"></a>`;
+}
+
 function comparisonRunText(run: AssessmentRunSummary): string {
 	if (run.id < 0 && run.assessedTarget) {
 		return run.assessedTarget;
@@ -89,13 +95,12 @@ function comparisonRunText(run: AssessmentRunSummary): string {
 	return `${commit}${dirty} · ${new Date(run.createdAt).toLocaleString()}`;
 }
 
-export async function showHistoryComparison(
+export async function buildHistoryComparisonContent(
 	currentResults: AssessmentMetricResult[],
 	history: AssessmentHistory,
-	url: string,
 	selectedMetricIds: string[] = [],
 	assessmentSelection?: unknown,
-): Promise<boolean> {
+): Promise<HistoryComparisonContent | undefined> {
 	const requestedMetricIds = requestedHistoryMetricIds(selectedMetricIds, currentResults);
 	const historyMetricIds = Object.keys(history.metrics);
 	const historyMetricFamilies = new Set(historyMetricIds.map(baseMetricId));
@@ -133,7 +138,7 @@ export async function showHistoryComparison(
 	const m9Match = await findM9HistoryComparison(currentResults, history);
 	const m10Match = await findM10HistoryComparison(currentResults, history);
 	if (!profileOverview && requestedMetricIds.length === 0) {
-		return false;
+		return undefined;
 	}
 	const runContext = history.currentRun || history.baselineRun
 		? `<div class="run-pair">
@@ -295,8 +300,8 @@ export async function showHistoryComparison(
 			<h2>M7 · UMSI saliency shift</h2>
 			<p class="previous-run">Compared with the completed run from ${new Date(m7Match.previousCreatedAt).toLocaleString()}</p>
 			<div class="heatmap-grid">
-				<figure><img src="${escapeHtml(m7Match.previousHeatmapUrl)}" alt="Previous UMSI saliency heatmap"><figcaption>Previous heatmap</figcaption></figure>
-				<figure><img src="${escapeHtml(m7Match.currentHeatmapUrl)}" alt="Current UMSI saliency heatmap"><figcaption>Current heatmap</figcaption></figure>
+				<figure>${linkedComparisonImage(m7Match.previousHeatmapUrl, 'previous UMSI saliency heatmap')}<figcaption>Previous heatmap</figcaption></figure>
+				<figure>${linkedComparisonImage(m7Match.currentHeatmapUrl, 'current UMSI saliency heatmap')}<figcaption>Current heatmap</figcaption></figure>
 			</div>
 			<div class="grid">
 				<div class="card"><span class="label">Jensen–Shannon divergence</span><span class="value">${m7Match.comparison.jensenShannonDivergence.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span></div>
@@ -344,8 +349,8 @@ export async function showHistoryComparison(
 			</div>` : '';
 	const m9EdgeImages = m9Match?.currentEdgeImageUrl && m9Match.previousEdgeImageUrl ? `
 			<div class="heatmap-grid">
-				<figure><img src="${escapeHtml(m9Match.previousEdgeImageUrl)}" alt="Previous binary edge map"><figcaption>Previous edge map</figcaption></figure>
-				<figure><img src="${escapeHtml(m9Match.currentEdgeImageUrl)}" alt="Current binary edge map"><figcaption>Current edge map</figcaption></figure>
+				<figure>${linkedComparisonImage(m9Match.previousEdgeImageUrl, 'previous binary edge map')}<figcaption>Previous edge map</figcaption></figure>
+				<figure>${linkedComparisonImage(m9Match.currentEdgeImageUrl, 'current binary edge map')}<figcaption>Current edge map</figcaption></figure>
 			</div>` : '';
 	const m9Section = m9Match ? `
 		<section class="metric-section">
@@ -377,8 +382,8 @@ export async function showHistoryComparison(
 			</div>` : '';
 	const m10MapImages = m10Match?.currentMapUrl && m10Match.previousMapUrl ? `
 			<div class="heatmap-grid">
-				<figure><img src="${escapeHtml(m10Match.previousMapUrl)}" alt="Previous feature-congestion map"><figcaption>Previous congestion map</figcaption></figure>
-				<figure><img src="${escapeHtml(m10Match.currentMapUrl)}" alt="Current feature-congestion map"><figcaption>Current congestion map</figcaption></figure>
+				<figure>${linkedComparisonImage(m10Match.previousMapUrl, 'previous feature-congestion map')}<figcaption>Previous congestion map</figcaption></figure>
+				<figure>${linkedComparisonImage(m10Match.currentMapUrl, 'current feature-congestion map')}<figcaption>Current congestion map</figcaption></figure>
 			</div>` : '';
 	const m10Section = m10Match ? `
 		<section class="metric-section">
@@ -513,170 +518,42 @@ export async function showHistoryComparison(
 		m10Match?.previousMapUrl,
 		m10Match?.currentMapUrl,
 	].filter((value): value is string => Boolean(value));
-	const nonce = createWebviewNonce();
-	const contentSecurityPolicy = buildWebviewContentSecurityPolicy(nonce, historyImageUrls);
+	return {
+		profileOverviewHtml: profileOverview,
+		comparisonHtml: `<p class="context"><strong>Comparison scope · </strong>${dimensions ? `${dimensions.width} × ${dimensions.height} px · only completed runs with identical screenshot dimensions are compared` : 'Screenshot dimensions unavailable'}</p>${runContext}${requestedMetricSections}`,
+		imageUrls: historyImageUrls,
+	};
+}
 
-	const panel = vscode.window.createWebviewPanel(
-		'historyComparison',
-		'Assessment History Comparison',
-		vscode.ViewColumn.Beside,
-		{ enableScripts: false }
+export async function showHistoryComparison(
+	currentResults: AssessmentMetricResult[],
+	history: AssessmentHistory,
+	url: string,
+	selectedMetricIds: string[] = [],
+	assessmentSelection?: unknown,
+): Promise<boolean> {
+	const comparison = await buildHistoryComparisonContent(
+		currentResults,
+		history,
+		selectedMetricIds,
+		assessmentSelection,
 	);
-
-	panel.webview.html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<meta http-equiv="Content-Security-Policy" content="${escapeHtml(contentSecurityPolicy)}">
-	<title>Assessment History Comparison</title>
-	<style nonce="${nonce}">
-		:root {
-			--canvas: #f1f4f6;
-			--surface: #ffffff;
-			--surface-subtle: #eef3f5;
-			--surface-muted: #e4eaee;
-			--surface-comparison: #dcecf3;
-			--surface-warning: #fff8e9;
-			--ink: #101b24;
-			--ink-soft: #334550;
-			--muted: #52626d;
-			--header: #102f46;
-			--heading: #12364f;
-			--accent: #0b746f;
-			--accent-strong: #075e5a;
-			--comparison: #2d708f;
-			--comparison-strong: #1d5874;
-			--border: #bcc9d1;
-			--success: #14774f;
-			--danger: #aa3434;
-			--warning: #96600f;
-		}
-		* { box-sizing: border-box; }
-		body { min-height: 100vh; margin: 0; padding: 28px 20px; color: var(--ink); background: var(--canvas); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; }
-		.history-shell { max-width: 960px; margin: 0 auto; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 16px 40px rgba(16, 47, 70, .18); }
-		.comparison-header { padding: 26px 30px 28px; border-bottom: 5px solid var(--comparison); background: var(--header); color: #fff; }
-		.page-kicker { display: block; margin-bottom: 7px; color: #78c9be; font-size: 11px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
-		.comparison-header h1 { margin: 0 0 9px; font-size: 30px; font-weight: 650; letter-spacing: -.02em; }
-		.comparison-mode { display: flex; align-items: center; gap: 8px; margin: 0; color: #d3dee4; font-size: 15px; font-weight: 550; }
-		.comparison-mode span { color: #91bfd1; font-size: 17px; }
-		.target-display { margin-top: 16px; padding: 10px 13px; border: 1px solid rgba(255, 255, 255, .28); border-left: 4px solid #65c9bd; border-radius: 6px; background: rgba(255, 255, 255, .08); color: #edf5f7; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 13px; word-break: break-all; }
-		.target-link { color: #fff; font-weight: 600; text-decoration-color: #65c9bd; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
-		.target-link:hover { color: #bff3ec; text-decoration-thickness: 2px; }
-		.target-link:focus-visible { border-radius: 2px; outline: 2px solid #8de0d5; outline-offset: 3px; }
-		.comparison-content { padding: 30px; }
-		h2 { margin: 0 0 6px; color: var(--heading); font-size: 21px; font-weight: 700; }
-		h3 { margin: 20px 0 10px; color: var(--heading); font-size: 15px; }
-		.context { margin: 0 0 16px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-muted); color: var(--ink-soft); font-size: 13px; line-height: 1.5; }
-		.context strong { color: var(--ink-soft); }
-		.run-pair { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: stretch; gap: 10px; margin: 0 0 26px; }
-		.run-chip { min-width: 0; padding: 14px 15px; border: 1px solid var(--border); border-top: 4px solid #82939d; border-radius: 7px; background: var(--surface-subtle); }
-		.run-chip span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
-		.run-chip strong { display: block; overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 650; line-height: 1.45; text-overflow: ellipsis; }
-		.current-run { border-color: var(--comparison); border-top-width: 4px; background: var(--surface-comparison); }
-		.current-run span { color: var(--comparison-strong); }
-		.run-arrow { display: grid; width: 28px; place-items: center; color: var(--comparison); font-size: 20px; }
-		.metric-section { margin: 0 0 20px; padding: 22px; border: 1px solid var(--border); border-left: 5px solid var(--comparison); border-radius: 7px; background: var(--surface-subtle); box-shadow: 0 3px 10px rgba(16, 47, 70, .08); }
-		.previous-run { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
-		.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 18px; }
-		.card { padding: 16px; border: 1px solid var(--border); border-top: 4px solid #82939d; border-radius: 7px; background: var(--surface); }
-		.card:nth-child(2) { border-color: var(--comparison); border-top-width: 4px; background: var(--surface-comparison); }
-		.card:nth-child(2) .label, .card:nth-child(2) .value { color: var(--comparison-strong); }
-		.regression-card { border-color: var(--vscode-testing-iconFailed, var(--danger)); }
-		.improvement-card { border-color: var(--vscode-testing-iconPassed, var(--success)); }
-		.label { display: block; margin-bottom: 8px; color: var(--muted); font-size: 12px; font-weight: 750; text-transform: uppercase; letter-spacing: .05em; }
-		.value { color: var(--ink); font-size: 23px; font-weight: 700; }
-		.text-value { font-size: 18px; }
-		.wide-card { grid-column: 1 / -1; }
-		.compact-grid { grid-template-columns: minmax(220px, 300px); margin-top: 14px; }
-		.table-wrap { overflow-x: auto; margin-bottom: 14px; border: 1px solid var(--border); border-radius: 7px; }
-		table { width: 100%; border-collapse: collapse; background: var(--surface); }
-		th, td { padding: 11px 13px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); text-align: right; }
-		th:last-child, td:last-child { border-right: 0; }
-		tbody tr:last-child td { border-bottom: 0; }
-		tbody tr:nth-child(even) { background: var(--surface-subtle); }
-		th:first-child, td:first-child { text-align: left; }
-		thead th { background: var(--surface-muted); color: var(--ink-soft); font-size: 12px; font-weight: 750; text-transform: uppercase; letter-spacing: .05em; }
-		thead th:nth-child(3), tbody td:nth-child(3) { background: var(--surface-comparison); color: var(--comparison-strong); font-weight: 700; }
-		tbody td:nth-child(2) { font-weight: 600; }
-		.variation-summary { margin: 8px 0 18px; color: var(--muted); }
-		.structural-summary { margin: 2px 0 16px; color: var(--ink-soft); font-size: 17px; font-weight: 600; }
-		details { margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
-		summary { cursor: pointer; color: var(--ink-soft); font-weight: 600; }
-		.type-details { display: grid; grid-template-columns: max-content 1fr; gap: 7px 14px; margin: 14px 0 0; }
-		.type-details dt { color: var(--muted); }
-		.type-details dd { margin: 0; }
-		.issue-list { margin: 12px 0 0; padding-left: 22px; }
-		.issue-list li { margin-bottom: 12px; line-height: 1.45; }
-		.issue-list code { color: var(--accent-strong); word-break: break-all; }
-		.heatmap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 18px; }
-		figure { margin: 0; }
-		figure img { display: block; width: 100%; max-height: 280px; object-fit: contain; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
-		figcaption { margin-top: 7px; color: var(--muted); text-align: center; }
-		.explanation { padding: 16px; border-left: 4px solid var(--accent); border-radius: 5px; background: var(--surface-comparison); color: var(--ink-soft); line-height: 1.55; }
-		.explanation p { margin: 0; }
-		.comparison-warning { margin-bottom: 18px; padding: 14px 16px; border-left: 4px solid var(--warning); border-radius: 5px; background: var(--surface-warning); line-height: 1.5; }
-		.comparison-warning p { margin: 0; }
-		.metric-unavailable { border-left-color: var(--muted); }
-		.metric-unavailable h2 { margin-bottom: 14px; }
-		.baseline-empty { display: flex; align-items: center; gap: 14px; padding: 16px; border: 1px dashed var(--border); border-radius: 8px; background: var(--surface); }
-		.baseline-empty-icon { display: grid; flex: 0 0 34px; width: 34px; height: 34px; place-items: center; border: 1px solid var(--muted); border-radius: 50%; color: var(--muted); font-size: 20px; }
-		.baseline-empty strong { display: block; margin-bottom: 3px; font-size: 15px; }
-		.baseline-empty p { margin: 0; color: var(--muted); line-height: 1.45; }
-		.profile-overview { --goal-color: var(--muted); margin: 0 0 24px; padding: 22px; border: 1px solid var(--goal-color); border-top: 4px solid var(--goal-color); border-radius: 9px; background: var(--surface); }
-		.profile-overview.status-achieved, .profile-card.status-achieved { --goal-color: var(--vscode-testing-iconPassed, var(--success)); }
-		.profile-overview.status-not-achieved, .profile-card.status-not-achieved { --goal-color: var(--vscode-testing-iconFailed, var(--danger)); }
-		.profile-overview.status-partial, .profile-card.status-partial { --goal-color: var(--vscode-editorWarning-foreground, var(--warning)); }
-		.profile-overview.status-observed, .profile-card.status-observed { --goal-color: var(--comparison); }
-		.profile-overview.status-unchanged, .profile-card.status-unchanged { --goal-color: var(--comparison); }
-		.profile-overview.status-not-comparable, .profile-card.status-not-comparable { --goal-color: var(--muted); }
-		.goal-summary { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 20px; }
-		.goal-icon { display: grid; flex: 0 0 44px; width: 44px; height: 44px; place-items: center; border: 2px solid var(--goal-color); border-radius: 50%; color: var(--goal-color); font-size: 25px; font-weight: 700; }
-		.eyebrow { display: block; margin-bottom: 4px; color: var(--goal-color); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-		.goal-summary h2 { margin-bottom: 5px; }
-		.goal-summary p { margin: 0; color: var(--muted); line-height: 1.5; }
-		.profile-summary-grid { display: grid; gap: 12px; }
-		.profile-card { --goal-color: var(--muted); padding: 16px; border: 1px solid var(--border); border-left: 4px solid var(--goal-color); border-radius: 8px; background: var(--surface-subtle); }
-		.profile-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-		.profile-card h3 { margin: 0 0 3px; font-size: 16px; }
-		.profile-direction { margin: 0; color: var(--muted); font-size: 12px; }
-		.status-pill { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--goal-color); border-radius: 999px; color: var(--goal-color); font-size: 11px; font-weight: 700; }
-		.outcome-track { display: flex; width: 100%; height: 9px; margin: 15px 0 8px; overflow: hidden; border-radius: 999px; background: var(--border); }
-		.outcome-track span { flex: 1; min-width: 2px; }
-		.track-aligned, .legend-aligned { background: var(--vscode-testing-iconPassed, var(--success)); }
-		.track-unchanged, .legend-unchanged { background: var(--muted); }
-		.track-opposed, .legend-opposed { background: var(--vscode-testing-iconFailed, var(--danger)); }
-		.track-neutral { background: var(--muted); opacity: .5; }
-		.outcome-legend, .track-key { display: flex; flex-wrap: wrap; gap: 8px 14px; color: var(--muted); font-size: 11px; }
-		.outcome-legend i, .track-key i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; }
-		.profile-reason { margin: 12px 0 0; line-height: 1.45; }
-		.track-key { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
-		@media (max-width: 620px) {
-			body { padding: 12px; }
-			.comparison-header, .comparison-content { padding: 22px 18px; }
-			.run-pair { grid-template-columns: 1fr; }
-			.run-arrow { width: auto; height: 20px; transform: rotate(90deg); }
-			.profile-card-heading { display: block; }
-			.status-pill { display: inline-block; margin-top: 10px; }
-		}
-	</style>
-</head>
-<body>
-	<div class="history-shell">
-		<header class="comparison-header">
-			<span class="page-kicker">Assessment history</span>
-			<h1>Run comparison</h1>
-			<p class="comparison-mode">Baseline <span aria-hidden="true">→</span> Current · ${requestedMetricIds.length} ${requestedMetricIds.length === 1 ? 'metric' : 'metrics'}</p>
-			<div class="target-display">Target · ${renderTargetLink(url)}</div>
-		</header>
-		<main class="comparison-content">
-			<p class="context"><strong>Comparison scope · </strong>${dimensions ? `${dimensions.width} × ${dimensions.height} px · only completed runs with identical screenshot dimensions are compared` : 'Screenshot dimensions unavailable'}</p>
-			${runContext}
-			${profileOverview}
-			${requestedMetricSections}
-		</main>
-	</div>
-</body>
-</html>`;
+	if (!comparison) { return false; }
+	const panel = vscode.window.createWebviewPanel(
+		'evaluationResults',
+		'Evaluation Results',
+		vscode.ViewColumn.One,
+		{ enableScripts: false },
+	);
+	panel.webview.html = generateResultsHtml(
+		currentResults,
+		url,
+		true,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		comparison,
+	);
 	return true;
 }

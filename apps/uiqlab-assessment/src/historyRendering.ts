@@ -3,6 +3,12 @@ import type { ProfileAssessmentSummary, ProfileGoalStatus, ProfileOutcome } from
 import type { AssessmentMetricResult } from './runAssessment';
 import { escapeHtml } from './webviewSecurity';
 
+export interface HistoryComparisonContent {
+	profileOverviewHtml: string;
+	comparisonHtml: string;
+	imageUrls: string[];
+}
+
 export function baseMetricId(metricId: string): string {
 	return metricId.split('_')[0].toLowerCase();
 }
@@ -99,4 +105,3 @@ export function renderProfileAssessmentOverview(summary: ProfileAssessmentSummar
 		<div class="track-key"><span><i class="legend-aligned"></i>Follows direction</span><span><i class="legend-unchanged"></i>No meaningful change</span><span><i class="legend-opposed"></i>Opposes direction</span></div>
 	</section>`;
 }
-

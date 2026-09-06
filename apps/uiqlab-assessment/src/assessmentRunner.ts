@@ -1,7 +1,7 @@
 import { execSync } from 'child_process';
 import * as vscode from 'vscode';
 import { errorMessage, logDiagnostic } from './diagnostics';
-import { showHistoryComparison } from './historyWebview';
+import { buildHistoryComparisonContent } from './historyWebview';
 import {
 	assessProfilesAgainstHistory,
 	normalizeProfileAssessmentSelection,
@@ -27,6 +27,7 @@ import {
 	type ProfileLlmFeedback,
 } from './runAssessment';
 import { collectWorkspaceSourceContext } from './sourceContext';
+import type { HistoryComparisonContent } from './historyRendering';
 
 const COMPARABLE_METRICS = new Set(Array.from({ length: 14 }, (_, index) => `m${index + 1}`));
 
@@ -80,6 +81,7 @@ function renderResults(
 	explanationError?: string,
 	profileFeedback?: ProfileLlmFeedback,
 	customFeedback?: CustomMetricLlmFeedback,
+	comparison?: HistoryComparisonContent,
 ): void {
 	panel.webview.html = generateResultsHtml(
 		results,
@@ -89,6 +91,7 @@ function renderResults(
 		explanationError,
 		profileFeedback,
 		customFeedback,
+		comparison,
 	);
 }
 
@@ -247,13 +250,12 @@ async function runDeploymentUrlComparison(
 		explanationError,
 		profileFeedback,
 		customFeedback,
-	);
-	await showHistoryComparison(
-		currentResults,
-		history,
-		dataSource.currentDeploymentUrl,
-		toMetricIds(request.assessments),
-		assessmentSelection,
+		await buildHistoryComparisonContent(
+			currentResults,
+			history,
+			toMetricIds(request.assessments),
+			assessmentSelection,
+		),
 	);
 	return currentResults;
 }
@@ -394,10 +396,15 @@ export function createAssessmentRunner(context: vscode.ExtensionContext): RunCon
 						logDiagnostic('Could not generate the assessment explanation', error);
 					}
 				}
-				renderResults(panel, currentResults, submission.target, true, explanation, explanationError, profileFeedback, customFeedback);
-				if (history) {
-					await showHistoryComparison(currentResults, history, submission.target, toMetricIds(request.assessments), request.assessment);
-				}
+				const comparison = history
+					? await buildHistoryComparisonContent(
+						currentResults,
+						history,
+						toMetricIds(request.assessments),
+						request.assessment,
+					)
+					: undefined;
+				renderResults(panel, currentResults, submission.target, true, explanation, explanationError, profileFeedback, customFeedback, comparison);
 				return currentResults;
 			});
 
