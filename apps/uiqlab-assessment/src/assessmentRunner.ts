@@ -213,6 +213,7 @@ async function runDeploymentUrlComparison(
 		dataSource.baselineDeploymentUrl,
 		dataSource.currentDeploymentUrl,
 		assessmentSelection,
+		{ currentResults },
 	);
 	let explanation: string | undefined;
 	let explanationError: string | undefined;

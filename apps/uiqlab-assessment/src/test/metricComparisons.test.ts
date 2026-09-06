@@ -18,6 +18,7 @@ import {
 	summarizeM13Comparison,
 	calculateM14Comparison,
 	normalizeUiedElements,
+	readUiedDimensions,
 	getColorfulnessInterpretation,
 } from '../metricComparisons';
 
@@ -181,6 +182,52 @@ suite('Metric comparisons', () => {
 			width: 0.42,
 			height: 0.1,
 		}]);
+	});
+
+	test('reads and uses screenshot dimensions embedded in UIED results', () => {
+		const result = { img_shape: [500, 1000, 3], segments: [{
+			class: 'Text',
+			position: { column_min: 120, row_min: 80, column_max: 540, row_max: 130 },
+		}] };
+		assert.deepStrictEqual(readUiedDimensions(result), { width: 1000, height: 500 });
+		assert.deepStrictEqual(normalizeUiedElements(result), [{
+			type: 'text',
+			x: 0.12,
+			y: 0.16,
+			width: 0.42,
+			height: 0.1,
+		}]);
+	});
+
+	test('compares UIED results using their embedded image shapes', () => {
+		const previous = { img_shape: [500, 1000, 3], segments: [{
+			type: 'button',
+			position: { column_min: 100, row_min: 100, column_max: 200, row_max: 150 },
+		}] };
+		const current = { img_shape: [500, 1000, 3], segments: [{
+			type: 'button',
+			position: { column_min: 100, row_min: 100, column_max: 200, row_max: 150 },
+		}] };
+		const comparison = compareM6Segmentation(current, previous);
+		assert.ok(comparison);
+		assert.deepStrictEqual({
+			added: comparison.added,
+			removed: comparison.removed,
+			moved: comparison.moved,
+			resized: comparison.resized,
+			matched: comparison.matched,
+		}, { added: 0, removed: 0, moved: 0, resized: 0, matched: 1 });
+	});
+
+	test('does not compare UIED results captured at different dimensions', () => {
+		assert.strictEqual(compareM6Segmentation(
+			{ img_shape: [500, 1000, 3], segments: [{
+				type: 'button', column_min: 100, row_min: 100, column_max: 200, row_max: 150,
+			}] },
+			{ img_shape: [1000, 2000, 3], segments: [{
+				type: 'button', column_min: 200, row_min: 200, column_max: 400, row_max: 300,
+			}] },
+		), undefined);
 	});
 
 	test('detects added, removed, moved, and resized UIED elements', () => {

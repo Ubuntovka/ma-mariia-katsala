@@ -10,7 +10,21 @@ import type {
 } from './metricComparisonTypes';
 import { safeWebviewImageUrl } from './webviewSecurity';
 
-function findUiedPayload(value: unknown): { segments: unknown[] } | undefined {
+interface UiedPayload {
+	segments: unknown[];
+	dimensions?: { width: number; height: number };
+}
+
+function uiedShapeDimensions(value: unknown): { width: number; height: number } | undefined {
+	if (!Array.isArray(value) || value.length < 2) { return undefined; }
+	const height = finiteNumber(value[0]);
+	const width = finiteNumber(value[1]);
+	return width !== undefined && height !== undefined && width > 0 && height > 0
+		? { width, height }
+		: undefined;
+}
+
+function findUiedPayload(value: unknown): UiedPayload | undefined {
 	if (typeof value === 'string') {
 		try { return findUiedPayload(JSON.parse(value)); } catch { return undefined; }
 	}
@@ -26,9 +40,16 @@ function findUiedPayload(value: unknown): { segments: unknown[] } | undefined {
 	}
 	const candidate = value as Record<string, unknown>;
 	if (Array.isArray(candidate.segments)) {
-		return { segments: candidate.segments };
+		return {
+			segments: candidate.segments,
+			dimensions: uiedShapeDimensions(candidate.img_shape),
+		};
 	}
 	return undefined;
+}
+
+export function readUiedDimensions(value: unknown): { width: number; height: number } | undefined {
+	return findUiedPayload(value)?.dimensions;
 }
 
 function normalizedComponentType(component: Record<string, unknown>): string {
@@ -42,10 +63,12 @@ function normalizedComponentType(component: Record<string, unknown>): string {
 
 export function normalizeUiedElements(
 	value: unknown,
-	dimensions: { width: number; height: number }
+	dimensions?: { width: number; height: number }
 ): NormalizedUiedElement[] {
 	const payload = findUiedPayload(value);
-	if (!payload || dimensions.width <= 0 || dimensions.height <= 0) {
+	const effectiveDimensions = payload?.dimensions ?? dimensions;
+	if (!payload || !effectiveDimensions
+		|| effectiveDimensions.width <= 0 || effectiveDimensions.height <= 0) {
 		return [];
 	}
 	return payload.segments.flatMap((item): NormalizedUiedElement[] => {
@@ -70,10 +93,10 @@ export function normalizeUiedElements(
 			&& rawX + rawWidth <= 1 && rawY + rawHeight <= 1;
 		return [{
 			type: normalizedComponentType(component),
-			x: alreadyNormalized ? rawX : rawX / dimensions.width,
-			y: alreadyNormalized ? rawY : rawY / dimensions.height,
-			width: alreadyNormalized ? rawWidth : rawWidth / dimensions.width,
-			height: alreadyNormalized ? rawHeight : rawHeight / dimensions.height,
+			x: alreadyNormalized ? rawX : rawX / effectiveDimensions.width,
+			y: alreadyNormalized ? rawY : rawY / effectiveDimensions.height,
+			width: alreadyNormalized ? rawWidth : rawWidth / effectiveDimensions.width,
+			height: alreadyNormalized ? rawHeight : rawHeight / effectiveDimensions.height,
 		}];
 	});
 }
@@ -159,8 +182,15 @@ function bestElementAssignment(weights: number[][]): Array<[number, number]> {
 export function compareM6Segmentation(
 	currentValue: unknown,
 	previousValue: unknown,
-	dimensions: { width: number; height: number }
+	dimensions?: { width: number; height: number }
 ): M6Comparison | undefined {
+	const currentDimensions = readUiedDimensions(currentValue) ?? dimensions;
+	const previousDimensions = readUiedDimensions(previousValue) ?? dimensions;
+	if (currentDimensions && previousDimensions
+		&& (currentDimensions.width !== previousDimensions.width
+			|| currentDimensions.height !== previousDimensions.height)) {
+		return undefined;
+	}
 	const current = normalizeUiedElements(currentValue, dimensions);
 	const previous = normalizeUiedElements(previousValue, dimensions);
 	if (current.length === 0 && previous.length === 0) { return undefined; }
@@ -468,4 +498,3 @@ export function calculateM10Comparison(
 		highCongestionOverlap: mapComparison?.highCongestionOverlap,
 	};
 }
-

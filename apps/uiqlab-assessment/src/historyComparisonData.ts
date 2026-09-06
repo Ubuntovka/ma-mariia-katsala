@@ -143,7 +143,7 @@ export function findM5HistoryComparison(
 export function findM6HistoryComparison(
 	currentResults: AssessmentMetricResult[],
 	history: AssessmentHistory,
-	dimensions: { width: number; height: number }
+	dimensions?: { width: number; height: number }
 ): { comparison: M6Comparison; previousCreatedAt: string } | undefined {
 	for (const currentResult of currentResults) {
 		if (typeof currentResult?.metric_id !== 'string' || currentResult.metric_id.split('_')[0] !== 'm6') {

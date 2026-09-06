@@ -123,9 +123,7 @@ export async function showHistoryComparison(
 	const m4Match = findM4HistoryComparison(currentResults, history);
 	const m5Match = findM5HistoryComparison(currentResults, history);
 	const dimensions = history.screenshotDimensions;
-	const m6Match = dimensions
-		? findM6HistoryComparison(currentResults, history, dimensions)
-		: undefined;
+	const m6Match = findM6HistoryComparison(currentResults, history, dimensions);
 	const m11Match = findM11HistoryComparison(currentResults, history);
 	const m12Match = findM12HistoryComparison(currentResults, history);
 	const m13Match = findM13HistoryComparison(currentResults, history);

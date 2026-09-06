@@ -179,7 +179,7 @@ suite('Run assessment requests', () => {
 			'https://before.example.com',
 			'https://after.example.com',
 			assessment,
-			'2026-09-04T12:00:00.000Z',
+			{ createdAt: '2026-09-04T12:00:00.000Z' },
 		);
 
 		assert.deepStrictEqual(history.metrics, {
@@ -189,6 +189,32 @@ suite('Run assessment requests', () => {
 		assert.strictEqual(history.baselineRun?.assessedTarget, 'https://before.example.com');
 		assert.strictEqual(history.currentRun?.assessedTarget, 'https://after.example.com');
 		assert.strictEqual(history.baselineRun?.assessment, assessment);
+	});
+
+	test('uses embedded UIED image dimensions for direct deployment comparisons', () => {
+		const history = createDirectComparisonHistory(
+			[{
+				metric_id: 'm6_uied_segmentation',
+				results: ['https://example.com/segmented.png', {
+					img_shape: [941, 1920, 3],
+					segments: [],
+				}],
+			}],
+			'https://before.example.com',
+			'https://after.example.com',
+			{ mode: 'custom' },
+			{ currentResults: [{
+				metric_id: 'm6_uied_segmentation',
+				results: ['https://example.com/current-segmented.png', {
+					img_shape: [941, 1920, 3],
+					segments: [],
+				}],
+			}] },
+		);
+
+		assert.deepStrictEqual(history.screenshotDimensions, { width: 1920, height: 941 });
+		assert.deepStrictEqual(history.baselineRun?.screenshotDimensions, { width: 1920, height: 941 });
+		assert.deepStrictEqual(history.currentRun?.screenshotDimensions, { width: 1920, height: 941 });
 	});
 
 	test('labels previous assessments with the page path, date time, and working state', () => {
