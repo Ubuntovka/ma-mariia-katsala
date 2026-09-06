@@ -217,13 +217,22 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 		const selectedProfiles = new Map(initialProfiles.map((profile) => [profile.id, profile.direction]));
 		const profileRows = SIDEBAR_ASSESSMENT_PROFILE_IDS.map((id) => {
 			const definition = ASSESSMENT_PROFILES[id];
+			const profileName = formatProfileName(id);
 			const selectedDirection = selectedProfiles.get(id) ?? definition.directions[0];
 			const options = definition.directions.map((direction) =>
 				`<option value="${escapeHtml(direction)}"${direction === selectedDirection ? ' selected' : ''}>${escapeHtml(direction)}</option>`
 			).join('');
+			const profileMetrics = definition.metrics.map((metricId) => {
+				const metric = METRIC_DEFINITIONS.find((candidate) => candidate.id === metricId);
+				return `<li><span class="profile-metric-id">${escapeHtml(metricId.toUpperCase())}</span><span>${escapeHtml(metric?.name ?? metricId)}</span></li>`;
+			}).join('');
 			return `<div class="profile">
-				<label class="profile-label"><input type="checkbox" name="profile" value="${escapeHtml(id)}"${selectedProfiles.has(id) ? ' checked' : ''}><span>${escapeHtml(formatProfileName(id))}</span></label>
+				<label class="profile-label"><input type="checkbox" name="profile" value="${escapeHtml(id)}"${selectedProfiles.has(id) ? ' checked' : ''}><span>${escapeHtml(profileName)}</span></label>
 				<label class="direction-label"><span>Direction</span><select data-profile-direction="${escapeHtml(id)}"${selectedProfiles.has(id) ? '' : ' disabled'}>${options}</select></label>
+				<details class="profile-details"><summary aria-label="Read about ${escapeHtml(profileName)}">About this profile</summary><div class="profile-details-content">
+					<p>${escapeHtml(PROFILE_DESCRIPTIONS[id] ?? '')}</p>
+					<p class="profile-metrics-heading">Metrics used</p><ul>${profileMetrics}</ul>
+				</div></details>
 			</div>`;
 		}).join('');
 		const metricRows = METRIC_DEFINITIONS.map((metric) =>
@@ -285,6 +294,11 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	.profile-label input { margin-top: 2px; }
 	.direction-label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; margin: 7px 0 0 22px; color: var(--vscode-descriptionForeground); font-size: 11px; }
 	.direction-label select { padding: 5px 7px; }
+	.profile-details-content { padding: 2px 0 1px; }
+	.profile-details .profile-metrics-heading { margin-top: 9px; color: var(--vscode-foreground); font-weight: 600; }
+	.profile-details ul { display: grid; gap: 4px; margin: 5px 0 2px; padding: 0; list-style: none; }
+	.profile-details li { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 5px; align-items: baseline; line-height: 1.35; }
+	.profile-metric-id { color: var(--vscode-foreground); font-family: var(--vscode-editor-font-family); font-size: 10px; font-weight: 600; text-transform: uppercase; }
 	.selection-panel { margin-top: 6px; }
 	.section-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 10px 0 4px; }
 	.section-row strong { font-size: 12px; }
@@ -304,10 +318,12 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	<h2>Web UI assessment</h2><p class="intro">Configure an assessment here. Your choices remain available while you work.</p>
 	<form id="assessment-form" novalidate>
 		<fieldset><legend>What do you want to compare?</legend><div class="comparison-options">
-			<label class="source-option"><input type="radio" name="comparison" value="current-latest" checked>Current state vs latest assessment</label>
+			<!-- Comparison modes hidden for the thesis experiments. Restore after the experiments.
+			<label class="source-option"><input type="radio" name="comparison" value="current-latest">Current state vs latest assessment</label>
 			<label class="source-option"><input type="radio" name="comparison" value="current-selected">Current state vs selected assessment</label>
-			<label class="source-option"><input type="radio" name="comparison" value="deployment-urls">Two deployed URLs</label>
 			<label class="source-option"><input type="radio" name="comparison" value="past-past">Two previous assessments</label>
+			-->
+			<label class="source-option"><input type="radio" name="comparison" value="deployment-urls" checked>Two deployed URLs</label>
 		</div>
 		<div class="mode-panel hidden" id="selected-baseline-panel"><label class="select-label" for="selected-baseline">Previous assessment</label><select id="selected-baseline"></select><p class="empty-history hidden" id="selected-empty">No previous assessment matches this page.</p></div>
 		<div class="mode-panel hidden" id="past-comparison-panel">
@@ -408,6 +424,15 @@ function toSidebarAssessmentRun(run: AssessmentRunSummary): {
 function escapeHtml(value: string): string {
 	return value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character] ?? character);
 }
+
+const PROFILE_DESCRIPTIONS: Readonly<Record<string, string>> = {
+	'visual-complexity': 'Evaluates how visually busy or simple the interface appears by measuring edges, feature congestion, and visual information.',
+	'layout-density': 'Examines how tightly interface elements are arranged and how much space separates them across the page.',
+	'content-density': 'Estimates how much visible information the page presents and how tightly that content fills the available space.',
+	'colour-expression': 'Assesses the vividness and overall colour character of the interface.',
+	'aesthetic-impression': 'Estimates perceived visual quality and aesthetic appeal using a model trained on human image ratings.',
+	accessibility: 'Checks for automatically detectable accessibility problems that can affect people using the interface.',
+};
 
 function formatProfileName(id: string): string {
 	const words = id.replace(/-/g, ' ');

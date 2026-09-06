@@ -1,7 +1,16 @@
 import { getMetricDefinition } from './metricCatalog';
+import { ASSESSMENT_PROFILES } from './assessmentProfiles';
 import type { ProfileAssessmentSummary, ProfileGoalStatus, ProfileOutcome } from './profileAssessment';
 import type { AssessmentMetricResult } from './runAssessment';
+import type { AccessibilityIssue } from './metricComparisons';
 import { escapeHtml } from './webviewSecurity';
+
+export interface HistoryComparisonContent {
+	profileOverviewHtml: string;
+	comparisonSummaryHtml: string;
+	comparisonHtml: string;
+	imageUrls: string[];
+}
 
 export function baseMetricId(metricId: string): string {
 	return metricId.split('_')[0].toLowerCase();
@@ -43,6 +52,17 @@ export function renderRequestedHistoryMetricSections(
 	).join('');
 }
 
+export function renderAccessibilityIssueList(issues: readonly AccessibilityIssue[]): string {
+	if (issues.length === 0) {
+		return '<p class="issue-empty">No violations in this group.</p>';
+	}
+	return `<ol class="issue-list">${issues.map((issue) => `<li class="issue-card">
+		<div class="issue-card-heading"><strong class="issue-rule">${escapeHtml(issue.ruleId)}</strong><span class="issue-impact">${escapeHtml(issue.impact)}</span></div>
+		<div class="issue-target"><span class="issue-field-label">Affected element</span><code>${escapeHtml(issue.target)}</code></div>
+		${issue.description ? `<p class="issue-description">${escapeHtml(issue.description)}</p>` : ''}
+	</li>`).join('')}</ol>`;
+}
+
 function profileDisplayName(id: string): string {
 	const words = id.replace(/-/g, ' ');
 	return words.charAt(0).toUpperCase() + words.slice(1);
@@ -75,6 +95,35 @@ function renderProfileOutcomeTrack(outcome: ProfileOutcome): string {
 	</div>`;
 }
 
+function renderProfileMetrics(outcome: ProfileOutcome): string {
+	const assessedMetrics = ASSESSMENT_PROFILES[outcome.id]?.metrics ?? outcome.comparableMetrics;
+	const items = assessedMetrics.map((metricId) => {
+		const definition = getMetricDefinition(metricId);
+		const metricName = definition?.name ?? metricId.toUpperCase();
+		let className = 'not-comparable';
+		let icon = '?';
+		let contribution = 'Not comparable';
+		if (outcome.alignedMetrics.includes(metricId)) {
+			className = 'aligned';
+			icon = '✓';
+			contribution = outcome.direction === 'observe' ? 'Contributed to observed change' : 'Contributed to goal';
+		} else if (outcome.opposedMetrics.includes(metricId)) {
+			className = 'opposed';
+			icon = '×';
+			contribution = 'Worked against goal';
+		} else if (outcome.comparableMetrics.includes(metricId)) {
+			className = 'unchanged';
+			icon = '—';
+			contribution = 'No meaningful change';
+		}
+		return `<li class="profile-metric metric-${className}">
+			<span class="profile-metric-name"><strong>${escapeHtml(metricId.toUpperCase())}</strong>${escapeHtml(metricName)}</span>
+			<span class="profile-metric-impact"><i aria-hidden="true">${icon}</i>${contribution}</span>
+		</li>`;
+	}).join('');
+	return `<div class="profile-metrics"><p class="profile-metrics-title">Metrics assessed</p><ul>${items}</ul></div>`;
+}
+
 export function renderProfileAssessmentOverview(summary: ProfileAssessmentSummary): string {
 	const overall = goalStatusPresentation(summary.status);
 	const outcomeCards = summary.outcomes.map((outcome) => {
@@ -86,6 +135,7 @@ export function renderProfileAssessmentOverview(summary: ProfileAssessmentSummar
 			<div class="profile-card-heading"><div><h3>${escapeHtml(profileDisplayName(outcome.id))}</h3><p class="profile-direction">Chosen direction: <strong>${escapeHtml(outcome.direction)}</strong></p></div><span class="status-pill"><span aria-hidden="true">${presentation.icon}</span> ${presentation.label}</span></div>
 			${renderProfileOutcomeTrack(outcome)}
 			${metricLegend}
+			${renderProfileMetrics(outcome)}
 			<p class="profile-reason">${escapeHtml(outcome.reason)}</p>
 		</article>`;
 	}).join('');
@@ -99,4 +149,3 @@ export function renderProfileAssessmentOverview(summary: ProfileAssessmentSummar
 		<div class="track-key"><span><i class="legend-aligned"></i>Follows direction</span><span><i class="legend-unchanged"></i>No meaningful change</span><span><i class="legend-opposed"></i>Opposes direction</span></div>
 	</section>`;
 }
-

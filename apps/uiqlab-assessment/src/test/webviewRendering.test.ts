@@ -6,6 +6,7 @@ import {
 } from '../resultsWebview';
 import {
 	renderProfileAssessmentOverview,
+	renderAccessibilityIssueList,
 	renderRequestedHistoryMetricSections,
 	renderUnavailableHistoryMetricSection,
 	requestedHistoryMetricIds,
@@ -47,6 +48,8 @@ suite('Webview rendering', () => {
 		});
 
 		assert.match(html, /profile-ai-feedback status-partial/);
+		assert.match(html, /<h2 id="profile-ai-title">AI-generated explanation<\/h2>/);
+		assert.match(html, /profile-ai-goal">Profile goals partially achieved/);
 		assert.match(html, /Suggested next steps/);
 		assert.match(html, /Based on metrics and 1 source file/);
 		assert.match(html, /src\/pages\/home\.tsx/);
@@ -86,6 +89,7 @@ suite('Webview rendering', () => {
 		});
 
 		assert.match(html, /custom-ai-feedback/);
+		assert.match(html, /AI-generated technical explanation/);
 		assert.match(html, /Baseline comparison · 2 material changes/);
 		assert.match(html, /Based on metrics and 1 source file/);
 		assert.match(html, /potential user may experience a denser interface/);
@@ -125,10 +129,55 @@ suite('Webview rendering', () => {
 		assert.match(html, /assessment-status complete/);
 		assert.match(html, /class="target-link" href="http:\/\/localhost:3000"/);
 		assert.match(html, /target="_blank" rel="noopener noreferrer"/);
-		assert.match(html, /Metric results/);
+		assert.match(html, /Raw metrics/);
 		assert.match(html, /1 metric/);
 		assert.doesNotMatch(html, /#667eea|#764ba2|linear-gradient\(/);
 		assert.doesNotMatch(generateResultsHtml([], 'javascript:alert(1)'), /class="target-link"/);
+	});
+
+	test('renders explanation, profile evaluation, comparison, and collapsed raw metrics in one page', () => {
+		const html = generateResultsHtml(
+			[{ metric_id: 'm9_edge_density', results: [0.2] }],
+			'http://localhost:3000',
+			true,
+			'Current visual density is lower than the baseline.',
+			undefined,
+			undefined,
+			undefined,
+			{
+				profileOverviewHtml: '<section class="profile-overview">Profile evaluation</section>',
+				comparisonSummaryHtml: '<span>Baseline link → Current link</span>',
+				comparisonHtml: '<section class="metric-section">Comparison value</section>',
+				imageUrls: [],
+			},
+		);
+
+		const explanationIndex = html.indexOf('AI-generated explanation');
+		const profileIndex = html.indexOf('Profile evaluation');
+		const comparisonIndex = html.indexOf('Comparison details');
+		const rawMetricsIndex = html.indexOf('<span class="raw-metrics-label">Raw metrics</span>');
+		assert.ok(explanationIndex > -1);
+		assert.ok(explanationIndex < profileIndex);
+		assert.ok(profileIndex < comparisonIndex);
+		assert.ok(comparisonIndex < rawMetricsIndex);
+		assert.doesNotMatch(html, /<details class="raw-metrics" open>/);
+		assert.match(html, /class="raw-metrics-toggle"[^>]*>▶<\/span>/);
+		assert.match(html, /raw-metrics\[open\] \.raw-metrics-toggle \{ transform: rotate\(90deg\)/);
+		assert.match(html, /--surface-llm: #fbf9f3/);
+		assert.match(html, /--surface-comparison-block: #edf5f8/);
+		assert.match(html, /\.profile-overview \{[^}]*background: var\(--surface-comparison-block\)/);
+		assert.match(html, /<details class="comparison-block">/);
+		assert.match(html, /Baseline link → Current link/);
+		assert.doesNotMatch(html, /<details class="comparison-block" open>/);
+	});
+
+	test('keeps raw metrics expanded while an assessment is in progress', () => {
+		const html = generateResultsHtml(
+			[{ metric_id: 'm9_edge_density', results: [0.2] }],
+			'http://localhost:3000',
+			false,
+		);
+		assert.match(html, /<details class="raw-metrics" open>/);
 	});
 
 	test('escapes every backend-controlled result value before rendering it', () => {
@@ -167,6 +216,8 @@ suite('Webview rendering', () => {
 		assert.ok(html.includes(`style-src &#39;nonce-${nonceMatch[1]}&#39;`));
 		assert.match(html, /img-src https:\/\/images\.example/);
 		assert.match(html, /src="https:\/\/images\.example\/output\.PNG\?revision=2"/);
+		assert.match(html, /class="image-zoom-link" href="https:\/\/images\.example\/output\.PNG\?revision=2" target="_blank"/);
+		assert.match(html, /Open full size ↗/);
 		assert.doesNotMatch(html, /<img[^>]+(?:data:|javascript:|user:password)/);
 	});
 
@@ -216,6 +267,27 @@ suite('Webview rendering', () => {
 		assert.match(html, /outcome-track/);
 		assert.match(html, /2 aligned/);
 		assert.match(html, /Chosen direction: <strong>decrease<\/strong>/);
+		assert.match(html, /Metrics assessed/);
+		assert.match(html, /<strong>M9<\/strong>Edge density/);
+		assert.match(html, /<strong>M10<\/strong>Feature congestion/);
+		assert.strictEqual((html.match(/Contributed to goal/g) ?? []).length, 2);
+	});
+
+	test('renders accessibility violations as compact structured issue cards', () => {
+		const html = renderAccessibilityIssueList([{
+			identity: 'skip-link::a[href="#calendar"]',
+			ruleId: 'skip-link',
+			target: 'a[href="#calendar"]',
+			impact: 'moderate',
+			description: 'The skip-link target should exist and be focusable',
+		}]);
+		assert.match(html, /class="issue-card"/);
+		assert.match(html, /class="issue-rule">skip-link/);
+		assert.match(html, /class="issue-impact">moderate/);
+		assert.match(html, /Affected element/);
+		assert.match(html, /a\[href=&quot;#calendar&quot;\]/);
+		assert.match(html, /class="issue-description">The skip-link target should exist and be focusable/);
+		assert.doesNotMatch(html, /<br>|<ul/);
 	});
 
 	test('keeps every requested metric in history comparison when only some have baselines', () => {
