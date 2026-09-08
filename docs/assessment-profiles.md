@@ -153,7 +153,6 @@ profiles are resolved to metric IDs before an assessment is submitted.
 | `screen-whitespace` | Screen white space | `more-whitespace`, `less-whitespace`, `preserve`, `observe` | White space proportion (`m5`) |
 | `text-amount` | Text amount | `more-words`, `fewer-words`, `preserve`, `observe` | Word count (`m8`) |
 | `colorfulness` | Colorfulness | `more-colorful`, `less-colorful`, `preserve`, `observe` | Colorfulness (`m3`) |
-| `image-aesthetic-score` | Image aesthetic score | `observe` | NIMA (`m14`) |
 | `accessibility` | Accessibility | `fewer-detected-violations`, `preserve`, `observe` | Automatically detected violations (`m13`) |
 
 The profile catalog uses the stable metric identifiers already used by the

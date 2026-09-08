@@ -31,7 +31,7 @@ test('formats scalar comparisons and applies materiality rules', () => {
 });
 
 test('retains selected profiles in the machine-readable report', () => {
-  const assessment = { mode: 'profiles' as const, profiles: [{ id: 'image-aesthetic-score', direction: 'observe' }] };
+  const assessment = { mode: 'profiles' as const, profiles: [{ id: 'general-review', direction: 'observe' }] };
   const report = buildReport({ target: 'https://example.com', branch: 'main', resultId: 'job', baselineBranch: 'main', results: [], history: {}, assessment });
   assert.deepEqual(report.assessment, assessment);
   assert.equal(report.profileOutcomes[0]?.outcome, 'not-comparable');
@@ -43,10 +43,10 @@ test('reports an observed NIMA change without judging aesthetic quality', () => 
     target: 'https://example.com', branch: 'main', resultId: 'job', baselineBranch: 'main',
     results: [{ metric_id: 'm14_nima', results: [{ mean: 4.5 }] }],
     history: { baselineRun: { id: 1 }, metrics: { m14_nima: { results: [{ mean: 5 }] } } },
-    assessment: { mode: 'profiles', profiles: [{ id: 'image-aesthetic-score', direction: 'observe' }] },
+    assessment: { mode: 'profiles', profiles: [{ id: 'general-review', direction: 'observe' }] },
   });
   const summary = formatSummary(report, 'main');
-  assert.match(summary, /- Image aesthetic score/);
+  assert.match(summary, /- General review/);
   assert.match(summary, /NIMA score decreased: 5 → 4\.5 \(-0\.5\) — observed for this profile/);
   assert.doesNotMatch(summary, /aesthetic quality (?:improved|worsened)/i);
 });
@@ -82,7 +82,7 @@ test('blocks a report when its configured baseline is required but missing', () 
     target: 'https://example.com', branch: 'feature/ui', resultId: 'job', baselineBranch: 'main',
     results: [{ metric_id: 'm14_nima', results: [{ mean: 5.2 }] }],
     history: {},
-    assessment: { mode: 'profiles', profiles: [{ id: 'image-aesthetic-score', direction: 'observe' }] },
+    assessment: { mode: 'profiles', profiles: [{ id: 'general-review', direction: 'observe' }] },
     qualityGateMode: 'enforce',
     requireBaseline: true,
   });

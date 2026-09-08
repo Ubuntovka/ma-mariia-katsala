@@ -430,7 +430,6 @@ const PROFILE_DESCRIPTIONS: Readonly<Record<string, string>> = {
 	'screen-whitespace': 'Measures the proportion of the screen occupied by white space.',
 	'text-amount': 'Measures the amount of visible text using the page word count.',
 	colorfulness: 'Measures the interface colorfulness score.',
-	'image-aesthetic-score': 'Reports the NIMA image score for observation without judging whether aesthetic quality improved or worsened.',
 	accessibility: 'Reports automatically detected axe-core violations; it does not assess overall accessibility.',
 };
 

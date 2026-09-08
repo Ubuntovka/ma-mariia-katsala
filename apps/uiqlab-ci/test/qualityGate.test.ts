@@ -29,7 +29,7 @@ test('uses the expected scalar movement for each goal-specific profile', () => {
   assert.equal(classifyProfiles([{ id: 'colorfulness', direction: 'more-colorful' }], [metric('m3', 1)], true)[0]?.outcome, 'aligned');
   assert.equal(classifyProfiles([{ id: 'colorfulness', direction: 'less-colorful' }], [metric('m3', -1)], true)[0]?.outcome, 'aligned');
   assert.equal(classifyProfiles([{ id: 'accessibility', direction: 'fewer-detected-violations' }], [metric('m13', -1)], true)[0]?.outcome, 'aligned');
-  assert.equal(classifyProfiles([{ id: 'image-aesthetic-score', direction: 'observe' }], [metric('m14', -1)], true)[0]?.outcome, 'aligned');
+  assert.equal(classifyProfiles([{ id: 'general-review', direction: 'observe' }], [metric('m14', -1)], true)[0]?.outcome, 'aligned');
 });
 
 test('applies report mode without warnings or failures', () => {

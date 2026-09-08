@@ -21,7 +21,6 @@ export const ASSESSMENT_PROFILES: Readonly<Record<string, AssessmentProfileDefin
 	'screen-whitespace': { displayName: 'Screen white space', directions: ['more-whitespace', 'less-whitespace', 'preserve', 'observe'], metrics: ['m5'] },
 	'text-amount': { displayName: 'Text amount', directions: ['more-words', 'fewer-words', 'preserve', 'observe'], metrics: ['m8'] },
 	colorfulness: { displayName: 'Colorfulness', directions: ['more-colorful', 'less-colorful', 'preserve', 'observe'], metrics: ['m3'] },
-	'image-aesthetic-score': { displayName: 'Image aesthetic score', directions: ['observe'], metrics: ['m14'] },
 	accessibility: { displayName: 'Accessibility', directions: ['fewer-detected-violations', 'preserve', 'observe'], metrics: ['m13'] },
 };
 

@@ -9,7 +9,7 @@ import {
 } from '../assessmentProfiles';
 
 suite('Assessment profiles', () => {
-	test('matches the seven CI/CD profiles, directions, and metric sets', () => {
+	test('matches the six CI/CD profiles, directions, and metric sets', () => {
 		assert.deepStrictEqual(ASSESSMENT_PROFILES, {
 			'general-review': {
 				displayName: 'General review',
@@ -36,11 +36,6 @@ suite('Assessment profiles', () => {
 				directions: ['more-colorful', 'less-colorful', 'preserve', 'observe'],
 				metrics: ['m3'],
 			},
-			'image-aesthetic-score': {
-				displayName: 'Image aesthetic score',
-				directions: ['observe'],
-				metrics: ['m14'],
-			},
 			accessibility: {
 				displayName: 'Accessibility',
 				directions: ['fewer-detected-violations', 'preserve', 'observe'],
@@ -55,7 +50,6 @@ suite('Assessment profiles', () => {
 			'screen-whitespace',
 			'text-amount',
 			'colorfulness',
-			'image-aesthetic-score',
 			'accessibility',
 		]);
 		assert.deepStrictEqual(resolveSidebarProfiles([

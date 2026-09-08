@@ -128,7 +128,7 @@ suite('Profile history assessment', () => {
 		assert.strictEqual(preserved[0]?.goalStatus, 'achieved');
 
 		const observed = classifyProfileOutcomes(
-			[{ id: 'image-aesthetic-score', direction: 'observe' }],
+			[{ id: 'general-review', direction: 'observe' }],
 			[{ id: 'm14', current: 8, previous: 7, delta: 1, meaningfulChange: true }],
 			true,
 		);

@@ -53,7 +53,7 @@ test('loads ordered CI pages with independently resolved profile groups and gate
       ], qualityGate: { mode: 'enforce', requireBaseline: true } },
       { path: '/catalog', profiles: [
         { id: 'colorfulness', direction: 'more-colorful' },
-        { id: 'image-aesthetic-score', direction: 'observe' },
+        { id: 'screen-whitespace', direction: 'observe' },
       ], qualityGate: { mode: 'warn' } },
     ] },
   }));
@@ -66,8 +66,8 @@ test('loads ordered CI pages with independently resolved profile groups and gate
     ], metrics: ['m13', 'm8'], qualityGateMode: 'enforce', requireBaseline: true },
     { path: '/catalog', profiles: [
       { id: 'colorfulness', direction: 'more-colorful' },
-      { id: 'image-aesthetic-score', direction: 'observe' },
-    ], metrics: ['m3', 'm14'], qualityGateMode: 'warn', requireBaseline: false },
+      { id: 'screen-whitespace', direction: 'observe' },
+    ], metrics: ['m3', 'm5'], qualityGateMode: 'warn', requireBaseline: false },
   ]);
 });
 

@@ -149,7 +149,6 @@ array. Do not combine the two forms.
 | `screen-whitespace` | `m5` | `more-whitespace` expects M5 to increase; `less-whitespace` expects it to decrease; `preserve` and `observe` behave as above. |
 | `text-amount` | `m8` | `more-words` expects M8 to increase; `fewer-words` expects it to decrease; `preserve` and `observe` behave as above. |
 | `colorfulness` | `m3` | `more-colorful` expects M3 to increase; `less-colorful` expects it to decrease; `preserve` and `observe` behave as above. |
-| `image-aesthetic-score` | `m14` | `observe` reports the NIMA score without judging whether aesthetic quality improved or worsened. |
 | `accessibility` | `m13` | `fewer-detected-violations` expects fewer automatically detected violations; `preserve` and `observe` behave as above. This profile does not assess overall accessibility. |
 
 Profile outcomes are `aligned`, `opposed`, `mixed`, `unchanged`, or
