@@ -257,8 +257,8 @@ suite('Run assessment requests', () => {
 				assessment: {
 					mode: 'profiles',
 					profiles: [
-						{ id: 'colour-expression', direction: 'more-vivid' },
-						{ id: 'accessibility', direction: 'reduce-issues' },
+						{ id: 'colorfulness', direction: 'more-colorful' },
+						{ id: 'accessibility', direction: 'fewer-detected-violations' },
 					],
 				},
 				dataSource: {
@@ -266,7 +266,7 @@ suite('Run assessment requests', () => {
 					localUrl: 'http://localhost:3000',
 				},
 			}),
-			'Selected profiles: colour-expression (more-vivid), accessibility (reduce-issues). Local URL: http://localhost:3000.',
+			'Selected profiles: Colorfulness (more-colorful), Accessibility (fewer-detected-violations). Local URL: http://localhost:3000.',
 		);
 	});
 });

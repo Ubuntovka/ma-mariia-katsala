@@ -1,3 +1,4 @@
+import { ASSESSMENT_PROFILES } from './assessmentProfiles.js';
 import { classifyProfiles, evaluateQualityGate, qualityGateExitCode, type ProfileOutcome, type QualityGateMode, type QualityGateResult } from './qualityGate.js';
 
 export interface MetricResult {
@@ -74,7 +75,7 @@ const METRIC_NAMES: Record<string, string> = {
   m4: 'CIELab color', m5: 'White space proportion', m6: 'UI segmentation',
   m7: 'Visual saliency', m8: 'Word count', m9: 'Edge density',
   m10: 'Feature congestion', m11: 'Subband entropy', m12: 'Shannon entropy',
-  m13: 'Accessibility issues', m14: 'NIMA score',
+  m13: 'Automatically detected violations', m14: 'NIMA score',
 };
 
 const VALUE_KEYS: Record<string, readonly string[]> = {
@@ -350,15 +351,17 @@ export function formatSummary(
   if (report.profileOutcomes.length > 0) {
     lines.push('', 'Profiles:');
     for (const profile of report.profileOutcomes) {
-      lines.push(`- ${profile.id}`, `  Expected direction: ${profile.direction}`, `  Outcome: ${profile.outcome.toUpperCase()}`, `  Reason: ${profile.reason}`);
+      lines.push(`- ${ASSESSMENT_PROFILES[profile.id]?.displayName ?? profile.id}`, `  Expected direction: ${profile.direction}`, `  Outcome: ${profile.outcome.toUpperCase()}`, `  Reason: ${profile.reason}`);
       if (profile.meaningfulMetrics.length > 0) {
         lines.push('  Meaningful changes:');
         for (const metricId of profile.meaningfulMetrics) {
           const metric = report.metrics.find((candidate) => candidate.id.split('_', 1)[0] === metricId);
           if (!metric || metric.current === undefined || metric.previous === undefined || metric.delta === undefined) continue;
-          const relationship = profile.alignedMetrics.includes(metricId) ? 'aligned with' : 'opposed to';
           const movement = metric.delta > 0 ? 'increased' : 'decreased';
-          lines.push(`    - ${metric.name} ${movement}: ${formatMetricComparison({ ...metric, current: metric.current, previous: metric.previous, delta: metric.delta })} — ${relationship} the profile goal`);
+          const interpretation = profile.direction === 'observe'
+            ? 'observed for this profile'
+            : `${profile.alignedMetrics.includes(metricId) ? 'aligned with' : 'opposed to'} the profile goal`;
+          lines.push(`    - ${metric.name} ${movement}: ${formatMetricComparison({ ...metric, current: metric.current, previous: metric.previous, delta: metric.delta })} — ${interpretation}`);
         }
       }
     }

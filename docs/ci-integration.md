@@ -82,8 +82,8 @@ following is a complete recommended multi-page configuration:
       {
         "path": "/checkout",
         "profiles": [
-          { "id": "accessibility", "direction": "reduce-issues" },
-          { "id": "content-density", "direction": "decrease" }
+          { "id": "accessibility", "direction": "fewer-detected-violations" },
+          { "id": "text-amount", "direction": "fewer-words" }
         ],
         "qualityGate": {
           "mode": "enforce",
@@ -145,12 +145,12 @@ array. Do not combine the two forms.
 | Profile ID | Metrics selected | Direction options and their result |
 | --- | --- | --- |
 | `general-review` | `m1`-`m14` | `observe` records all metrics without treating movement as opposed. |
-| `visual-complexity` | `m9`, `m10`, `m11`, `m12` | `decrease` expects less complexity; `increase` expects more; `preserve` opposes any meaningful movement; `observe` reports movement without opposing it. |
-| `layout-density` | `m5`, `m10`, `m6` | `more-spacious` expects more whitespace and less congestion; `more-compact` expects the reverse; `preserve` and `observe` behave as above. |
-| `content-density` | `m8`, `m5`, `m10` | `decrease` expects fewer words/congestion and more whitespace; `increase` expects the reverse; `preserve` and `observe` behave as above. |
-| `colour-expression` | `m3`, `m4` | `more-vivid` expects greater colorfulness; `more-restrained` expects less; `preserve` and `observe` behave as above. |
-| `aesthetic-impression` | `m14` | `increase` expects a higher NIMA score; `preserve` opposes meaningful movement; `observe` only reports it. |
-| `accessibility` | `m13` | `reduce-issues` expects fewer accessibility issues; `preserve` opposes a meaningful change in either direction; `observe` only reports it. |
+| `visual-clutter` | `m9`, `m10`, `m11` | `less-cluttered` expects all three metrics to decrease; `more-cluttered` expects all three to increase; `preserve` opposes any meaningful movement; `observe` reports movement without opposing it. |
+| `screen-whitespace` | `m5` | `more-whitespace` expects M5 to increase; `less-whitespace` expects it to decrease; `preserve` and `observe` behave as above. |
+| `text-amount` | `m8` | `more-words` expects M8 to increase; `fewer-words` expects it to decrease; `preserve` and `observe` behave as above. |
+| `colorfulness` | `m3` | `more-colorful` expects M3 to increase; `less-colorful` expects it to decrease; `preserve` and `observe` behave as above. |
+| `image-aesthetic-score` | `m14` | `observe` reports the NIMA score without judging whether aesthetic quality improved or worsened. |
+| `accessibility` | `m13` | `fewer-detected-violations` expects fewer automatically detected violations; `preserve` and `observe` behave as above. This profile does not assess overall accessibility. |
 
 Profile outcomes are `aligned`, `opposed`, `mixed`, `unchanged`, or
 `not-comparable`. Only fixed, materially changed scalar metrics influence the
@@ -179,7 +179,7 @@ forms; do not combine profiles and manual metrics:
   "assessment": {
     "mode": "profiles",
     "profiles": [
-      { "id": "accessibility", "direction": "reduce-issues" }
+      { "id": "accessibility", "direction": "fewer-detected-violations" }
     ]
   },
   "qualityGate": { "mode": "enforce", "requireBaseline": false }
@@ -205,7 +205,7 @@ The manual metric IDs produce these results:
 
 | ID | Result |
 | --- | --- |
-| `m1` | PNG file size, used as a visual-complexity indicator. |
+| `m1` | PNG file size, used as a visual complexity indicator. |
 | `m2` | JPEG file size and PNG-to-JPEG compression ratio. |
 | `m3` | Hasler-Süsstrunk perceived-colorfulness score. |
 | `m4` | Mean and standard deviation of CIELAB lightness and color channels. |

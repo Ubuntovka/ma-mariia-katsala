@@ -40,7 +40,7 @@ suite('Webview rendering', () => {
 			suggestions: [{
 				title: 'Simplify the content block',
 				action: 'Reduce secondary copy and retest the profile.',
-				rationale: 'This may move content density toward the selected direction.',
+				rationale: 'This may move text amount toward the selected direction.',
 				files: ['src/pages/home.tsx'],
 			}],
 			sourceContextUsed: true,
@@ -251,8 +251,8 @@ suite('Webview rendering', () => {
 			title: 'Profile goal achieved',
 			description: 'The goal was achieved.',
 			outcomes: [{
-				id: 'visual-complexity',
-				direction: 'decrease',
+				id: 'visual-clutter',
+				direction: 'less-cluttered',
 				outcome: 'aligned',
 				goalStatus: 'achieved',
 				reason: 'All meaningful changes follow the chosen direction.',
@@ -264,9 +264,10 @@ suite('Webview rendering', () => {
 		});
 		assert.match(html, /profile-overview status-achieved/);
 		assert.match(html, /Profile goal achieved/);
+		assert.match(html, /Visual clutter/);
 		assert.match(html, /outcome-track/);
 		assert.match(html, /2 aligned/);
-		assert.match(html, /Chosen direction: <strong>decrease<\/strong>/);
+		assert.match(html, /Chosen direction: <strong>less-cluttered<\/strong>/);
 		assert.match(html, /Metrics assessed/);
 		assert.match(html, /<strong>M9<\/strong>Edge density/);
 		assert.match(html, /<strong>M10<\/strong>Feature congestion/);

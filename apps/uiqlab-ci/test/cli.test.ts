@@ -71,7 +71,7 @@ test('CLI can keep warning reports non-blocking with warning exit code 0', async
   const directory = await mkdtemp(join(tmpdir(), 'uiqlab-cli-'));
   await writeFile(join(directory, '.uiqlab.json'), JSON.stringify({
     projectKey: '123e4567-e89b-12d3-a456-426614174000',
-    assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'reduce-issues' }] },
+    assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'fewer-detected-violations' }] },
     qualityGate: { mode: 'warn' },
     ci: { branches: ['main'], baselineBranch: 'main', pollIntervalMs: 1 },
   }));
@@ -103,7 +103,7 @@ test('CLI retains a completed page when a later page fails technically', async (
       branches: ['main'], baselineBranch: 'main', pollIntervalMs: 1,
       pages: [
         { path: '/ok', profiles: [{ id: 'accessibility', direction: 'observe' }], qualityGate: { mode: 'report' } },
-        { path: '/fails', profiles: [{ id: 'accessibility', direction: 'reduce-issues' }], qualityGate: { mode: 'enforce', requireBaseline: true } },
+        { path: '/fails', profiles: [{ id: 'accessibility', direction: 'fewer-detected-violations' }], qualityGate: { mode: 'enforce', requireBaseline: true } },
       ],
     },
   }));

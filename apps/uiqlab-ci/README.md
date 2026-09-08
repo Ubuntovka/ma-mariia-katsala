@@ -29,8 +29,8 @@ extension and add `ci` settings:
       {
         "path": "/checkout",
         "profiles": [
-          { "id": "accessibility", "direction": "reduce-issues" },
-          { "id": "content-density", "direction": "decrease" }
+          { "id": "accessibility", "direction": "fewer-detected-violations" },
+          { "id": "text-amount", "direction": "fewer-words" }
         ],
         "qualityGate": { "mode": "enforce", "requireBaseline": true }
       }

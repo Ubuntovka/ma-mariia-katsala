@@ -2,8 +2,8 @@
 
 UIQLab supports predefined assessment profiles in both the CI/CD client and the
 IDE extension. A profile selects a related group of metrics and records the
-intended direction of the assessment. The direction is metadata only: it does
-not currently affect metric execution or interpretation.
+intended direction of the assessment. The direction does not affect metric
+execution; it determines how scalar changes are classified in comparisons.
 
 ## IDE sidebar selection
 
@@ -103,8 +103,8 @@ profile:
       {
         "path": "/checkout",
         "profiles": [
-          { "id": "accessibility", "direction": "reduce-issues" },
-          { "id": "content-density", "direction": "decrease" }
+          { "id": "accessibility", "direction": "fewer-detected-violations" },
+          { "id": "text-amount", "direction": "fewer-words" }
         ],
         "qualityGate": { "mode": "enforce" }
       }
@@ -129,8 +129,8 @@ default and for the compatible single-page CI mode. Set `assessment.mode` to
     "mode": "profiles",
     "profiles": [
       {
-        "id": "visual-complexity",
-        "direction": "decrease"
+        "id": "visual-clutter",
+        "direction": "less-cluttered"
       }
     ]
   },
@@ -146,25 +146,24 @@ profiles are resolved to metric IDs before an assessment is submitted.
 
 ## Available profiles
 
-| Profile ID | Allowed directions | Metrics |
-| --- | --- | --- |
-| `general-review` | `observe` | All metrics, `m1` through `m14` |
-| `visual-complexity` | `decrease`, `increase`, `preserve`, `observe` | Edge density (`m9`), Feature congestion (`m10`), Subband entropy (`m11`), Shannon's information entropy (`m12`) |
-| `layout-density` | `more-spacious`, `more-compact`, `preserve`, `observe` | White space proportion (`m5`), Feature congestion (`m10`), UIED segmentation (`m6`) |
-| `content-density` | `decrease`, `increase`, `preserve`, `observe` | Word count (`m8`), White space proportion (`m5`), Feature congestion (`m10`) |
-| `colour-expression` | `more-vivid`, `more-restrained`, `preserve`, `observe` | Colorfulness (`m3`), CIELab color average and standard deviation (`m4`) |
-| `aesthetic-impression` | `increase`, `preserve`, `observe` | NIMA (`m14`) |
-| `accessibility` | `reduce-issues`, `preserve`, `observe` | Accessibility checks (`m13`) |
+| Profile ID | Display name | Allowed directions | Metrics |
+| --- | --- | --- | --- |
+| `general-review` | General review | `observe` | All metrics, `m1` through `m14` |
+| `visual-clutter` | Visual clutter | `less-cluttered`, `more-cluttered`, `preserve`, `observe` | Edge density (`m9`), Feature congestion (`m10`), Subband entropy (`m11`) |
+| `screen-whitespace` | Screen white space | `more-whitespace`, `less-whitespace`, `preserve`, `observe` | White space proportion (`m5`) |
+| `text-amount` | Text amount | `more-words`, `fewer-words`, `preserve`, `observe` | Word count (`m8`) |
+| `colorfulness` | Colorfulness | `more-colorful`, `less-colorful`, `preserve`, `observe` | Colorfulness (`m3`) |
+| `image-aesthetic-score` | Image aesthetic score | `observe` | NIMA (`m14`) |
+| `accessibility` | Accessibility | `fewer-detected-violations`, `preserve`, `observe` | Automatically detected violations (`m13`) |
 
 The profile catalog uses the stable metric identifiers already used by the
 assessment backend. Display names returned by the backend do not affect profile
 resolution.
 
-## Overlapping profiles
+## Multiple profiles
 
-Multiple profiles may include the same metric. UIQLab preserves profile order
-while resolving their metric lists and removes duplicate metric IDs. Each metric
-therefore runs at most once per assessment.
+UIQLab preserves profile order while resolving their metric lists and removes
+duplicate metric IDs. Each metric therefore runs at most once per assessment.
 
 For example:
 
@@ -174,12 +173,12 @@ For example:
     "mode": "profiles",
     "profiles": [
       {
-        "id": "visual-complexity",
-        "direction": "decrease"
+        "id": "visual-clutter",
+        "direction": "less-cluttered"
       },
       {
-        "id": "layout-density",
-        "direction": "more-spacious"
+        "id": "screen-whitespace",
+        "direction": "more-whitespace"
       }
     ]
   }
@@ -189,11 +188,8 @@ For example:
 This resolves to:
 
 ```json
-["m9", "m10", "m11", "m12", "m5", "m6"]
+["m9", "m10", "m11", "m5"]
 ```
-
-Although Feature congestion (`m10`) belongs to both profiles, it appears only
-once.
 
 ## Custom metric selection
 
@@ -259,8 +255,8 @@ For a profile-based assessment, the CI report includes:
     "mode": "profiles",
     "profiles": [
       {
-        "id": "visual-complexity",
-        "direction": "decrease"
+        "id": "visual-clutter",
+        "direction": "less-cluttered"
       }
     ]
   }

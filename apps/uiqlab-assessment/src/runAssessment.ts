@@ -1,5 +1,5 @@
 import { getMetricDefinition } from './metricCatalog';
-import type { AssessmentProfileSelection } from './assessmentProfiles';
+import { ASSESSMENT_PROFILES, type AssessmentProfileSelection } from './assessmentProfiles';
 import { logDiagnostic } from './diagnostics';
 import { readUiedDimensions } from './visualMetricComparisons';
 
@@ -716,7 +716,7 @@ export function formatAssessmentRunSummary(request: AssessmentRunRequest): strin
 			? `Local URL: ${request.dataSource.localUrl}`
 			: `Deployment URLs: ${request.dataSource.baselineDeploymentUrl} → ${request.dataSource.currentDeploymentUrl}`;
 	const selectionText = request.assessment?.mode === 'profiles'
-		? `Selected profiles: ${request.assessment.profiles.map((profile) => `${profile.id} (${profile.direction})`).join(', ')}`
+		? `Selected profiles: ${request.assessment.profiles.map((profile) => `${ASSESSMENT_PROFILES[profile.id]?.displayName ?? profile.id} (${profile.direction})`).join(', ')}`
 		: `Selected assessments: ${request.assessments.join(', ')}`;
 
 	return `${selectionText}. ${dataSourceText}.`;
