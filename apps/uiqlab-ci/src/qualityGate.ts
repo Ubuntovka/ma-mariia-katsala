@@ -32,22 +32,14 @@ export interface QualityGateResult {
 
 type ExpectedMovement = 'increase' | 'decrease' | 'preserve' | 'observe';
 
-function expectedMovement(profileId: string, direction: string, metricId: string): ExpectedMovement | undefined {
+function expectedMovement(profileId: string, direction: string): ExpectedMovement | undefined {
   if (direction === 'observe') return 'observe';
   if (direction === 'preserve') return 'preserve';
-  if (profileId === 'layout-density') {
-    if (metricId === 'm5') return direction === 'more-spacious' ? 'increase' : 'decrease';
-    if (metricId === 'm10') return direction === 'more-spacious' ? 'decrease' : 'increase';
-    return undefined;
-  }
-  if (profileId === 'content-density') {
-    if (metricId === 'm5') return direction === 'decrease' ? 'increase' : 'decrease';
-    return direction === 'decrease' ? 'decrease' : 'increase';
-  }
-  if (profileId === 'colour-expression') return direction === 'more-vivid' ? 'increase' : 'decrease';
+  if (profileId === 'visual-clutter') return direction === 'less-cluttered' ? 'decrease' : 'increase';
+  if (profileId === 'screen-whitespace') return direction === 'more-whitespace' ? 'increase' : 'decrease';
+  if (profileId === 'text-amount') return direction === 'more-words' ? 'increase' : 'decrease';
+  if (profileId === 'colorfulness') return direction === 'more-colorful' ? 'increase' : 'decrease';
   if (profileId === 'accessibility') return 'decrease';
-  if (direction === 'decrease') return 'decrease';
-  if (direction === 'increase') return 'increase';
   return undefined;
 }
 
@@ -72,7 +64,7 @@ export function classifyProfiles(
     const aligned: string[] = [];
     const opposed: string[] = [];
     for (const metric of meaningful) {
-      const expected = expectedMovement(profile.id, profile.direction, metric.id);
+      const expected = expectedMovement(profile.id, profile.direction);
       if (expected && followsDirection(metric.delta as number, expected)) aligned.push(metric.id);
       else opposed.push(metric.id);
     }

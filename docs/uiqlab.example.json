@@ -26,11 +26,11 @@
         "profiles": [
           {
             "id": "accessibility",
-            "direction": "reduce-issues"
+            "direction": "fewer-detected-violations"
           },
           {
-            "id": "content-density",
-            "direction": "decrease"
+            "id": "text-amount",
+            "direction": "fewer-words"
           }
         ],
         "qualityGate": {
@@ -42,12 +42,12 @@
         "path": "/catalog",
         "profiles": [
           {
-            "id": "visual-complexity",
-            "direction": "decrease"
+            "id": "visual-clutter",
+            "direction": "less-cluttered"
           },
           {
-            "id": "colour-expression",
-            "direction": "more-vivid"
+            "id": "colorfulness",
+            "direction": "more-colorful"
           }
         ],
         "qualityGate": {

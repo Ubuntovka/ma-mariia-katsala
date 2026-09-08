@@ -22,7 +22,7 @@ test('renders a self-contained visual report with profiles and metric comparison
         m13_accessibility: { results: [{ violations: [{ id: 'label', nodes: [{}] }] }] },
       },
     },
-    assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'reduce-issues' }] },
+    assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'fewer-detected-violations' }] },
     qualityGateMode: 'warn',
   });
   const html = renderHtmlReport(report, { generatedAt: new Date('2026-08-25T10:00:00.000Z') });
@@ -94,7 +94,7 @@ test('renders completed and technically failed pages in the same batch artifact'
     qualityGateMode: 'report',
   });
   const failed = buildFailedPageReport({
-    target: 'https://example.com/checkout', branch: 'main', assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'reduce-issues' }] },
+    target: 'https://example.com/checkout', branch: 'main', assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'fewer-detected-violations' }] },
     qualityGateMode: 'enforce', requireBaseline: true, reason: 'Orchestrator returned invalid JSON.',
   });
   const html = renderHtmlReport(buildBatchReport([completed, failed], 'main'));

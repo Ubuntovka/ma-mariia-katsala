@@ -1,4 +1,5 @@
 import type { AssessmentReport, BatchAssessmentReport, FailedPageAssessmentReport, PageAssessmentReport, ReportMetric } from './report.js';
+import { ASSESSMENT_PROFILES } from './assessmentProfiles.js';
 
 type GateStatus = 'pass' | 'warning' | 'fail';
 
@@ -185,16 +186,16 @@ function renderProfiles(report: AssessmentReport): string {
   const profiles = report.profileOutcomes.map((profile) => {
     const outcome = profile.outcome;
     const metrics = [
-      ...profile.alignedMetrics.map((metric) => `<span class="metric-chip aligned">${escapeHtml(metric)} aligned</span>`),
+      ...profile.alignedMetrics.map((metric) => `<span class="metric-chip aligned">${escapeHtml(metric)} ${profile.direction === 'observe' ? 'observed' : 'aligned'}</span>`),
       ...profile.opposedMetrics.map((metric) => `<span class="metric-chip opposed">${escapeHtml(metric)} opposed</span>`),
     ].join('');
     return `<article class="profile-card outcome-${escapeHtml(outcome)}">
-      <div class="profile-heading"><div><span class="eyebrow">Expected direction · ${escapeHtml(profile.direction)}</span><h3>${escapeHtml(profile.id)}</h3></div><span class="outcome">${escapeHtml(outcome.replace('-', ' '))}</span></div>
+      <div class="profile-heading"><div><span class="eyebrow">Expected direction · ${escapeHtml(profile.direction)}</span><h3>${escapeHtml(ASSESSMENT_PROFILES[profile.id]?.displayName ?? profile.id)}</h3></div><span class="outcome">${escapeHtml(outcome.replace('-', ' '))}</span></div>
       <p>${escapeHtml(profile.reason)}</p>
       ${metrics ? `<div class="metric-chips">${metrics}</div>` : ''}
     </article>`;
   }).join('');
-  return `<section><div class="section-heading"><div><span class="eyebrow">Goal-based assessment</span><h2>Profile outcomes</h2></div><span class="count">${report.profileOutcomes.length}</span></div><div class="profile-grid">${profiles}</div></section>`;
+  return `<section><div class="section-heading"><div><span class="eyebrow">Profile assessment</span><h2>Profile outcomes</h2></div><span class="count">${report.profileOutcomes.length}</span></div><div class="profile-grid">${profiles}</div></section>`;
 }
 
 function renderPage(report: AssessmentReport, options: HtmlReportOptions, index?: number): string {

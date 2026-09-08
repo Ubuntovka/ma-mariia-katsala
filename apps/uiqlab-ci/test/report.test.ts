@@ -25,21 +25,34 @@ test('formats scalar comparisons and applies materiality rules', () => {
   assert.match(summary, /Feature congestion: 0.42 → 0.48 \(\+14.3%\)/);
   assert.match(summary, /NIMA score: 5.31 → 5.18 \(-0.13\)/);
   assert.match(summary, /Word count: 430 → 487 \(\+13.3%\)/);
-  assert.match(summary, /Accessibility issues: 3 → 4/);
+  assert.match(summary, /Automatically detected violations: 3 → 4/);
   assert.equal(report.metrics.find((metric) => metric.id.startsWith('m10'))?.meaningfulChange, true);
   assert.equal(report.qualityGate.status, 'pass');
 });
 
 test('retains selected profiles in the machine-readable report', () => {
-  const assessment = { mode: 'profiles' as const, profiles: [{ id: 'aesthetic-impression', direction: 'increase' }] };
+  const assessment = { mode: 'profiles' as const, profiles: [{ id: 'general-review', direction: 'observe' }] };
   const report = buildReport({ target: 'https://example.com', branch: 'main', resultId: 'job', baselineBranch: 'main', results: [], history: {}, assessment });
   assert.deepEqual(report.assessment, assessment);
   assert.equal(report.profileOutcomes[0]?.outcome, 'not-comparable');
   assert.equal(report.qualityGate.status, 'pass');
 });
 
+test('reports an observed NIMA change without judging aesthetic quality', () => {
+  const report = buildReport({
+    target: 'https://example.com', branch: 'main', resultId: 'job', baselineBranch: 'main',
+    results: [{ metric_id: 'm14_nima', results: [{ mean: 4.5 }] }],
+    history: { baselineRun: { id: 1 }, metrics: { m14_nima: { results: [{ mean: 5 }] } } },
+    assessment: { mode: 'profiles', profiles: [{ id: 'general-review', direction: 'observe' }] },
+  });
+  const summary = formatSummary(report, 'main');
+  assert.match(summary, /- General review/);
+  assert.match(summary, /NIMA score decreased: 5 → 4\.5 \(-0\.5\) — observed for this profile/);
+  assert.doesNotMatch(summary, /aesthetic quality (?:improved|worsened)/i);
+});
+
 test('includes metric comparisons, profile outcomes and final gate status', () => {
-  const assessment = { mode: 'profiles' as const, profiles: [{ id: 'visual-complexity', direction: 'decrease' }] };
+  const assessment = { mode: 'profiles' as const, profiles: [{ id: 'visual-clutter', direction: 'less-cluttered' }] };
   const results: MetricResult[] = [
     { metric_id: 'm9_edge_density', results: [0.15] },
     { metric_id: 'm10_feature_congestion', results: [5.2] },
@@ -56,7 +69,8 @@ test('includes metric comparisons, profile outcomes and final gate status', () =
   const summary = formatSummary(report, 'main');
   assert.match(summary, /Quality gate: WARNING \(warn\)/);
   assert.match(summary, /Exit code: 2/);
-  assert.match(summary, /Expected direction: decrease/);
+  assert.match(summary, /- Visual clutter/);
+  assert.match(summary, /Expected direction: less-cluttered/);
   assert.match(summary, /Outcome: MIXED/);
   assert.match(summary, /Edge density decreased: 0\.2 → 0\.15.*aligned with the profile goal/);
   assert.match(summary, /Feature congestion increased: 4 → 5\.2.*opposed to the profile goal/);
@@ -68,7 +82,7 @@ test('blocks a report when its configured baseline is required but missing', () 
     target: 'https://example.com', branch: 'feature/ui', resultId: 'job', baselineBranch: 'main',
     results: [{ metric_id: 'm14_nima', results: [{ mean: 5.2 }] }],
     history: {},
-    assessment: { mode: 'profiles', profiles: [{ id: 'aesthetic-impression', direction: 'increase' }] },
+    assessment: { mode: 'profiles', profiles: [{ id: 'general-review', direction: 'observe' }] },
     qualityGateMode: 'enforce',
     requireBaseline: true,
   });
@@ -85,7 +99,7 @@ test('retains completed pages when another page fails technically', () => {
   });
   const failed = buildFailedPageReport({
     target: 'https://example.com/checkout', branch: 'main', commitHash: 'abc',
-    assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'reduce-issues' }] },
+    assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'fewer-detected-violations' }] },
     qualityGateMode: 'enforce', requireBaseline: true, reason: 'Result endpoint timed out.',
   });
   const batch = buildBatchReport([completed, failed], 'main', 'abc');
@@ -101,14 +115,12 @@ test('retains completed pages when another page fails technically', () => {
 });
 
 test('explains why an enforced opposed profile blocks the job', () => {
-  const assessment = { mode: 'profiles' as const, profiles: [{ id: 'content-density', direction: 'increase' }] };
+  const assessment = { mode: 'profiles' as const, profiles: [{ id: 'text-amount', direction: 'more-words' }] };
   const results: MetricResult[] = [
     { metric_id: 'm8_word_count', results: [303] },
-    { metric_id: 'm10_feature_congestion', results: [12.577] },
   ];
   const history: AssessmentHistory = { baselineRun: { id: 1 }, metrics: {
     m8_word_count: { results: [519] },
-    m10_feature_congestion: { results: [15.333] },
   } };
   const report = buildReport({ target: 'https://example.com/projects', branch: 'feature/ui-density', resultId: 'job', baselineBranch: 'main', results, history, assessment, qualityGateMode: 'enforce' });
   const summary = formatSummary(report, 'main');
@@ -117,7 +129,6 @@ test('explains why an enforced opposed profile blocks the job', () => {
   assert.match(summary, /Exit code: 1/);
   assert.match(summary, /Outcome: OPPOSED/);
   assert.match(summary, /Word count decreased: 519 → 303.*opposed to the profile goal/);
-  assert.match(summary, /Feature congestion decreased: 15\.333 → 12\.577.*opposed to the profile goal/);
 });
 
 test('aggregates page reports and uses the most severe page quality gate', () => {
@@ -130,7 +141,7 @@ test('aggregates page reports and uses the most severe page quality gate', () =>
     target: 'https://example.com/checkout', branch: 'main', resultId: 'checkout', baselineBranch: 'main',
     results: [{ metric_id: 'm13_accessibility', results: [{ violations: [{ id: 'label', nodes: [{}, {}] }] }] }],
     history: { baselineRun: { id: 1 }, metrics: { m13_accessibility: { results: [{ violations: [{ id: 'label', nodes: [{}] }] }] } } },
-    assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'reduce-issues' }] },
+    assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'fewer-detected-violations' }] },
     qualityGateMode: 'warn',
   });
   const report = buildBatchReport([passing, warning], 'main', 'abc');
@@ -153,7 +164,7 @@ test('applies the gate mode independently to each page', () => {
     branch: 'main', baselineBranch: 'main',
     results: [{ metric_id: 'm13_accessibility', results: [{ violations: [{ id: 'label', nodes: [{}, {}] }] }] }],
     history: { baselineRun: { id: 1 }, metrics: { m13_accessibility: { results: [{ violations: [{ id: 'label', nodes: [{}] }] }] } } },
-    assessment: { mode: 'profiles' as const, profiles: [{ id: 'accessibility', direction: 'reduce-issues' }] },
+    assessment: { mode: 'profiles' as const, profiles: [{ id: 'accessibility', direction: 'fewer-detected-violations' }] },
   };
   const reported = buildReport({ ...common, target: 'https://example.com/help', resultId: 'help', qualityGateMode: 'report' });
   const enforced = buildReport({ ...common, target: 'https://example.com/checkout', resultId: 'checkout', qualityGateMode: 'enforce' });
@@ -169,15 +180,15 @@ test('fails an enforced page when any one of its profiles is opposed', () => {
     target: 'https://example.com/checkout', branch: 'main', resultId: 'checkout', baselineBranch: 'main',
     results: [
       { metric_id: 'm13_accessibility', results: [{ violations: [{ id: 'label', nodes: [{}, {}] }] }] },
-      { metric_id: 'm14_nima', results: [{ mean: 5.5 }] },
+      { metric_id: 'm3_colorfulness', results: [{ colorfulness: 50 }] },
     ],
     history: { baselineRun: { id: 1 }, metrics: {
       m13_accessibility: { results: [{ violations: [{ id: 'label', nodes: [{}] }] }] },
-      m14_nima: { results: [{ mean: 5 }] },
+      m3_colorfulness: { results: [{ colorfulness: 40 }] },
     } },
     assessment: { mode: 'profiles' as const, profiles: [
-      { id: 'accessibility', direction: 'reduce-issues' },
-      { id: 'aesthetic-impression', direction: 'increase' },
+      { id: 'accessibility', direction: 'fewer-detected-violations' },
+      { id: 'colorfulness', direction: 'more-colorful' },
     ] },
   };
   const enforced = buildReport({ ...input, qualityGateMode: 'enforce' });

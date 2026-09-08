@@ -217,7 +217,7 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 		const selectedProfiles = new Map(initialProfiles.map((profile) => [profile.id, profile.direction]));
 		const profileRows = SIDEBAR_ASSESSMENT_PROFILE_IDS.map((id) => {
 			const definition = ASSESSMENT_PROFILES[id];
-			const profileName = formatProfileName(id);
+			const profileName = definition.displayName;
 			const selectedDirection = selectedProfiles.get(id) ?? definition.directions[0];
 			const options = definition.directions.map((direction) =>
 				`<option value="${escapeHtml(direction)}"${direction === selectedDirection ? ' selected' : ''}>${escapeHtml(direction)}</option>`
@@ -426,18 +426,12 @@ function escapeHtml(value: string): string {
 }
 
 const PROFILE_DESCRIPTIONS: Readonly<Record<string, string>> = {
-	'visual-complexity': 'Evaluates how visually busy or simple the interface appears by measuring edges, feature congestion, and visual information.',
-	'layout-density': 'Examines how tightly interface elements are arranged and how much space separates them across the page.',
-	'content-density': 'Estimates how much visible information the page presents and how tightly that content fills the available space.',
-	'colour-expression': 'Assesses the vividness and overall colour character of the interface.',
-	'aesthetic-impression': 'Estimates perceived visual quality and aesthetic appeal using a model trained on human image ratings.',
-	accessibility: 'Checks for automatically detectable accessibility problems that can affect people using the interface.',
+	'visual-clutter': 'Tracks visual clutter using edge density, feature congestion, and subband entropy.',
+	'screen-whitespace': 'Measures the proportion of the screen occupied by white space.',
+	'text-amount': 'Measures the amount of visible text using the page word count.',
+	colorfulness: 'Measures the interface colorfulness score.',
+	accessibility: 'Reports automatically detected axe-core violations; it does not assess overall accessibility.',
 };
-
-function formatProfileName(id: string): string {
-	const words = id.replace(/-/g, ' ');
-	return words.charAt(0).toUpperCase() + words.slice(1);
-}
 
 function getNonce(): string {
 	const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';

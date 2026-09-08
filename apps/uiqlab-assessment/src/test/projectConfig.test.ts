@@ -43,18 +43,18 @@ suite('Project configuration', () => {
 			await fs.writeFile(path.join(workspaceRoot, PROJECT_CONFIG_FILENAME), JSON.stringify({
 				projectKey: '123e4567-e89b-12d3-a456-426614174000', name: 'Demo',
 				assessment: { mode: 'profiles', profiles: [
-					{ id: 'visual-complexity', direction: 'decrease' },
-					{ id: 'content-density', direction: 'preserve' },
+					{ id: 'visual-clutter', direction: 'less-cluttered' },
+					{ id: 'text-amount', direction: 'preserve' },
 				] },
 			}));
 			const config = await getOrCreateProjectConfig(workspaceRoot);
 			assert.deepStrictEqual(config.assessment, {
 				mode: 'profiles',
 				profiles: [
-					{ id: 'visual-complexity', direction: 'decrease' },
-					{ id: 'content-density', direction: 'preserve' },
+					{ id: 'visual-clutter', direction: 'less-cluttered' },
+					{ id: 'text-amount', direction: 'preserve' },
 				],
-				metrics: ['m9', 'm10', 'm11', 'm12', 'm8', 'm5'],
+				metrics: ['m9', 'm10', 'm11', 'm8'],
 			});
 		} finally {
 			await fs.rm(workspaceRoot, { recursive: true, force: true });

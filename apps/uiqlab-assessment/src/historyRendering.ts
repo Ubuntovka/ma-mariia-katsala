@@ -64,6 +64,8 @@ export function renderAccessibilityIssueList(issues: readonly AccessibilityIssue
 }
 
 function profileDisplayName(id: string): string {
+	const configuredName = ASSESSMENT_PROFILES[id]?.displayName;
+	if (configuredName) { return configuredName; }
 	const words = id.replace(/-/g, ' ');
 	return words.charAt(0).toUpperCase() + words.slice(1);
 }

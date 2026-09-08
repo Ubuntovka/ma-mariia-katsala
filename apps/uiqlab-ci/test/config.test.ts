@@ -27,15 +27,15 @@ test('resolves profiles to unique metric IDs and retains their intent', async ()
     projectKey: '123e4567-e89b-12d3-a456-426614174000',
     ci: { branches: ['main'] },
     assessment: { mode: 'profiles', profiles: [
-      { id: 'visual-complexity', direction: 'decrease' },
-      { id: 'layout-density', direction: 'more-spacious' },
+      { id: 'visual-clutter', direction: 'less-cluttered' },
+      { id: 'screen-whitespace', direction: 'more-whitespace' },
     ] },
   }));
   const config = await loadConfig(filename);
-  assert.deepEqual(config.metrics, ['m9', 'm10', 'm11', 'm12', 'm5', 'm6']);
+  assert.deepEqual(config.metrics, ['m9', 'm10', 'm11', 'm5']);
   assert.deepEqual(config.assessment, { mode: 'profiles', profiles: [
-    { id: 'visual-complexity', direction: 'decrease' },
-    { id: 'layout-density', direction: 'more-spacious' },
+    { id: 'visual-clutter', direction: 'less-cluttered' },
+    { id: 'screen-whitespace', direction: 'more-whitespace' },
   ] });
   assert.equal(config.qualityGateMode, 'warn');
 });
@@ -48,12 +48,12 @@ test('loads ordered CI pages with independently resolved profile groups and gate
     ci: { branches: ['main'], pages: [
       { path: '/', profiles: [{ id: 'general-review', direction: 'observe' }], qualityGate: { mode: 'report' } },
       { path: '/checkout/', profiles: [
-        { id: 'accessibility', direction: 'reduce-issues' },
-        { id: 'content-density', direction: 'decrease' },
+        { id: 'accessibility', direction: 'fewer-detected-violations' },
+        { id: 'text-amount', direction: 'fewer-words' },
       ], qualityGate: { mode: 'enforce', requireBaseline: true } },
       { path: '/catalog', profiles: [
-        { id: 'colour-expression', direction: 'more-vivid' },
-        { id: 'aesthetic-impression', direction: 'increase' },
+        { id: 'colorfulness', direction: 'more-colorful' },
+        { id: 'screen-whitespace', direction: 'observe' },
       ], qualityGate: { mode: 'warn' } },
     ] },
   }));
@@ -61,13 +61,13 @@ test('loads ordered CI pages with independently resolved profile groups and gate
   assert.deepEqual(config.pages, [
     { path: '/', profiles: [{ id: 'general-review', direction: 'observe' }], metrics: ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14'], qualityGateMode: 'report', requireBaseline: false },
     { path: '/checkout', profiles: [
-      { id: 'accessibility', direction: 'reduce-issues' },
-      { id: 'content-density', direction: 'decrease' },
-    ], metrics: ['m13', 'm8', 'm5', 'm10'], qualityGateMode: 'enforce', requireBaseline: true },
+      { id: 'accessibility', direction: 'fewer-detected-violations' },
+      { id: 'text-amount', direction: 'fewer-words' },
+    ], metrics: ['m13', 'm8'], qualityGateMode: 'enforce', requireBaseline: true },
     { path: '/catalog', profiles: [
-      { id: 'colour-expression', direction: 'more-vivid' },
-      { id: 'aesthetic-impression', direction: 'increase' },
-    ], metrics: ['m3', 'm4', 'm14'], qualityGateMode: 'warn', requireBaseline: false },
+      { id: 'colorfulness', direction: 'more-colorful' },
+      { id: 'screen-whitespace', direction: 'observe' },
+    ], metrics: ['m3', 'm5'], qualityGateMode: 'warn', requireBaseline: false },
   ]);
 });
 
@@ -77,11 +77,11 @@ test('keeps singular page profile configuration compatible', async () => {
   await writeFile(filename, JSON.stringify({
     projectKey: '123e4567-e89b-12d3-a456-426614174000',
     ci: { branches: ['main'], pages: [
-      { path: '/', profile: 'accessibility', direction: 'reduce-issues', qualityGate: { mode: 'enforce' } },
+      { path: '/', profile: 'accessibility', direction: 'fewer-detected-violations', qualityGate: { mode: 'enforce' } },
     ] },
   }));
   assert.deepEqual((await loadConfig(filename)).pages[0], {
-    path: '/', profiles: [{ id: 'accessibility', direction: 'reduce-issues' }], metrics: ['m13'], qualityGateMode: 'enforce', requireBaseline: false,
+    path: '/', profiles: [{ id: 'accessibility', direction: 'fewer-detected-violations' }], metrics: ['m13'], qualityGateMode: 'enforce', requireBaseline: false,
   });
 });
 
@@ -95,7 +95,7 @@ test('rejects invalid or duplicate CI page configurations', async () => {
   await assert.rejects(loadConfig(filename), /path must be a route path starting with/);
   await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [
     { path: '/checkout', profile: 'accessibility', direction: 'observe', qualityGate: { mode: 'warn' } },
-    { path: '/checkout/', profile: 'visual-complexity', direction: 'decrease', qualityGate: { mode: 'warn' } },
+    { path: '/checkout/', profile: 'visual-clutter', direction: 'less-cluttered', qualityGate: { mode: 'warn' } },
   ] } }));
   await assert.rejects(loadConfig(filename), /must not contain duplicate path "\/checkout"/);
   await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [{ path: '/', profile: 'accessibility', direction: 'increase', qualityGate: { mode: 'warn' } }] } }));
@@ -108,7 +108,7 @@ test('rejects invalid or duplicate CI page configurations', async () => {
   await assert.rejects(loadConfig(filename), /qualityGate\.mode must be one of: report, warn, enforce/);
   await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [{ path: '/', profile: 'accessibility', direction: 'observe', qualityGate: { mode: 'warn', requireBaseline: 'yes' } }] } }));
   await assert.rejects(loadConfig(filename), /qualityGate\.requireBaseline must be a boolean/);
-  await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [{ path: '/', profiles: [{ id: 'accessibility', direction: 'observe' }], profile: 'visual-complexity', direction: 'decrease', qualityGate: { mode: 'warn' } }] } }));
+  await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [{ path: '/', profiles: [{ id: 'accessibility', direction: 'observe' }], profile: 'visual-clutter', direction: 'less-cluttered', qualityGate: { mode: 'warn' } }] } }));
   await assert.rejects(loadConfig(filename), /cannot combine profiles with the legacy profile\/direction fields/);
   await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [{ path: '/', profiles: [
     { id: 'accessibility', direction: 'observe' },
@@ -140,7 +140,7 @@ test('rejects unknown profiles and invalid directions clearly', async () => {
   await writeFile(filename, JSON.stringify({ ...base, assessment: { mode: 'profiles', profiles: [{ id: 'unknown', direction: 'observe' }] } }));
   await assert.rejects(loadConfig(filename), /unknown profile id "unknown"/);
   await writeFile(filename, JSON.stringify({ ...base, assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'increase' }] } }));
-  await assert.rejects(loadConfig(filename), /direction for "accessibility" must be one of: reduce-issues, preserve, observe/);
+  await assert.rejects(loadConfig(filename), /direction for "accessibility" must be one of: fewer-detected-violations, preserve, observe/);
 });
 
 test('rejects mixing profiles with manual metrics', async () => {
@@ -149,7 +149,7 @@ test('rejects mixing profiles with manual metrics', async () => {
   await writeFile(filename, JSON.stringify({
     projectKey: '123e4567-e89b-12d3-a456-426614174000',
     ci: { branches: ['main'], metrics: ['m9'] },
-    assessment: { mode: 'profiles', profiles: [{ id: 'visual-complexity', direction: 'observe' }] },
+    assessment: { mode: 'profiles', profiles: [{ id: 'visual-clutter', direction: 'observe' }] },
   }));
   await assert.rejects(loadConfig(filename), /cannot combine assessment profiles with manual metrics/);
 });

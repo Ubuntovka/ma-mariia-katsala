@@ -44,7 +44,7 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             'screenshotHeight': 900,
             'assessment': {
                 'mode': 'profiles',
-                'profiles': [{'id': 'visual-complexity', 'direction': 'decrease'}],
+                'profiles': [{'id': 'visual-clutter', 'direction': 'less-cluttered'}],
             },
         })
 
@@ -58,7 +58,7 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             'screenshotDimensions': {'width': 1440, 'height': 900},
             'assessment': {
                 'mode': 'profiles',
-                'profiles': [{'id': 'visual-complexity', 'direction': 'decrease'}],
+                'profiles': [{'id': 'visual-clutter', 'direction': 'less-cluttered'}],
             },
         })
 
@@ -73,12 +73,12 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             'assessedTarget': '/',
             'screenshotWidth': None,
             'screenshotHeight': None,
-            'assessment': '{"mode":"profiles","profiles":[{"id":"accessibility","direction":"reduce-issues"}]}',
+            'assessment': '{"mode":"profiles","profiles":[{"id":"accessibility","direction":"fewer-detected-violations"}]}',
         })
 
         self.assertEqual(summary['assessment'], {
             'mode': 'profiles',
-            'profiles': [{'id': 'accessibility', 'direction': 'reduce-issues'}],
+            'profiles': [{'id': 'accessibility', 'direction': 'fewer-detected-violations'}],
         })
 
 
@@ -370,12 +370,12 @@ class LlmExplanationTests(unittest.TestCase):
             [{'metric_id': 'm9_edge_density', 'results': [0.16]}],
             {'metrics': {'m9_edge_density': {'results': [0.24]}}},
             {'mode': 'profiles', 'profiles': [
-                {'id': 'visual-complexity', 'direction': 'decrease'}
+                {'id': 'visual-clutter', 'direction': 'less-cluttered'}
             ]},
             {
                 'status': 'achieved',
                 'title': 'Profile goal achieved',
-                'outcomes': [{'id': 'visual-complexity', 'goalStatus': 'achieved'}],
+                'outcomes': [{'id': 'visual-clutter', 'goalStatus': 'achieved'}],
             },
             'http://localhost:3000/dashboard',
             [{'path': 'src/pages/dashboard.tsx', 'content': '<main>Dashboard</main>'}],
@@ -395,7 +395,7 @@ class LlmExplanationTests(unittest.TestCase):
             ]}],
             {'metrics': {'m10_feature_congestion': {'results': [{'score': 5.1}]}}},
             {'mode': 'profiles', 'profiles': [
-                {'id': 'visual-complexity', 'direction': 'decrease'}
+                {'id': 'visual-clutter', 'direction': 'less-cluttered'}
             ]},
             {'status': 'achieved', 'title': 'Profile goal achieved', 'outcomes': []},
         )

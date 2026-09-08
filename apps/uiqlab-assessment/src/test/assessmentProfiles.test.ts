@@ -9,34 +9,36 @@ import {
 } from '../assessmentProfiles';
 
 suite('Assessment profiles', () => {
-	test('matches the seven CI/CD profiles, directions, and metric sets', () => {
+	test('matches the six CI/CD profiles, directions, and metric sets', () => {
 		assert.deepStrictEqual(ASSESSMENT_PROFILES, {
 			'general-review': {
+				displayName: 'General review',
 				directions: ['observe'],
 				metrics: ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14'],
 			},
-			'visual-complexity': {
-				directions: ['decrease', 'increase', 'preserve', 'observe'],
-				metrics: ['m9', 'm10', 'm11', 'm12'],
+			'visual-clutter': {
+				displayName: 'Visual clutter',
+				directions: ['less-cluttered', 'more-cluttered', 'preserve', 'observe'],
+				metrics: ['m9', 'm10', 'm11'],
 			},
-			'layout-density': {
-				directions: ['more-spacious', 'more-compact', 'preserve', 'observe'],
-				metrics: ['m5', 'm10', 'm6'],
+			'screen-whitespace': {
+				displayName: 'Screen white space',
+				directions: ['more-whitespace', 'less-whitespace', 'preserve', 'observe'],
+				metrics: ['m5'],
 			},
-			'content-density': {
-				directions: ['decrease', 'increase', 'preserve', 'observe'],
-				metrics: ['m8', 'm5', 'm10'],
+			'text-amount': {
+				displayName: 'Text amount',
+				directions: ['more-words', 'fewer-words', 'preserve', 'observe'],
+				metrics: ['m8'],
 			},
-			'colour-expression': {
-				directions: ['more-vivid', 'more-restrained', 'preserve', 'observe'],
-				metrics: ['m3', 'm4'],
-			},
-			'aesthetic-impression': {
-				directions: ['increase', 'preserve', 'observe'],
-				metrics: ['m14'],
+			colorfulness: {
+				displayName: 'Colorfulness',
+				directions: ['more-colorful', 'less-colorful', 'preserve', 'observe'],
+				metrics: ['m3'],
 			},
 			accessibility: {
-				directions: ['reduce-issues', 'preserve', 'observe'],
+				displayName: 'Accessibility',
+				directions: ['fewer-detected-violations', 'preserve', 'observe'],
 				metrics: ['m13'],
 			},
 		});
@@ -44,22 +46,21 @@ suite('Assessment profiles', () => {
 
 	test('resolves several sidebar profiles to a unique ordered metric union', () => {
 		assert.deepStrictEqual(SIDEBAR_ASSESSMENT_PROFILE_IDS, [
-			'visual-complexity',
-			'layout-density',
-			'content-density',
-			'colour-expression',
-			'aesthetic-impression',
+			'visual-clutter',
+			'screen-whitespace',
+			'text-amount',
+			'colorfulness',
 			'accessibility',
 		]);
 		assert.deepStrictEqual(resolveSidebarProfiles([
-			{ id: 'visual-complexity', direction: 'decrease' },
-			{ id: 'layout-density', direction: 'more-spacious' },
+			{ id: 'visual-clutter', direction: 'less-cluttered' },
+			{ id: 'screen-whitespace', direction: 'more-whitespace' },
 		], 'Selected profiles'), {
 			profiles: [
-				{ id: 'visual-complexity', direction: 'decrease' },
-				{ id: 'layout-density', direction: 'more-spacious' },
+				{ id: 'visual-clutter', direction: 'less-cluttered' },
+				{ id: 'screen-whitespace', direction: 'more-whitespace' },
 			],
-			metrics: ['m9', 'm10', 'm11', 'm12', 'm5', 'm6'],
+			metrics: ['m9', 'm10', 'm11', 'm5'],
 		});
 	});
 
@@ -67,7 +68,7 @@ suite('Assessment profiles', () => {
 		assert.throws(() => resolveProfiles([], 'Selected profiles'), /one or more profile selections/);
 		assert.throws(
 			() => resolveProfiles([{ id: 'accessibility', direction: 'increase' }], 'Selected profiles'),
-			/direction for "accessibility" must be one of: reduce-issues, preserve, observe/,
+			/direction for "accessibility" must be one of: fewer-detected-violations, preserve, observe/,
 		);
 		assert.throws(
 			() => resolveSidebarProfiles([{ id: 'general-review', direction: 'observe' }], 'Selected profiles'),
@@ -86,7 +87,7 @@ suite('Assessment profiles', () => {
 		assert.deepStrictEqual(resolveSidebarAssessmentSelection({
 			selectionMode: 'custom',
 			metrics: ['m1', 'm2', 'm14'],
-			profiles: [{ id: 'accessibility', direction: 'reduce-issues' }],
+			profiles: [{ id: 'accessibility', direction: 'fewer-detected-violations' }],
 		}), {
 			metrics: ['m1', 'm2', 'm14'],
 			assessment: { mode: 'custom' },

@@ -4,6 +4,7 @@ export interface AssessmentProfileSelection {
 }
 
 export interface AssessmentProfileDefinition {
+  displayName: string;
   directions: readonly string[];
   metrics: readonly string[];
 }
@@ -11,13 +12,12 @@ export interface AssessmentProfileDefinition {
 const GENERAL_REVIEW_METRICS = ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14'] as const;
 
 export const ASSESSMENT_PROFILES: Readonly<Record<string, AssessmentProfileDefinition>> = {
-  'general-review': { directions: ['observe'], metrics: GENERAL_REVIEW_METRICS },
-  'visual-complexity': { directions: ['decrease', 'increase', 'preserve', 'observe'], metrics: ['m9', 'm10', 'm11', 'm12'] },
-  'layout-density': { directions: ['more-spacious', 'more-compact', 'preserve', 'observe'], metrics: ['m5', 'm10', 'm6'] },
-  'content-density': { directions: ['decrease', 'increase', 'preserve', 'observe'], metrics: ['m8', 'm5', 'm10'] },
-  'colour-expression': { directions: ['more-vivid', 'more-restrained', 'preserve', 'observe'], metrics: ['m3', 'm4'] },
-  'aesthetic-impression': { directions: ['increase', 'preserve', 'observe'], metrics: ['m14'] },
-  accessibility: { directions: ['reduce-issues', 'preserve', 'observe'], metrics: ['m13'] },
+  'general-review': { displayName: 'General review', directions: ['observe'], metrics: GENERAL_REVIEW_METRICS },
+  'visual-clutter': { displayName: 'Visual clutter', directions: ['less-cluttered', 'more-cluttered', 'preserve', 'observe'], metrics: ['m9', 'm10', 'm11'] },
+  'screen-whitespace': { displayName: 'Screen white space', directions: ['more-whitespace', 'less-whitespace', 'preserve', 'observe'], metrics: ['m5'] },
+  'text-amount': { displayName: 'Text amount', directions: ['more-words', 'fewer-words', 'preserve', 'observe'], metrics: ['m8'] },
+  colorfulness: { displayName: 'Colorfulness', directions: ['more-colorful', 'less-colorful', 'preserve', 'observe'], metrics: ['m3'] },
+  accessibility: { displayName: 'Accessibility', directions: ['fewer-detected-violations', 'preserve', 'observe'], metrics: ['m13'] },
 };
 
 export function resolveAssessmentProfiles(
