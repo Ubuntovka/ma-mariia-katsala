@@ -26,6 +26,7 @@ from main import (
     metric_result_index,
     normalize_assessed_target,
     normalize_repo_url,
+    normalize_service_base_url,
     resolve_llm_chat_completions_url,
     select_comparison_findings,
     split_file_metrics,
@@ -108,6 +109,20 @@ class AssessedTargetTests(unittest.TestCase):
 
     def test_existing_path_discards_query_and_fragment(self):
         self.assertEqual(normalize_assessed_target('/projects/?tab=active#top'), '/projects')
+
+
+class ServiceBaseUrlTests(unittest.TestCase):
+    def test_removes_whitespace_and_trailing_slashes(self):
+        self.assertEqual(
+            normalize_service_base_url(' https://backend.example/// ', 'BACKEND_URL'),
+            'https://backend.example'
+        )
+
+    def test_requires_an_http_url_with_a_hostname(self):
+        with self.assertRaisesRegex(RuntimeError, 'http:// or https://'):
+            normalize_service_base_url('backend.example', 'BACKEND_URL')
+        with self.assertRaisesRegex(RuntimeError, 'http:// or https://'):
+            normalize_service_base_url('ftp://backend.example', 'BACKEND_URL')
 
 
 class RepositoryUrlTests(unittest.TestCase):

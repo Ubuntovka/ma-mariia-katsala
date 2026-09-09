@@ -19,8 +19,10 @@ npx --prefix apps/uiqlab-assessment playwright-core install-deps chromium
 ```
 
 The production orchestrator is configured by default, so no local backend or
-environment variables are required. Open this directory in VS Code and press
-`F5` to launch an Extension Development Host.
+environment variables are required. To use another deployment, set
+`uiqlabAssessment.orchestratorUrl` in VS Code settings to the orchestrator's
+complete `http://` or `https://` base URL. Open this directory in VS Code and
+press `F5` to launch an Extension Development Host.
 
 The browser binary is not included in a standard VSIX. It must be packaged with
 a release or installed on the machine running the extension host. In Remote

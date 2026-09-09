@@ -2,7 +2,7 @@
   "name": "uiqlab-assessment",
   "displayName": "UIQLab Assessment",
   "description": "Continuous Web UI quality assessment in VS Code",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "uiqlab",
   "engines": {
     "vscode": "^1.125.0"
@@ -44,7 +44,17 @@
         "command": "uiqlab-assessment.comparePastAssessments",
         "title": "Compare Past Assessments"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "UIQLab Assessment",
+      "properties": {
+        "uiqlabAssessment.orchestratorUrl": {
+          "type": "string",
+          "default": "https://ma-mariia-katsala-production.up.railway.app",
+          "description": "Base URL of the UIQLab orchestrator. A trailing slash is optional."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

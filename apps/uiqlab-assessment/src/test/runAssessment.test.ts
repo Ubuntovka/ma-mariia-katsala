@@ -7,6 +7,7 @@ import {
 	formatAssessmentRunSummary,
 	isAssessmentMetricResult,
 	normalizeAvailableMetricItems,
+	normalizeServiceBaseUrl,
 	pollEvaluationResult,
 	type QuickPickUi,
 } from '../runAssessment';
@@ -17,6 +18,15 @@ suite('Run assessment requests', () => {
 	test('exposes all assessment names and data source options', () => {
 		assert.strictEqual(ASSESSMENTS.length, 14);
 		assert.deepStrictEqual(DATA_SOURCE_OPTIONS, ['Deployment URL', 'Local URL']);
+	});
+
+	test('normalizes configured service URLs and rejects incomplete URLs', () => {
+		assert.strictEqual(
+			normalizeServiceBaseUrl(' https://orchestrator.example/// '),
+			'https://orchestrator.example',
+		);
+		assert.throws(() => normalizeServiceBaseUrl('orchestrator.example'), /http:\/\/ or https:\/\//);
+		assert.throws(() => normalizeServiceBaseUrl('ftp://orchestrator.example'), /http:\/\/ or https:\/\//);
 	});
 
 	test('allows result requests to wait beyond the former 100 ms timeout', async () => {
