@@ -18,8 +18,9 @@ On Linux, run the following if Chromium reports missing system libraries:
 npx --prefix apps/uiqlab-assessment playwright-core install-deps chromium
 ```
 
-Start the orchestrator at `http://127.0.0.1:8181`, open this directory in VS
-Code, and press `F5` to launch an Extension Development Host.
+The production orchestrator is configured by default, so no local backend or
+environment variables are required. Open this directory in VS Code and press
+`F5` to launch an Extension Development Host.
 
 The browser binary is not included in a standard VSIX. It must be packaged with
 a release or installed on the machine running the extension host. In Remote

@@ -49,8 +49,8 @@ export interface AssessmentRunRequest {
 	assessment?: AssessmentSelection;
 	dataSource: DeploymentUrlDataSource | LocalUrlDataSource | DeploymentUrlComparisonDataSource;
 	comparison?:
-		| { kind: 'latest' }
-		| { kind: 'selected'; baselineRunId: number };
+	| { kind: 'latest' }
+	| { kind: 'selected'; baselineRunId: number };
 }
 
 export interface GitInfo {
@@ -219,7 +219,7 @@ export interface QuickPickUi {
 import * as http from 'http';
 import * as https from 'https';
 
-const ORCHESTRATOR_BASE = 'http://127.0.0.1:8181';
+const ORCHESTRATOR_BASE = 'https://uiqlab-api-production-abd4.up.railway.app';
 const DEFAULT_GET_TIMEOUT_MS = 10_000;
 const RESULT_REQUEST_TIMEOUT_MS = 130_000;
 const RESULT_POLL_TIMEOUT_MS = 300_000;
@@ -479,15 +479,15 @@ export async function submitFileForEvaluation(
 			let data = '';
 			res.on('data', (chunk) => { data += chunk; });
 			res.on('end', () => {
-			  try {
-			    if (res.statusCode && res.statusCode >= 400) {
-			      reject(new Error(`HTTP ${res.statusCode} from ${parsed.toString()}`));
-			      return;
-			    }
-			    resolve(JSON.parse(data));
-			  } catch (err) {
-			    reject(err);
-			  }
+				try {
+					if (res.statusCode && res.statusCode >= 400) {
+						reject(new Error(`HTTP ${res.statusCode} from ${parsed.toString()}`));
+						return;
+					}
+					resolve(JSON.parse(data));
+				} catch (err) {
+					reject(err);
+				}
 			});
 		});
 		req.on('error', reject);
