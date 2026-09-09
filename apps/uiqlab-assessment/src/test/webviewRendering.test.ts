@@ -71,6 +71,34 @@ suite('Webview rendering', () => {
 		assert.match(html, /Based on metrics only/);
 	});
 
+	test('preserves the unsuccessful frozen-response presentation and complete suggestion cards', () => {
+		const html = renderProfileLlmFeedback({
+			goalStatus: 'not-achieved',
+			goalTitle: 'Profile goals not achieved',
+			summary: 'Prepared explanation.',
+			changes: ['Evidence one.', 'Evidence two.', 'Evidence three.'],
+			suggestions: Array.from({ length: 4 }, (_, index) => ({
+				title: `Suggestion ${index + 1}`,
+				action: `Action ${index + 1}`,
+				rationale: `Reason ${index + 1}`,
+				files: [],
+			})),
+			sourceContextUsed: false,
+			sourceFiles: [],
+		});
+
+		assert.match(html, /profile-ai-feedback status-not-achieved/);
+		assert.match(html, /<div class="profile-ai-icon" aria-hidden="true">×<\/div>/);
+		assert.match(html, /<span class="profile-ai-status">Goal not achieved<\/span>/);
+		assert.match(html, /profile-ai-goal">Profile goals not achieved/);
+		assert.strictEqual((html.match(/class="change-chip"/g) ?? []).length, 3);
+		assert.strictEqual((html.match(/class="suggestion-card"/g) ?? []).length, 4);
+		assert.match(html, /Suggested next steps/);
+		assert.match(html, /Based on metrics only/);
+		assert.match(html, /Why: Reason 4/);
+		assert.match(html, /AI-generated suggestions\. Validate changes against the profile goal and metric results below\./);
+	});
+
 	test('renders structured custom-metric analysis as evidence-to-action cards', () => {
 		const html = renderCustomMetricLlmFeedback({
 			summary: 'A potential user may experience a denser interface with more competing visual information.',

@@ -9,12 +9,13 @@ execution; it determines how scalar changes are classified in comparisons.
 
 The **UIQLab Assessment** sidebar offers two mutually exclusive modes:
 
-- **Profiles** lists the six specific profiles and excludes `general-review`.
-  Select one or more profiles and choose one allowed direction for every
-  selected profile.
+- **Profiles** lists the five specific profiles and excludes `general-review`.
+  During the controlled experiment, select exactly one profile and one of its
+  allowed directions. Choosing another profile replaces the current choice.
 - **Custom metrics** lists `m1` through `m14`. Any combination can be selected,
   **All** and **None** controls are available, and every metric retains its
-  expandable **What does this measure?** description.
+  expandable **What does this measure?** description. Custom metric runs do not
+  request an AI explanation during the controlled experiment.
 
 When an assessment starts, the extension validates the active selection in the
 extension host. Profile mode resolves profiles to metric IDs, removes overlaps,
@@ -24,7 +25,9 @@ inactive selection so previously checked profiles cannot affect a custom run,
 and previously checked metrics cannot affect a profile run.
 
 The assessment selection in `.uiqlab.json` initializes the corresponding
-sidebar mode. A configured `general-review` selection initializes custom mode
+sidebar mode. If the configuration contains several profiles, the sidebar uses
+only the first one for the controlled experiment. A configured
+`general-review` selection initializes custom mode
 with all 14 metrics because General review is deliberately absent from the
 sidebar profile list. Without configured assessment settings, profile mode
 opens without a preselected profile. Changes in the sidebar affect the
@@ -46,25 +49,17 @@ The existing detailed metric comparison remains directly below the dashboard.
 Custom metric comparisons do not render the profile dashboard and keep their
 current overview unchanged.
 
-If **Use LLM explanation** is enabled during a profile run, the Evaluation
-Results editor also shows structured **AI profile guidance**. The deterministic
-history outcome remains authoritative; the LLM briefly explains the measured
-movement and proposes two to four next-step experiments for the selected
-directions. This appears as a status header, compact change rows, and numbered
-suggestion cards rather than one prose block. Custom metric runs use a parallel
-structured analysis panel that separates measured evidence, technical
-interpretation, and practical implementation actions.
-
-The sidebar provides a separate **Allow LLM to use source code (Demo)** toggle.
-This experimental feature is available for profile and custom-metric runs with
-LLM feedback, stored per workspace, and off by default. With permission, the IDE extension
-selects up to 10 relevant frontend files, limited to 24 KiB per file and 100 KiB
-total. The files are supplied to the LLM to produce more precise,
-project-specific interpretations and suggestions. The active editor and assessed route are
-prioritized; generated directories, dependencies, minified JavaScript, and
-source maps are excluded. The LLM cannot search the project, and the captured
-page HTML is not used as this source context. Without permission, the same
-explanation is generated from assessment/history data and uses metrics only.
+During the controlled experiment, the Evaluation Results editor always requests
+the prepared structured **AI profile guidance**. The sidebar shows the AI
+explanation switch as selected and disabled. The deterministic history outcome
+remains authoritative; the prepared record explains the measured movement and
+provides the predefined next steps in the existing result component. The
+orchestrator performs a PostgreSQL lookup and never calls a live LLM. Source
+code is not collected or sent, so all prepared explanations are labelled
+**Based on metrics only**. A missing or unsupported condition produces a clear
+error without a live-generation fallback. Custom metric assessments keep the
+AI control unselected and disabled and render their metric results without an
+explanation request.
 
 The history comparison lists every metric requested by the current assessment,
 not only metrics shared with the baseline. A requested metric without a

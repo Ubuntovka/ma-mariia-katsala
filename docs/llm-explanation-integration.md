@@ -1,5 +1,10 @@
 # LLM-Based Assessment Explanations
 
+> **Controlled-experiment freeze:** Live generation is disabled in source code.
+> `POST /eval/explanation` only retrieves prepared PostgreSQL records and fails
+> closed when no record matches. See
+> [Frozen experiment explanations](frozen-experiment-responses.md).
+
 ## Purpose
 
 The LLM integration turns raw Web UI Assessment metric results into a concise,

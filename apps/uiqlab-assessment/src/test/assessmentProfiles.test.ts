@@ -44,7 +44,7 @@ suite('Assessment profiles', () => {
 		});
 	});
 
-	test('resolves several sidebar profiles to a unique ordered metric union', () => {
+	test('restricts the controlled-experiment sidebar to exactly one profile', () => {
 		assert.deepStrictEqual(SIDEBAR_ASSESSMENT_PROFILE_IDS, [
 			'visual-clutter',
 			'screen-whitespace',
@@ -54,14 +54,14 @@ suite('Assessment profiles', () => {
 		]);
 		assert.deepStrictEqual(resolveSidebarProfiles([
 			{ id: 'visual-clutter', direction: 'less-cluttered' },
-			{ id: 'screen-whitespace', direction: 'more-whitespace' },
 		], 'Selected profiles'), {
-			profiles: [
-				{ id: 'visual-clutter', direction: 'less-cluttered' },
-				{ id: 'screen-whitespace', direction: 'more-whitespace' },
-			],
-			metrics: ['m9', 'm10', 'm11', 'm5'],
+			profiles: [{ id: 'visual-clutter', direction: 'less-cluttered' }],
+			metrics: ['m9', 'm10', 'm11'],
 		});
+		assert.throws(() => resolveSidebarProfiles([
+			{ id: 'visual-clutter', direction: 'less-cluttered' },
+			{ id: 'screen-whitespace', direction: 'more-whitespace' },
+		], 'Selected profiles'), /exactly one profile selection/);
 	});
 
 	test('rejects missing profiles and directions not supported by CI/CD', () => {
@@ -77,7 +77,10 @@ suite('Assessment profiles', () => {
 	});
 
 	test('accepts any unique custom selection from m1 through m14', () => {
+		assert.deepStrictEqual(resolveCustomMetrics(['m1'], 'Selected metrics'), ['m1']);
 		assert.deepStrictEqual(resolveCustomMetrics(['m1', 'm7', 'm14'], 'Selected metrics'), ['m1', 'm7', 'm14']);
+		const allMetrics = Array.from({ length: 14 }, (_, index) => `m${index + 1}`);
+		assert.deepStrictEqual(resolveCustomMetrics(allMetrics, 'Selected metrics'), allMetrics);
 		assert.throws(() => resolveCustomMetrics([], 'Selected metrics'), /one or more metric IDs/);
 		assert.throws(() => resolveCustomMetrics(['m15'], 'Selected metrics'), /IDs from m1 through m14/);
 		assert.throws(() => resolveCustomMetrics(['m3', 'm3'], 'Selected metrics'), /duplicate metric IDs/);

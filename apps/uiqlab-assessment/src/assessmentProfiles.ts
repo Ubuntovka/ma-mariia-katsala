@@ -57,6 +57,9 @@ export function resolveProfiles(value: unknown, location: string): { profiles: A
 
 export function resolveSidebarProfiles(value: unknown, location: string): { profiles: AssessmentProfileSelection[]; metrics: string[] } {
 	const resolved = resolveProfiles(value, location);
+	if (resolved.profiles.length !== 1) {
+		throw new Error(`${location} must contain exactly one profile selection during the controlled experiment.`);
+	}
 	if (resolved.profiles.some((profile) => !SIDEBAR_ASSESSMENT_PROFILE_IDS.includes(profile.id))) {
 		throw new Error(`${location} cannot select the general-review profile. Choose specific profiles or custom metrics.`);
 	}

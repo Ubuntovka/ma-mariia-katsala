@@ -32,22 +32,25 @@ URL being assessed.
 2. Choose a comparison mode. **Two deployed URLs** accepts a baseline URL and
    a current URL; the other current-state modes let you select **Deployment**
    or **Local URL** as the page source.
-3. Select one or more assessment profiles, or choose custom metrics.
+3. Select exactly one assessment profile, or choose custom metrics.
 4. Run the assessment.
 
 Local capture waits for the page to load, disables animations, and uploads a
 fixed-viewport screenshot plus rendered HTML. Sidebar choices affect the current
 IDE run; they do not rewrite the workspace `.uiqlab.json`.
 
-## Optional AI explanations
+## Prepared AI explanations during the experiment
 
-**Use LLM explanation** sends metrics and compatible history to the provider
-configured by the orchestrator. **Allow LLM to use source code** additionally
-sends at most 10 relevant frontend files (100 KiB total). Both options are off
-by default. Do not send secrets, personal data, or confidential code without
-authorisation. AI explanations may be inaccurate; measured results remain the
-source of truth. Source-code sharing is not available when comparing two
-deployed URLs; those explanations use assessment metrics only.
+Every completed profile assessment requests its explanation automatically. In
+profile mode, the sidebar shows the AI explanation control as selected and
+disabled, so it cannot be turned off. In custom metric mode, the control is
+unselected and disabled; no AI explanation request is made, and any number of
+metrics from one through all 14 can run together. During the controlled
+experiment the orchestrator only loads a prepared PostgreSQL response for the
+matching project, target, profile, and direction; it never contacts a live LLM
+provider. Unsupported profile conditions fail closed with a clear explanation
+error. Prepared explanations use metrics only, and measured results remain the
+source of truth.
 
 ## Checks
 

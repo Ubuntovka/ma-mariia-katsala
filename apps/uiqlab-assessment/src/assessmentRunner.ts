@@ -26,7 +26,6 @@ import {
 	type GitInfo,
 	type ProfileLlmFeedback,
 } from './runAssessment';
-import { collectWorkspaceSourceContext } from './sourceContext';
 import type { HistoryComparisonContent } from './historyRendering';
 
 const COMPARABLE_METRICS = new Set(Array.from({ length: 14 }, (_, index) => `m${index + 1}`));
@@ -34,8 +33,6 @@ const COMPARABLE_METRICS = new Set(Array.from({ length: 14 }, (_, index) => `m${
 export type RunConfiguredAssessment = (
 	request: AssessmentRunRequest,
 	shareDeployment: boolean,
-	useLlmExplanation: boolean,
-	shareSourceCode: boolean,
 ) => Promise<void>;
 
 function readGitValue(workspaceRoot: string, command: string, diagnosticContext: string): string {
@@ -96,21 +93,18 @@ function renderResults(
 }
 
 async function buildExplanationContext(
+	projectKey: string,
 	assessmentSelection: AssessmentSelection,
 	currentResults: AssessmentMetricResult[],
 	history: AssessmentHistory | undefined,
 	target: string,
-	workspaceRoot: string,
-	shareSourceCode: boolean,
 ) {
-	const sourceContext = shareSourceCode
-		? await collectWorkspaceSourceContext(workspaceRoot, target)
-		: [];
 	const selectedProfiles = normalizeProfileAssessmentSelection(assessmentSelection);
 	if (!selectedProfiles) {
-		return { assessment: assessmentSelection, target, ...(sourceContext.length > 0 ? { sourceContext } : {}) };
+		return { projectKey, assessment: assessmentSelection, target };
 	}
 	return {
+		projectKey,
 		assessment: assessmentSelection,
 		profileAssessment: assessProfilesAgainstHistory(
 			selectedProfiles,
@@ -119,7 +113,6 @@ async function buildExplanationContext(
 			Boolean(history?.baselineRun),
 		),
 		target,
-		...(sourceContext.length > 0 ? { sourceContext } : {}),
 	};
 }
 
@@ -152,7 +145,6 @@ async function runDeploymentUrlComparison(
 	assessmentSelection: AssessmentSelection,
 	workspaceRoot: string,
 	projectConfig: ProjectConfig,
-	useLlmExplanation: boolean,
 	progress: vscode.Progress<{ message?: string }>,
 	token: vscode.CancellationToken,
 ): Promise<AssessmentMetricResult[]> {
@@ -209,7 +201,8 @@ async function runDeploymentUrlComparison(
 		return [];
 	}
 
-	progress.report({ message: `Step 5 of 5: ${useLlmExplanation ? 'Explaining comparison' : 'Preparing comparison'}` });
+	const usesFrozenExplanation = assessmentSelection.mode === 'profiles';
+	progress.report({ message: `Step 5 of 5: ${usesFrozenExplanation ? 'Loading the prepared AI explanation' : 'Preparing comparison'}` });
 	panel = ensureResultsPanel(panel);
 	const history = createDirectComparisonHistory(
 		baselineResults,
@@ -222,15 +215,14 @@ async function runDeploymentUrlComparison(
 	let explanationError: string | undefined;
 	let profileFeedback: ProfileLlmFeedback | undefined;
 	let customFeedback: CustomMetricLlmFeedback | undefined;
-	if (useLlmExplanation) {
+	if (usesFrozenExplanation) {
 		try {
 			const explanationContext = await buildExplanationContext(
+				projectConfig.projectKey,
 				assessmentSelection,
 				currentResults,
 				history,
 				dataSource.currentDeploymentUrl,
-				workspaceRoot,
-				false,
 			);
 			const response = await fetchAssessmentExplanation(currentResults, history, explanationContext);
 			explanation = response.explanation;
@@ -238,7 +230,7 @@ async function runDeploymentUrlComparison(
 			customFeedback = response.customFeedback;
 		} catch (error) {
 			explanationError = errorMessage(error);
-			logDiagnostic('Could not generate the deployment comparison explanation', error);
+			logDiagnostic('Could not load the prepared deployment comparison explanation', error);
 		}
 	}
 	renderResults(
@@ -310,7 +302,7 @@ async function submitAssessment(
 }
 
 export function createAssessmentRunner(context: vscode.ExtensionContext): RunConfiguredAssessment {
-	return async (request, shareDeployment, useLlmExplanation, shareSourceCode): Promise<void> => {
+	return async (request, shareDeployment): Promise<void> => {
 		if (request.dataSource.kind !== 'local-url' && !shareDeployment) { return; }
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 		let projectConfig: ProjectConfig;
@@ -349,7 +341,6 @@ export function createAssessmentRunner(context: vscode.ExtensionContext): RunCon
 						assessmentSelection,
 						workspaceRoot,
 						projectConfig,
-						useLlmExplanation,
 						progress,
 						token,
 					);
@@ -373,7 +364,8 @@ export function createAssessmentRunner(context: vscode.ExtensionContext): RunCon
 				});
 				if (currentResults.length === 0) { return currentResults; }
 
-				progress.report({ message: `Step ${submission.totalSteps} of ${submission.totalSteps}: ${useLlmExplanation ? 'Explaining results' : 'Preparing results'}` });
+				const usesFrozenExplanation = assessmentSelection.mode === 'profiles';
+				progress.report({ message: `Step ${submission.totalSteps} of ${submission.totalSteps}: ${usesFrozenExplanation ? 'Loading the prepared AI explanation' : 'Preparing results'}` });
 				panel = ensureResultsPanel(panel);
 				const history = hasComparableResult(currentResults)
 					? await chooseHistory(submission.resultId, request.comparison)
@@ -382,10 +374,11 @@ export function createAssessmentRunner(context: vscode.ExtensionContext): RunCon
 				let explanationError: string | undefined;
 				let profileFeedback: ProfileLlmFeedback | undefined;
 				let customFeedback: CustomMetricLlmFeedback | undefined;
-				if (useLlmExplanation) {
+				if (usesFrozenExplanation) {
 					try {
 						const explanationContext = await buildExplanationContext(
-							assessmentSelection, currentResults, history, submission.target, workspaceRoot, shareSourceCode,
+							projectConfig.projectKey,
+							assessmentSelection, currentResults, history, submission.target,
 						);
 						const response = await fetchAssessmentExplanation(currentResults, history, explanationContext);
 						explanation = response.explanation;
@@ -393,7 +386,7 @@ export function createAssessmentRunner(context: vscode.ExtensionContext): RunCon
 						customFeedback = response.customFeedback;
 					} catch (error) {
 						explanationError = errorMessage(error);
-						logDiagnostic('Could not generate the assessment explanation', error);
+						logDiagnostic('Could not load the prepared assessment explanation', error);
 					}
 				}
 				const comparison = history

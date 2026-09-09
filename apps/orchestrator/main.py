@@ -11,6 +11,12 @@ import asyncpg
 import math
 import re
 
+from frozen_responses import (
+    decode_frozen_response,
+    migrate_frozen_explanations,
+    seed_frozen_explanations,
+)
+
 app = FastAPI()
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://nginx")
@@ -18,19 +24,23 @@ POSTGRES_USER = os.getenv("POSTGRES_USER", "orchestrator")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "orchestrator")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "orchestrator_db")
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "orchestrator-postgres")
-LLM_API_URL = os.getenv("LLM_API_URL")
-LLM_API_KEY = os.getenv("LLM_API_KEY")
-LLM_MODEL = os.getenv("LLM_MODEL")
-try:
-    LLM_TIMEOUT_SECONDS = max(10.0, float(os.getenv("LLM_TIMEOUT_SECONDS", "180")))
-except ValueError:
-    LLM_TIMEOUT_SECONDS = 180.0
-try:
-    LLM_CONNECT_TIMEOUT_SECONDS = max(
-        10.0, float(os.getenv("LLM_CONNECT_TIMEOUT_SECONDS", "60"))
-    )
-except ValueError:
-    LLM_CONNECT_TIMEOUT_SECONDS = 60.0
+# BEGIN: LIVE LLM DISABLED FOR CONTROLLED EXPERIMENT
+# Restore after the experiment by removing the frozen-only path and
+# uncommenting this block together with the provider invocation below.
+# LLM_API_URL = os.getenv("LLM_API_URL")
+# LLM_API_KEY = os.getenv("LLM_API_KEY")
+# LLM_MODEL = os.getenv("LLM_MODEL")
+# try:
+#     LLM_TIMEOUT_SECONDS = max(10.0, float(os.getenv("LLM_TIMEOUT_SECONDS", "180")))
+# except ValueError:
+#     LLM_TIMEOUT_SECONDS = 180.0
+# try:
+#     LLM_CONNECT_TIMEOUT_SECONDS = max(
+#         10.0, float(os.getenv("LLM_CONNECT_TIMEOUT_SECONDS", "60"))
+#     )
+# except ValueError:
+#     LLM_CONNECT_TIMEOUT_SECONDS = 60.0
+# END: LIVE LLM DISABLED FOR CONTROLLED EXPERIMENT
 try:
     UIQLAB_RESULT_READ_TIMEOUT_SECONDS = max(
         10.0, float(os.getenv("UIQLAB_RESULT_READ_TIMEOUT_SECONDS", "300"))
@@ -88,6 +98,8 @@ async def init_db():
             ALTER TABLE project DROP CONSTRAINT IF EXISTS "project_repositoryUrl_key";
         ''')
         await conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_project_project_key ON project(project_key);')
+        await migrate_frozen_explanations(conn)
+        await seed_frozen_explanations(conn)
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS assessment_run (
                 id SERIAL PRIMARY KEY,
@@ -365,6 +377,7 @@ class EvaluateURLInput(BaseModel):
 
 
 class ExplainAssessmentInput(BaseModel):
+    projectKey: UUID
     currentResults: List[dict]
     history: Optional[dict] = None
     assessment: Optional[dict] = None
@@ -917,116 +930,186 @@ def resolve_llm_chat_completions_url(api_url: str) -> str:
 
 @app.post("/eval/explanation")
 async def explain_assessment(payload: ExplainAssessmentInput):
-    """Generate a structured assessment explanation without exposing LLM credentials to clients."""
-    if not LLM_API_URL or not LLM_API_KEY or not LLM_MODEL:
-        raise HTTPException(status_code=503, detail="LLM explanation is not configured")
+    """Return the one prepared response matching this experiment condition."""
     if not payload.currentResults:
         raise HTTPException(status_code=400, detail="currentResults must not be empty")
+    if not payload.target:
+        raise HTTPException(status_code=400, detail="target is required for a frozen explanation")
+    assessment = payload.assessment
+    profiles = assessment.get("profiles") if isinstance(assessment, dict) else None
+    if assessment is None or assessment.get("mode") != "profiles" or not isinstance(profiles, list):
+        raise HTTPException(
+            status_code=404,
+            detail="No frozen response exists for non-profile explanation requests",
+        )
+    if len(profiles) != 1 or not isinstance(profiles[0], dict):
+        raise HTTPException(
+            status_code=404,
+            detail="A frozen explanation requires exactly one prepared profile condition",
+        )
+    profile_id = profiles[0].get("id")
+    direction = profiles[0].get("direction")
+    if not isinstance(profile_id, str) or not profile_id or not isinstance(direction, str) or not direction:
+        raise HTTPException(
+            status_code=404,
+            detail="The requested profile and direction do not identify a frozen response",
+        )
 
-    timeout = httpx.Timeout(
-        connect=LLM_CONNECT_TIMEOUT_SECONDS,
-        read=LLM_TIMEOUT_SECONDS,
-        write=30.0,
-        pool=10.0,
-    )
+    conn = None
     try:
-        source_context = compact_source_context(payload.sourceContext)
-        profile_mode = is_profile_explanation(payload.assessment, payload.profileAssessment)
-        # httpx timeouts apply to individual network operations. Enforce a
-        # separate wall-clock deadline so partial provider traffic cannot keep
-        # the request alive until the IDE's longer client timeout expires.
-        async with asyncio.timeout(LLM_TIMEOUT_SECONDS):
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(
-                    resolve_llm_chat_completions_url(LLM_API_URL),
-                    headers={
-                        "Authorization": f"Bearer {LLM_API_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": LLM_MODEL,
-                        "messages": build_explanation_messages(
-                            payload.currentResults,
-                            payload.history,
-                            payload.assessment,
-                            payload.profileAssessment,
-                            payload.target,
-                            source_context,
-                        ),
-                        "temperature": 0,
-                        "max_tokens": 900 if profile_mode else 1800,
-                        "stream": False,
-                    },
-                )
-                response.raise_for_status()
-                response_data = response.json()
-                if profile_mode:
-                    source_files = [item["path"] for item in source_context]
-                    feedback = extract_profile_llm_feedback(response_data, source_files)
-                    profile_assessment = payload.profileAssessment or {}
-                    return {
-                        "explanation": feedback["summary"],
-                        "profileFeedback": {
-                            "goalStatus": str(profile_assessment.get("status", "not-comparable")),
-                            "goalTitle": str(profile_assessment.get("title", "Profile assessment")),
-                            **feedback,
-                            "sourceContextUsed": bool(source_files),
-                            "sourceFiles": source_files,
-                        },
-                    }
-                allowed_metric_ids = sorted({
-                    result.get("metric_id", "").split("_", 1)[0]
-                    for result in payload.currentResults
-                    if isinstance(result, dict) and isinstance(result.get("metric_id"), str)
-                })
-                source_files = [item["path"] for item in source_context]
-                feedback = extract_custom_metric_llm_feedback(
-                    response_data, allowed_metric_ids, source_files
-                )
-                comparison = select_comparison_findings(payload.currentResults, payload.history)
-                return {
-                    "explanation": feedback["summary"],
-                    "customFeedback": {
-                        **feedback,
-                        "analysisMode": "comparison" if comparison["comparableMetricCount"] > 0 else "current-state",
-                        "materialChangeCount": comparison["materialChangeCount"],
-                        "sourceContextUsed": bool(source_files),
-                        "sourceFiles": source_files,
-                    },
-                }
-    except TimeoutError:
-        raise HTTPException(
-            status_code=504,
-            detail=f"The LLM provider did not finish within {LLM_TIMEOUT_SECONDS:g} seconds",
+        conn = await asyncpg.connect(
+            user=POSTGRES_USER,
+            password=POSTGRES_PASSWORD,
+            database=POSTGRES_DB,
+            host=POSTGRES_HOST,
         )
-    except httpx.ConnectTimeout:
-        raise HTTPException(
-            status_code=504,
-            detail=(
-                f"Could not connect to the LLM provider within {LLM_CONNECT_TIMEOUT_SECONDS:g} seconds. "
-                "Check the university VPN, endpoint availability, and proxy or firewall settings"
-            ),
+        response_value = await conn.fetchval(
+            """
+            SELECT fe.response
+            FROM frozen_explanation AS fe
+            JOIN project AS p ON p.id = fe.project_id
+            WHERE p.project_key = $1
+              AND fe.assessed_target = $2
+              AND fe.profile_id = $3
+              AND fe.direction = $4
+            """,
+            payload.projectKey,
+            normalize_assessed_target(payload.target),
+            profile_id,
+            direction,
         )
-    except httpx.ReadTimeout:
+        if response_value is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "No frozen response exists for the requested project, target, "
+                    "profile, and direction"
+                ),
+            )
+        return decode_frozen_response(response_value)
+    except HTTPException:
+        raise
+    except Exception:
         raise HTTPException(
-            status_code=504,
-            detail=f"The LLM provider did not respond within {LLM_TIMEOUT_SECONDS:g} seconds",
+            status_code=503,
+            detail="The frozen explanation could not be loaded from PostgreSQL",
         )
-    except (httpx.WriteTimeout, httpx.PoolTimeout):
-        raise HTTPException(
-            status_code=504,
-            detail="The LLM request timed out before a response could be read",
-        )
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"The LLM provider rejected the request with HTTP {exc.response.status_code}",
-        )
-    except (httpx.HTTPError, ValueError, json.JSONDecodeError):
-        raise HTTPException(
-            status_code=502,
-            detail="The LLM provider could not generate an explanation",
-        )
+    finally:
+        if conn is not None:
+            await conn.close()
+
+
+# BEGIN: LIVE LLM DISABLED FOR CONTROLLED EXPERIMENT
+# Restore after the experiment by removing the frozen-only path above,
+# uncommenting the provider configuration near the top of this module, and
+# restoring this request block as the body of explain_assessment().
+#
+# timeout = httpx.Timeout(
+#     connect=LLM_CONNECT_TIMEOUT_SECONDS,
+#     read=LLM_TIMEOUT_SECONDS,
+#     write=30.0,
+#     pool=10.0,
+# )
+# source_context = compact_source_context(payload.sourceContext)
+# profile_mode = is_profile_explanation(payload.assessment, payload.profileAssessment)
+# async with asyncio.timeout(LLM_TIMEOUT_SECONDS):
+#     async with httpx.AsyncClient(timeout=timeout) as client:
+#         response = await client.post(
+#             resolve_llm_chat_completions_url(LLM_API_URL),
+#             headers={
+#                 "Authorization": f"Bearer {LLM_API_KEY}",
+#                 "Content-Type": "application/json",
+#             },
+#             json={
+#                 "model": LLM_MODEL,
+#                 "messages": build_explanation_messages(
+#                     payload.currentResults,
+#                     payload.history,
+#                     payload.assessment,
+#                     payload.profileAssessment,
+#                     payload.target,
+#                     source_context,
+#                 ),
+#                 "temperature": 0,
+#                 "max_tokens": 900 if profile_mode else 1800,
+#                 "stream": False,
+#             },
+#         )
+#         response.raise_for_status()
+#         response_data = response.json()
+#         if profile_mode:
+#             source_files = [item["path"] for item in source_context]
+#             feedback = extract_profile_llm_feedback(response_data, source_files)
+#             profile_assessment = payload.profileAssessment or {}
+#             return {
+#                 "explanation": feedback["summary"],
+#                 "profileFeedback": {
+#                     "goalStatus": str(profile_assessment.get("status", "not-comparable")),
+#                     "goalTitle": str(profile_assessment.get("title", "Profile assessment")),
+#                     **feedback,
+#                     "sourceContextUsed": bool(source_files),
+#                     "sourceFiles": source_files,
+#                 },
+#             }
+#         allowed_metric_ids = sorted({
+#             result.get("metric_id", "").split("_", 1)[0]
+#             for result in payload.currentResults
+#             if isinstance(result, dict) and isinstance(result.get("metric_id"), str)
+#         })
+#         source_files = [item["path"] for item in source_context]
+#         feedback = extract_custom_metric_llm_feedback(
+#             response_data, allowed_metric_ids, source_files
+#         )
+#         comparison = select_comparison_findings(payload.currentResults, payload.history)
+#         return {
+#             "explanation": feedback["summary"],
+#             "customFeedback": {
+#                 **feedback,
+#                 "analysisMode": (
+#                     "comparison"
+#                     if comparison["comparableMetricCount"] > 0
+#                     else "current-state"
+#                 ),
+#                 "materialChangeCount": comparison["materialChangeCount"],
+#                 "sourceContextUsed": bool(source_files),
+#                 "sourceFiles": source_files,
+#             },
+#         }
+#
+# except TimeoutError:
+#     raise HTTPException(
+#         status_code=504,
+#         detail=f"The LLM provider did not finish within {LLM_TIMEOUT_SECONDS:g} seconds",
+#     )
+# except httpx.ConnectTimeout:
+#     raise HTTPException(
+#         status_code=504,
+#         detail=(
+#             f"Could not connect to the LLM provider within {LLM_CONNECT_TIMEOUT_SECONDS:g} seconds. "
+#             "Check the university VPN, endpoint availability, and proxy or firewall settings"
+#         ),
+#     )
+# except httpx.ReadTimeout:
+#     raise HTTPException(
+#         status_code=504,
+#         detail=f"The LLM provider did not respond within {LLM_TIMEOUT_SECONDS:g} seconds",
+#     )
+# except (httpx.WriteTimeout, httpx.PoolTimeout):
+#     raise HTTPException(
+#         status_code=504,
+#         detail="The LLM request timed out before a response could be read",
+#     )
+# except httpx.HTTPStatusError as exc:
+#     raise HTTPException(
+#         status_code=502,
+#         detail=f"The LLM provider rejected the request with HTTP {exc.response.status_code}",
+#     )
+# except (httpx.HTTPError, ValueError, json.JSONDecodeError):
+#     raise HTTPException(
+#         status_code=502,
+#         detail="The LLM provider could not generate an explanation",
+#     )
+# END: LIVE LLM DISABLED FOR CONTROLLED EXPERIMENT
 
 
 @app.post("/eval/evaluate_url_input_test")

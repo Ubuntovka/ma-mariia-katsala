@@ -13,11 +13,15 @@ services:
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_HOST=orchestrator-postgres
       - UIQLAB_RESULT_READ_TIMEOUT_SECONDS=${UIQLAB_RESULT_READ_TIMEOUT_SECONDS:-300}
-      - LLM_API_URL=${LLM_API_URL}
-      - LLM_API_KEY=${LLM_API_KEY}
-      - LLM_MODEL=${LLM_MODEL}
-      - LLM_CONNECT_TIMEOUT_SECONDS=${LLM_CONNECT_TIMEOUT_SECONDS:-60}
-      - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-180}
+      # BEGIN: LIVE LLM DISABLED FOR CONTROLLED EXPERIMENT
+      # Restore after the experiment by restoring the live source path and
+      # uncommenting these provider settings.
+      # - LLM_API_URL=${LLM_API_URL}
+      # - LLM_API_KEY=${LLM_API_KEY}
+      # - LLM_MODEL=${LLM_MODEL}
+      # - LLM_CONNECT_TIMEOUT_SECONDS=${LLM_CONNECT_TIMEOUT_SECONDS:-60}
+      # - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-180}
+      # END: LIVE LLM DISABLED FOR CONTROLLED EXPERIMENT
     depends_on:
       - orchestrator-postgres
     networks:

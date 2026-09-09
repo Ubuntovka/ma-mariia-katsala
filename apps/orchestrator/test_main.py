@@ -1,9 +1,13 @@
 import asyncio
+import json
+import os
 import unittest
 from datetime import datetime, timezone
 from fastapi import HTTPException
 from unittest.mock import AsyncMock, patch
+from uuid import UUID
 
+import asyncpg
 import httpx
 
 from main import (
@@ -27,6 +31,12 @@ from main import (
     split_file_metrics,
     get_eval_result,
     get_eval_result_history,
+)
+from frozen_responses import (
+    EXPERIMENT_PROJECT_KEY,
+    FROZEN_RESPONSES,
+    migrate_frozen_explanations,
+    seed_frozen_explanations,
 )
 
 
@@ -444,63 +454,176 @@ class LlmExplanationTests(unittest.TestCase):
         self.assertEqual(feedback['summary'], 'Metrics moved toward the goal.')
 
 
-class LlmExplanationTimeoutTests(unittest.IsolatedAsyncioTestCase):
-    async def test_enforces_end_to_end_provider_deadline(self):
-        posted_request = {}
+class FrozenExplanationDataTests(unittest.TestCase):
+    def test_contains_all_eleven_unique_conditions_with_required_card_counts(self):
+        keys = [(target, profile_id, direction) for target, profile_id, direction, _ in FROZEN_RESPONSES]
+        self.assertEqual(len(FROZEN_RESPONSES), 11)
+        self.assertEqual(len(set(keys)), 11)
+        for target, profile_id, direction, response in FROZEN_RESPONSES:
+            feedback = response['profileFeedback']
+            expected_suggestions = 3 if target == '/v/c2x7pk' else 4
+            self.assertEqual(len(feedback['suggestions']), expected_suggestions)
+            self.assertTrue(feedback['changes'])
+            self.assertTrue(all(item['action'] and item['rationale'] for item in feedback['suggestions']))
+            self.assertFalse(feedback['sourceContextUsed'])
+            self.assertEqual(feedback['sourceFiles'], [])
 
-        class HangingClient:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, _exc_type, _exc, _traceback):
-                return None
-
-            async def post(self, *_args, **kwargs):
-                posted_request.update(kwargs)
-                await asyncio.Event().wait()
-
-        payload = ExplainAssessmentInput(
-            currentResults=[{'metric_id': 'm9_edge_density', 'results': [0.2]}],
+    def test_beta_opposite_visual_clutter_conditions_do_not_collide(self):
+        beta = {
+            direction: response
+            for target, profile_id, direction, response in FROZEN_RESPONSES
+            if target == '/v/l5q9au' and profile_id == 'visual-clutter'
+        }
+        self.assertEqual(set(beta), {'less-cluttered', 'more-cluttered'})
+        self.assertEqual(beta['less-cluttered']['profileFeedback']['goalStatus'], 'achieved')
+        self.assertEqual(beta['more-cluttered']['profileFeedback']['goalStatus'], 'not-achieved')
+        self.assertEqual(
+            beta['more-cluttered']['profileFeedback']['goalTitle'],
+            'Profile goals not achieved',
         )
-        with patch('main.LLM_API_URL', 'https://provider.example/v1'), patch(
-            'main.LLM_API_KEY', 'test-key'
-        ), patch('main.LLM_MODEL', 'test-model'), patch(
-            'main.LLM_TIMEOUT_SECONDS', 0.01
-        ), patch('main.LLM_CONNECT_TIMEOUT_SECONDS', 60.0), patch(
-            'main.httpx.AsyncClient', return_value=HangingClient()
-        ) as client_constructor:
-            with self.assertRaises(HTTPException) as raised:
-                await explain_assessment(payload)
 
-        self.assertEqual(raised.exception.status_code, 504)
-        self.assertIn('did not finish within', raised.exception.detail)
-        self.assertIs(posted_request['json']['stream'], False)
-        self.assertEqual(client_constructor.call_args.kwargs['timeout'].connect, 60.0)
 
-    async def test_reports_configured_provider_connection_timeout(self):
-        class ConnectTimeoutClient:
-            async def __aenter__(self):
-                return self
+class FrozenExplanationSeedTests(unittest.IsolatedAsyncioTestCase):
+    async def test_migration_uses_jsonb_and_seed_is_idempotent(self):
+        connection = AsyncMock()
+        connection.fetchval.return_value = 273
 
-            async def __aexit__(self, _exc_type, _exc, _traceback):
-                return None
+        await migrate_frozen_explanations(connection)
+        first_count = await seed_frozen_explanations(connection)
+        second_count = await seed_frozen_explanations(connection)
 
-            async def post(self, *_args, **_kwargs):
-                raise httpx.ConnectTimeout('provider connection timed out')
+        self.assertEqual(first_count, 11)
+        self.assertEqual(second_count, 11)
+        self.assertIn('response JSONB NOT NULL', connection.execute.await_args.args[0])
+        seed_sql, seed_rows = connection.executemany.await_args_list[0].args
+        self.assertIn('ON CONFLICT (project_id, assessed_target, profile_id, direction)', seed_sql)
+        self.assertEqual(len(seed_rows), 11)
+        self.assertTrue(all(isinstance(json.loads(row[4]), dict) for row in seed_rows))
 
-        payload = ExplainAssessmentInput(
+
+class FrozenExplanationEndpointTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def payload(target, profile_id, direction, project_key=EXPERIMENT_PROJECT_KEY):
+        return ExplainAssessmentInput(
+            projectKey=project_key,
             currentResults=[{'metric_id': 'm9_edge_density', 'results': [0.2]}],
+            assessment={
+                'mode': 'profiles',
+                'profiles': [{'id': profile_id, 'direction': direction}],
+            },
+            profileAssessment={'status': 'achieved', 'title': 'Ignored live outcome'},
+            target=f'http://localhost:3000{target}?ignored=yes',
         )
-        with patch('main.LLM_API_URL', 'https://provider.example/v1'), patch(
-            'main.LLM_API_KEY', 'test-key'
-        ), patch('main.LLM_MODEL', 'test-model'), patch(
-            'main.LLM_CONNECT_TIMEOUT_SECONDS', 60.0
-        ), patch('main.httpx.AsyncClient', return_value=ConnectTimeoutClient()):
-            with self.assertRaises(HTTPException) as raised:
-                await explain_assessment(payload)
 
-        self.assertEqual(raised.exception.status_code, 504)
-        self.assertIn('within 60 seconds', raised.exception.detail)
+    async def test_every_condition_returns_exact_prepared_dto_and_never_constructs_llm_client(self):
+        for target, profile_id, direction, expected in FROZEN_RESPONSES:
+            connection = AsyncMock()
+            connection.fetchval.return_value = json.dumps(expected, ensure_ascii=False)
+            with self.subTest(target=target, profile=profile_id, direction=direction), patch(
+                'main.asyncpg.connect', AsyncMock(return_value=connection)
+            ), patch('main.httpx.AsyncClient') as llm_client:
+                actual = await explain_assessment(self.payload(target, profile_id, direction))
+
+            self.assertEqual(actual, expected)
+            llm_client.assert_not_called()
+            query_args = connection.fetchval.await_args.args
+            self.assertEqual(query_args[1:], (
+                UUID(EXPERIMENT_PROJECT_KEY), target, profile_id, direction
+            ))
+            connection.close.assert_awaited_once()
+
+    async def test_repeated_requests_are_identical_database_lookups(self):
+        expected = FROZEN_RESPONSES[0][3]
+        connection = AsyncMock()
+        connection.fetchval.return_value = expected
+        connector = AsyncMock(return_value=connection)
+        payload = self.payload('/v/v3h9dp', 'visual-clutter', 'less-cluttered')
+
+        with patch('main.asyncpg.connect', connector), patch('main.httpx.AsyncClient') as llm_client:
+            first = await explain_assessment(payload)
+            second = await explain_assessment(payload)
+
+        self.assertEqual(first, second)
+        self.assertEqual(connector.await_count, 2)
+        self.assertEqual(connection.fetchval.await_count, 2)
+        llm_client.assert_not_called()
+
+    async def test_unknown_project_condition_and_missing_record_fail_closed(self):
+        scenarios = (
+            self.payload('/v/v3h9dp', 'visual-clutter', 'less-cluttered', '00000000-0000-0000-0000-000000000000'),
+            self.payload('/v/v3h9dp', 'unknown-profile', 'unknown-direction'),
+            self.payload('/v/unknown', 'visual-clutter', 'less-cluttered'),
+        )
+        for payload in scenarios:
+            connection = AsyncMock()
+            connection.fetchval.return_value = None
+            with self.subTest(payload=payload), patch(
+                'main.asyncpg.connect', AsyncMock(return_value=connection)
+            ), patch('main.httpx.AsyncClient') as llm_client:
+                with self.assertRaises(HTTPException) as raised:
+                    await explain_assessment(payload)
+
+            self.assertEqual(raised.exception.status_code, 404)
+            self.assertIn('No frozen response exists', raised.exception.detail)
+            llm_client.assert_not_called()
+
+    async def test_database_error_has_no_retry_or_llm_fallback(self):
+        connector = AsyncMock(side_effect=asyncpg.PostgresError('database unavailable'))
+        with patch('main.asyncpg.connect', connector), patch('main.httpx.AsyncClient') as llm_client:
+            with self.assertRaises(HTTPException) as raised:
+                await explain_assessment(
+                    self.payload('/v/v3h9dp', 'visual-clutter', 'less-cluttered')
+                )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(connector.await_count, 1)
+        llm_client.assert_not_called()
+
+    async def test_live_provider_environment_cannot_enable_network_generation(self):
+        expected = FROZEN_RESPONSES[0][3]
+        connection = AsyncMock()
+        connection.fetchval.return_value = expected
+        with patch.dict(os.environ, {
+            'LLM_API_URL': 'https://provider.example/v1',
+            'LLM_API_KEY': 'secret',
+            'LLM_MODEL': 'live-model',
+        }), patch('main.asyncpg.connect', AsyncMock(return_value=connection)), patch(
+            'main.httpx.AsyncClient'
+        ) as llm_client:
+            actual = await explain_assessment(
+                self.payload('/v/v3h9dp', 'visual-clutter', 'less-cluttered')
+            )
+
+        self.assertEqual(actual, expected)
+        llm_client.assert_not_called()
+
+    async def test_non_profile_and_ambiguous_profile_requests_fail_before_database_or_llm(self):
+        payloads = (
+            ExplainAssessmentInput(
+                projectKey=EXPERIMENT_PROJECT_KEY,
+                currentResults=[{'metric_id': 'm9', 'results': [0.2]}],
+                assessment={'mode': 'custom'},
+                target='/v/v3h9dp',
+            ),
+            ExplainAssessmentInput(
+                projectKey=EXPERIMENT_PROJECT_KEY,
+                currentResults=[{'metric_id': 'm9', 'results': [0.2]}],
+                assessment={'mode': 'profiles', 'profiles': [
+                    {'id': 'visual-clutter', 'direction': 'less-cluttered'},
+                    {'id': 'screen-whitespace', 'direction': 'more-whitespace'},
+                ]},
+                target='/v/v3h9dp',
+            ),
+        )
+        for payload in payloads:
+            with self.subTest(payload=payload), patch('main.asyncpg.connect') as connector, patch(
+                'main.httpx.AsyncClient'
+            ) as llm_client:
+                with self.assertRaises(HTTPException) as raised:
+                    await explain_assessment(payload)
+            self.assertEqual(raised.exception.status_code, 404)
+            connector.assert_not_called()
+            llm_client.assert_not_called()
 
 
 if __name__ == '__main__':

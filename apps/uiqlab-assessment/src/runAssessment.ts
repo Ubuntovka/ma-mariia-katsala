@@ -190,6 +190,7 @@ export interface ProfileLlmFeedback {
 }
 
 export interface AssessmentExplanationContext {
+	projectKey: string;
 	assessment?: AssessmentSelection;
 	profileAssessment?: unknown;
 	target?: string;
@@ -542,8 +543,8 @@ export async function fetchAssessmentRunComparison(
 
 export async function fetchAssessmentExplanation(
 	currentResults: AssessmentMetricResult[],
-	history?: AssessmentHistory,
-	context: AssessmentExplanationContext = {},
+	history: AssessmentHistory | undefined,
+	context: AssessmentExplanationContext,
 ): Promise<AssessmentExplanation> {
 	const response = await httpPostJson<AssessmentExplanation>(
 		`${ORCHESTRATOR_BASE}/eval/explanation`,
