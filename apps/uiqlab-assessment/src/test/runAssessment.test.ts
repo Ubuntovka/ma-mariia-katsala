@@ -9,12 +9,35 @@ import {
 	normalizeAvailableMetricItems,
 	normalizeServiceBaseUrl,
 	pollEvaluationResult,
+	toFrozenExplanationLookupContext,
 	type QuickPickUi,
 } from '../runAssessment';
 import { getMetricDefinition, METRIC_DEFINITIONS } from '../metricCatalog';
 import { formatAssessmentRunLabel } from '../sidebarFormatting';
 
 suite('Run assessment requests', () => {
+	test('maps visual complexity directions to legacy frozen explanation keys', () => {
+		const context = toFrozenExplanationLookupContext({
+			projectKey: 'project-key',
+			assessment: {
+				mode: 'profiles',
+				profiles: [
+					{ id: 'visual-clutter', direction: 'reduce-complexity' },
+					{ id: 'colorfulness', direction: 'more-colorful' },
+				],
+			},
+			target: '/v/v3h9dp',
+		});
+		assert.deepStrictEqual(context.assessment, {
+			mode: 'profiles',
+			profiles: [
+				{ id: 'visual-clutter', direction: 'less-cluttered' },
+				{ id: 'colorfulness', direction: 'more-colorful' },
+			],
+		});
+		assert.strictEqual(context.target, '/v/v3h9dp');
+	});
+
 	test('exposes all assessment names and data source options', () => {
 		assert.strictEqual(ASSESSMENTS.length, 14);
 		assert.deepStrictEqual(DATA_SOURCE_OPTIONS, ['Deployment URL', 'Local URL']);

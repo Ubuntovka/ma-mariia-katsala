@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { classifyProfiles, evaluateQualityGate, qualityGateExitCode, type ProfileOutcome } from '../src/qualityGate.js';
 
-const visualProfile = [{ id: 'visual-clutter', direction: 'less-cluttered' }];
+const visualProfile = [{ id: 'visual-clutter', direction: 'reduce-complexity' }];
 
 function metric(id: string, delta: number, meaningfulChange = true) {
   return { id, previous: 10, current: 10 + delta, delta, meaningfulChange };
 }
 
 function outcome(kind: ProfileOutcome['outcome']): ProfileOutcome {
-  return { id: 'visual-clutter', direction: 'less-cluttered', outcome: kind, reason: kind, comparableMetrics: [], meaningfulMetrics: [], alignedMetrics: [], opposedMetrics: [] };
+  return { id: 'visual-clutter', direction: 'reduce-complexity', outcome: kind, reason: kind, comparableMetrics: [], meaningfulMetrics: [], alignedMetrics: [], opposedMetrics: [] };
 }
 
 test('classifies every deterministic profile outcome', () => {
@@ -22,7 +22,7 @@ test('classifies every deterministic profile outcome', () => {
 
 test('uses the expected scalar movement for each goal-specific profile', () => {
   assert.equal(classifyProfiles([{ id: 'screen-whitespace', direction: 'more-whitespace' }], [metric('m5', 1)], true)[0]?.outcome, 'aligned');
-  assert.equal(classifyProfiles([{ id: 'visual-clutter', direction: 'more-cluttered' }], [metric('m9', 1)], true)[0]?.outcome, 'aligned');
+  assert.equal(classifyProfiles([{ id: 'visual-clutter', direction: 'increase-complexity' }], [metric('m9', 1)], true)[0]?.outcome, 'aligned');
   assert.equal(classifyProfiles([{ id: 'screen-whitespace', direction: 'less-whitespace' }], [metric('m5', -1)], true)[0]?.outcome, 'aligned');
   assert.equal(classifyProfiles([{ id: 'text-amount', direction: 'more-words' }], [metric('m8', 1)], true)[0]?.outcome, 'aligned');
   assert.equal(classifyProfiles([{ id: 'text-amount', direction: 'fewer-words' }], [metric('m8', -1)], true)[0]?.outcome, 'aligned');

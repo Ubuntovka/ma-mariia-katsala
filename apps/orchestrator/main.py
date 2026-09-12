@@ -13,6 +13,7 @@ import re
 
 from frozen_responses import (
     decode_frozen_response,
+    frozen_direction_candidates,
     migrate_frozen_explanations,
     seed_frozen_explanations,
 )
@@ -984,12 +985,14 @@ async def explain_assessment(payload: ExplainAssessmentInput):
             WHERE p.project_key = $1
               AND fe.assessed_target = $2
               AND fe.profile_id = $3
-              AND fe.direction = $4
+              AND fe.direction = ANY($4::text[])
+            ORDER BY array_position($4::text[], fe.direction)
+            LIMIT 1
             """,
             payload.projectKey,
             normalize_assessed_target(payload.target),
             profile_id,
-            direction,
+            frozen_direction_candidates(profile_id, direction),
         )
         if response_value is None:
             raise HTTPException(

@@ -13,7 +13,7 @@ const GENERAL_REVIEW_METRICS = ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 
 
 export const ASSESSMENT_PROFILES: Readonly<Record<string, AssessmentProfileDefinition>> = {
   'general-review': { displayName: 'General review', directions: ['observe'], metrics: GENERAL_REVIEW_METRICS },
-  'visual-clutter': { displayName: 'Visual clutter', directions: ['less-cluttered', 'more-cluttered', 'preserve', 'observe'], metrics: ['m9', 'm10', 'm11'] },
+  'visual-clutter': { displayName: 'Visual complexity', directions: ['reduce-complexity', 'increase-complexity', 'preserve', 'observe'], metrics: ['m9', 'm10', 'm11'] },
   'screen-whitespace': { displayName: 'Screen white space', directions: ['more-whitespace', 'less-whitespace', 'preserve', 'observe'], metrics: ['m5'] },
   'text-amount': { displayName: 'Text amount', directions: ['more-words', 'fewer-words', 'preserve', 'observe'], metrics: ['m8'] },
   colorfulness: { displayName: 'Colorfulness', directions: ['more-colorful', 'less-colorful', 'preserve', 'observe'], metrics: ['m3'] },

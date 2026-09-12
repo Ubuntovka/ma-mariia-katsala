@@ -36,6 +36,7 @@ from main import (
 from frozen_responses import (
     EXPERIMENT_PROJECT_KEY,
     FROZEN_RESPONSES,
+    frozen_direction_candidates,
     migrate_frozen_explanations,
     seed_frozen_explanations,
 )
@@ -55,7 +56,7 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             'screenshotHeight': 900,
             'assessment': {
                 'mode': 'profiles',
-                'profiles': [{'id': 'visual-clutter', 'direction': 'less-cluttered'}],
+                'profiles': [{'id': 'visual-clutter', 'direction': 'reduce-complexity'}],
             },
         })
 
@@ -69,7 +70,7 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             'screenshotDimensions': {'width': 1440, 'height': 900},
             'assessment': {
                 'mode': 'profiles',
-                'profiles': [{'id': 'visual-clutter', 'direction': 'less-cluttered'}],
+                'profiles': [{'id': 'visual-clutter', 'direction': 'reduce-complexity'}],
             },
         })
 
@@ -395,7 +396,7 @@ class LlmExplanationTests(unittest.TestCase):
             [{'metric_id': 'm9_edge_density', 'results': [0.16]}],
             {'metrics': {'m9_edge_density': {'results': [0.24]}}},
             {'mode': 'profiles', 'profiles': [
-                {'id': 'visual-clutter', 'direction': 'less-cluttered'}
+                {'id': 'visual-clutter', 'direction': 'reduce-complexity'}
             ]},
             {
                 'status': 'achieved',
@@ -420,7 +421,7 @@ class LlmExplanationTests(unittest.TestCase):
             ]}],
             {'metrics': {'m10_feature_congestion': {'results': [{'score': 5.1}]}}},
             {'mode': 'profiles', 'profiles': [
-                {'id': 'visual-clutter', 'direction': 'less-cluttered'}
+                {'id': 'visual-clutter', 'direction': 'reduce-complexity'}
             ]},
             {'status': 'achieved', 'title': 'Profile goal achieved', 'outcomes': []},
         )
@@ -470,6 +471,20 @@ class LlmExplanationTests(unittest.TestCase):
 
 
 class FrozenExplanationDataTests(unittest.TestCase):
+    def test_visual_complexity_directions_accept_legacy_frozen_keys(self):
+        self.assertEqual(
+            frozen_direction_candidates('visual-clutter', 'reduce-complexity'),
+            ['reduce-complexity', 'less-cluttered'],
+        )
+        self.assertEqual(
+            frozen_direction_candidates('visual-clutter', 'more-cluttered'),
+            ['more-cluttered', 'increase-complexity'],
+        )
+        self.assertEqual(
+            frozen_direction_candidates('colorfulness', 'more-colorful'),
+            ['more-colorful'],
+        )
+
     def test_contains_all_eleven_unique_conditions_with_required_card_counts(self):
         keys = [(target, profile_id, direction) for target, profile_id, direction, _ in FROZEN_RESPONSES]
         self.assertEqual(len(FROZEN_RESPONSES), 11)
@@ -489,11 +504,11 @@ class FrozenExplanationDataTests(unittest.TestCase):
             for target, profile_id, direction, response in FROZEN_RESPONSES
             if target == '/v/l5q9au' and profile_id == 'visual-clutter'
         }
-        self.assertEqual(set(beta), {'less-cluttered', 'more-cluttered'})
-        self.assertEqual(beta['less-cluttered']['profileFeedback']['goalStatus'], 'achieved')
-        self.assertEqual(beta['more-cluttered']['profileFeedback']['goalStatus'], 'not-achieved')
+        self.assertEqual(set(beta), {'reduce-complexity', 'increase-complexity'})
+        self.assertEqual(beta['reduce-complexity']['profileFeedback']['goalStatus'], 'achieved')
+        self.assertEqual(beta['increase-complexity']['profileFeedback']['goalStatus'], 'not-achieved')
         self.assertEqual(
-            beta['more-cluttered']['profileFeedback']['goalTitle'],
+            beta['increase-complexity']['profileFeedback']['goalTitle'],
             'Profile goals not achieved',
         )
 
@@ -543,7 +558,10 @@ class FrozenExplanationEndpointTests(unittest.IsolatedAsyncioTestCase):
             llm_client.assert_not_called()
             query_args = connection.fetchval.await_args.args
             self.assertEqual(query_args[1:], (
-                UUID(EXPERIMENT_PROJECT_KEY), target, profile_id, direction
+                UUID(EXPERIMENT_PROJECT_KEY),
+                target,
+                profile_id,
+                frozen_direction_candidates(profile_id, direction),
             ))
             connection.close.assert_awaited_once()
 
@@ -552,7 +570,7 @@ class FrozenExplanationEndpointTests(unittest.IsolatedAsyncioTestCase):
         connection = AsyncMock()
         connection.fetchval.return_value = expected
         connector = AsyncMock(return_value=connection)
-        payload = self.payload('/v/v3h9dp', 'visual-clutter', 'less-cluttered')
+        payload = self.payload('/v/v3h9dp', 'visual-clutter', 'reduce-complexity')
 
         with patch('main.asyncpg.connect', connector), patch('main.httpx.AsyncClient') as llm_client:
             first = await explain_assessment(payload)
@@ -565,9 +583,9 @@ class FrozenExplanationEndpointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unknown_project_condition_and_missing_record_fail_closed(self):
         scenarios = (
-            self.payload('/v/v3h9dp', 'visual-clutter', 'less-cluttered', '00000000-0000-0000-0000-000000000000'),
+            self.payload('/v/v3h9dp', 'visual-clutter', 'reduce-complexity', '00000000-0000-0000-0000-000000000000'),
             self.payload('/v/v3h9dp', 'unknown-profile', 'unknown-direction'),
-            self.payload('/v/unknown', 'visual-clutter', 'less-cluttered'),
+            self.payload('/v/unknown', 'visual-clutter', 'reduce-complexity'),
         )
         for payload in scenarios:
             connection = AsyncMock()
@@ -587,7 +605,7 @@ class FrozenExplanationEndpointTests(unittest.IsolatedAsyncioTestCase):
         with patch('main.asyncpg.connect', connector), patch('main.httpx.AsyncClient') as llm_client:
             with self.assertRaises(HTTPException) as raised:
                 await explain_assessment(
-                    self.payload('/v/v3h9dp', 'visual-clutter', 'less-cluttered')
+                    self.payload('/v/v3h9dp', 'visual-clutter', 'reduce-complexity')
                 )
 
         self.assertEqual(raised.exception.status_code, 503)
@@ -606,7 +624,7 @@ class FrozenExplanationEndpointTests(unittest.IsolatedAsyncioTestCase):
             'main.httpx.AsyncClient'
         ) as llm_client:
             actual = await explain_assessment(
-                self.payload('/v/v3h9dp', 'visual-clutter', 'less-cluttered')
+                self.payload('/v/v3h9dp', 'visual-clutter', 'reduce-complexity')
             )
 
         self.assertEqual(actual, expected)
@@ -624,7 +642,7 @@ class FrozenExplanationEndpointTests(unittest.IsolatedAsyncioTestCase):
                 projectKey=EXPERIMENT_PROJECT_KEY,
                 currentResults=[{'metric_id': 'm9', 'results': [0.2]}],
                 assessment={'mode': 'profiles', 'profiles': [
-                    {'id': 'visual-clutter', 'direction': 'less-cluttered'},
+                    {'id': 'visual-clutter', 'direction': 'reduce-complexity'},
                     {'id': 'screen-whitespace', 'direction': 'more-whitespace'},
                 ]},
                 target='/v/v3h9dp',

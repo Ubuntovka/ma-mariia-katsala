@@ -35,7 +35,7 @@ type ExpectedMovement = 'increase' | 'decrease' | 'preserve' | 'observe';
 function expectedMovement(profileId: string, direction: string): ExpectedMovement | undefined {
   if (direction === 'observe') return 'observe';
   if (direction === 'preserve') return 'preserve';
-  if (profileId === 'visual-clutter') return direction === 'less-cluttered' ? 'decrease' : 'increase';
+  if (profileId === 'visual-clutter') return direction === 'reduce-complexity' ? 'decrease' : 'increase';
   if (profileId === 'screen-whitespace') return direction === 'more-whitespace' ? 'increase' : 'decrease';
   if (profileId === 'text-amount') return direction === 'more-words' ? 'increase' : 'decrease';
   if (profileId === 'colorfulness') return direction === 'more-colorful' ? 'increase' : 'decrease';

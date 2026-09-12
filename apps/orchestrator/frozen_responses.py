@@ -10,6 +10,18 @@ EXPERIMENT_PROJECT_NAME = "thesis-evaluation-projects"
 EXPERIMENT_REPOSITORY_URL = "github.com/ubuntovka/thesis-evaluation-projects"
 
 
+def frozen_direction_candidates(profile_id: str, direction: str) -> list[str]:
+    """Prefer the requested direction while accepting pre-rename frozen keys."""
+    aliases = {
+        ("visual-clutter", "reduce-complexity"): "less-cluttered",
+        ("visual-clutter", "less-cluttered"): "reduce-complexity",
+        ("visual-clutter", "increase-complexity"): "more-cluttered",
+        ("visual-clutter", "more-cluttered"): "increase-complexity",
+    }
+    alias = aliases.get((profile_id, direction))
+    return [direction, alias] if alias else [direction]
+
+
 def _suggestion(title: str, action: str, rationale: str) -> dict:
     return {
         "title": title,
@@ -46,7 +58,7 @@ FROZEN_RESPONSES = (
     (
         "/v/v3h9dp",
         "visual-clutter",
-        "less-cluttered",
+        "reduce-complexity",
         _response(
             "achieved",
             "Profile goal achieved",
@@ -60,7 +72,7 @@ FROZEN_RESPONSES = (
                 _suggestion(
                     "Increase whitespace around key sections",
                     "Add larger margin and padding values to primary container classes in the CSS",
-                    "More whitespace reinforces the less-cluttered direction by giving elements breathing room, further reducing perceived density.",
+                    "More whitespace reinforces the reduce-complexity direction by giving elements breathing room, further reducing perceived density.",
                 ),
                 _suggestion(
                     "Consolidate decorative icons",
@@ -75,7 +87,7 @@ FROZEN_RESPONSES = (
                 _suggestion(
                     "Simplify color palette",
                     "Reduce the number of distinct colors used for UI elements and adopt a restrained, high-contrast scheme",
-                    "A limited palette reduces subband entropy and helps users quickly identify important elements, reinforcing the less-cluttered goal.",
+                    "A limited palette reduces subband entropy and helps users quickly identify important elements, reinforcing the reduce-complexity goal.",
                 ),
             ],
         ),
@@ -230,7 +242,7 @@ FROZEN_RESPONSES = (
     (
         "/v/l5q9au",
         "visual-clutter",
-        "less-cluttered",
+        "reduce-complexity",
         _response(
             "achieved",
             "Profile goal achieved",
@@ -244,7 +256,7 @@ FROZEN_RESPONSES = (
                 _suggestion(
                     "Increase whitespace around primary controls",
                     "Add margin or padding to main buttons and input fields to create visual breathing room.",
-                    "More whitespace reinforces the less-cluttered direction and improves scan paths.",
+                    "More whitespace reinforces the reduce-complexity direction and improves scan paths.",
                 ),
                 _suggestion(
                     "Consolidate decorative icons",
@@ -267,7 +279,7 @@ FROZEN_RESPONSES = (
     (
         "/v/l5q9au",
         "visual-clutter",
-        "more-cluttered",
+        "increase-complexity",
         _response(
             "not-achieved",
             "Profile goals not achieved",

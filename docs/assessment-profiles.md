@@ -125,7 +125,7 @@ default and for the compatible single-page CI mode. Set `assessment.mode` to
     "profiles": [
       {
         "id": "visual-clutter",
-        "direction": "less-cluttered"
+        "direction": "reduce-complexity"
       }
     ]
   },
@@ -144,7 +144,7 @@ profiles are resolved to metric IDs before an assessment is submitted.
 | Profile ID | Display name | Allowed directions | Metrics |
 | --- | --- | --- | --- |
 | `general-review` | General review | `observe` | All metrics, `m1` through `m14` |
-| `visual-clutter` | Visual clutter | `less-cluttered`, `more-cluttered`, `preserve`, `observe` | Edge density (`m9`), Feature congestion (`m10`), Subband entropy (`m11`) |
+| `visual-clutter` | Visual complexity | `reduce-complexity`, `increase-complexity`, `preserve`, `observe` | Edge density (`m9`), Feature congestion (`m10`), Subband entropy (`m11`) |
 | `screen-whitespace` | Screen white space | `more-whitespace`, `less-whitespace`, `preserve`, `observe` | White space proportion (`m5`) |
 | `text-amount` | Text amount | `more-words`, `fewer-words`, `preserve`, `observe` | Word count (`m8`) |
 | `colorfulness` | Colorfulness | `more-colorful`, `less-colorful`, `preserve`, `observe` | Colorfulness (`m3`) |
@@ -168,7 +168,7 @@ For example:
     "profiles": [
       {
         "id": "visual-clutter",
-        "direction": "less-cluttered"
+        "direction": "reduce-complexity"
       },
       {
         "id": "screen-whitespace",
@@ -250,7 +250,7 @@ For a profile-based assessment, the CI report includes:
     "profiles": [
       {
         "id": "visual-clutter",
-        "direction": "less-cluttered"
+        "direction": "reduce-complexity"
       }
     ]
   }

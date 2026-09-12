@@ -17,8 +17,8 @@ suite('Assessment profiles', () => {
 				metrics: ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14'],
 			},
 			'visual-clutter': {
-				displayName: 'Visual clutter',
-				directions: ['less-cluttered', 'more-cluttered', 'preserve', 'observe'],
+				displayName: 'Visual complexity',
+				directions: ['reduce-complexity', 'increase-complexity', 'preserve', 'observe'],
 				metrics: ['m9', 'm10', 'm11'],
 			},
 			'screen-whitespace': {
@@ -53,13 +53,13 @@ suite('Assessment profiles', () => {
 			'accessibility',
 		]);
 		assert.deepStrictEqual(resolveSidebarProfiles([
-			{ id: 'visual-clutter', direction: 'less-cluttered' },
+			{ id: 'visual-clutter', direction: 'reduce-complexity' },
 		], 'Selected profiles'), {
-			profiles: [{ id: 'visual-clutter', direction: 'less-cluttered' }],
+			profiles: [{ id: 'visual-clutter', direction: 'reduce-complexity' }],
 			metrics: ['m9', 'm10', 'm11'],
 		});
 		assert.throws(() => resolveSidebarProfiles([
-			{ id: 'visual-clutter', direction: 'less-cluttered' },
+			{ id: 'visual-clutter', direction: 'reduce-complexity' },
 			{ id: 'screen-whitespace', direction: 'more-whitespace' },
 		], 'Selected profiles'), /exactly one profile selection/);
 	});

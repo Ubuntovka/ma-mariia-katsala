@@ -197,6 +197,23 @@ export interface AssessmentExplanationContext {
 	sourceContext?: Array<{ path: string; content: string }>;
 }
 
+export function toFrozenExplanationLookupContext(
+	context: AssessmentExplanationContext,
+): AssessmentExplanationContext {
+	if (context.assessment?.mode !== 'profiles') { return context; }
+	const profiles = context.assessment.profiles.map((profile) => {
+		if (profile.id !== 'visual-clutter') { return profile; }
+		if (profile.direction === 'reduce-complexity') {
+			return { ...profile, direction: 'less-cluttered' };
+		}
+		if (profile.direction === 'increase-complexity') {
+			return { ...profile, direction: 'more-cluttered' };
+		}
+		return profile;
+	});
+	return { ...context, assessment: { mode: 'profiles', profiles } };
+}
+
 export interface QuickPickUi {
 	showQuickPick(
 		items: readonly string[],
@@ -571,7 +588,7 @@ export async function fetchAssessmentExplanation(
 ): Promise<AssessmentExplanation> {
 	const response = await httpPostJson<AssessmentExplanation>(
 		orchestratorUrl('/eval/explanation'),
-		{ currentResults, history: history ?? { metrics: {} }, ...context },
+		{ currentResults, history: history ?? { metrics: {} }, ...toFrozenExplanationLookupContext(context) },
 		210_000
 	);
 	if (typeof response.explanation !== 'string' || !response.explanation.trim()) {

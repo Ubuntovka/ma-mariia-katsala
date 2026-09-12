@@ -206,7 +206,7 @@ Content-Type: application/json
   },
   "assessment": {
     "mode": "profiles",
-    "profiles": [{ "id": "visual-clutter", "direction": "less-cluttered" }]
+    "profiles": [{ "id": "visual-clutter", "direction": "reduce-complexity" }]
   },
   "profileAssessment": {
     "status": "achieved",
@@ -230,16 +230,16 @@ metric explanations.
 
 ```json
 {
-  "explanation": "Visual clutter moved in the selected direction.",
+  "explanation": "Visual complexity moved in the selected direction.",
   "profileFeedback": {
     "goalStatus": "achieved",
     "goalTitle": "Profile goal achieved",
-    "summary": "Visual clutter moved in the selected direction.",
+    "summary": "Visual complexity moved in the selected direction.",
     "changes": ["The comparable clutter metrics decreased."],
     "suggestions": [{
       "title": "Preserve the simpler hierarchy",
       "action": "Keep secondary elements visually subordinate and retest after changes.",
-      "rationale": "This supports the selected less-cluttered direction.",
+      "rationale": "This supports the selected reduce-complexity direction.",
       "files": ["src/pages/dashboard.tsx"]
     }],
     "sourceContextUsed": true,

@@ -52,7 +52,7 @@ test('reports an observed NIMA change without judging aesthetic quality', () => 
 });
 
 test('includes metric comparisons, profile outcomes and final gate status', () => {
-  const assessment = { mode: 'profiles' as const, profiles: [{ id: 'visual-clutter', direction: 'less-cluttered' }] };
+  const assessment = { mode: 'profiles' as const, profiles: [{ id: 'visual-clutter', direction: 'reduce-complexity' }] };
   const results: MetricResult[] = [
     { metric_id: 'm9_edge_density', results: [0.15] },
     { metric_id: 'm10_feature_congestion', results: [5.2] },
@@ -68,9 +68,10 @@ test('includes metric comparisons, profile outcomes and final gate status', () =
   assert.equal(report.qualityGate.status, 'warning');
   const summary = formatSummary(report, 'main');
   assert.match(summary, /Quality gate: WARNING \(warn\)/);
-  assert.match(summary, /Exit code: 2/);
-  assert.match(summary, /- Visual clutter/);
-  assert.match(summary, /Expected direction: less-cluttered/);
+	assert.match(summary, /Exit code: 2/);
+	assert.match(summary, /- Visual complexity/);
+	assert.doesNotMatch(summary, /- Visual clutter/);
+  assert.match(summary, /Expected direction: reduce-complexity/);
   assert.match(summary, /Outcome: MIXED/);
   assert.match(summary, /Edge density decreased: 0\.2 → 0\.15.*aligned with the profile goal/);
   assert.match(summary, /Feature congestion increased: 4 → 5\.2.*opposed to the profile goal/);
