@@ -2,7 +2,7 @@
   "name": "uiqlab-assessment",
   "displayName": "UIQLab Assessment",
   "description": "Continuous Web UI quality assessment in VS Code",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "uiqlab",
   "engines": {
     "vscode": "^1.125.0"
