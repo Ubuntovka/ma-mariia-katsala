@@ -485,18 +485,36 @@ class FrozenExplanationDataTests(unittest.TestCase):
             ['more-colorful'],
         )
 
-    def test_contains_all_eleven_unique_conditions_with_required_card_counts(self):
+    def test_contains_all_twelve_unique_conditions_with_required_card_counts(self):
         keys = [(target, profile_id, direction) for target, profile_id, direction, _ in FROZEN_RESPONSES]
-        self.assertEqual(len(FROZEN_RESPONSES), 11)
-        self.assertEqual(len(set(keys)), 11)
+        self.assertEqual(len(FROZEN_RESPONSES), 12)
+        self.assertEqual(len(set(keys)), 12)
         for target, profile_id, direction, response in FROZEN_RESPONSES:
             feedback = response['profileFeedback']
-            expected_suggestions = 3 if target == '/v/c2x7pk' else 4
+            expected_suggestions = 3 if target in {'/v/c2x7pk', '/v/k7m2qx'} else 4
             self.assertEqual(len(feedback['suggestions']), expected_suggestions)
             self.assertTrue(feedback['changes'])
             self.assertTrue(all(item['action'] and item['rationale'] for item in feedback['suggestions']))
             self.assertFalse(feedback['sourceContextUsed'])
             self.assertEqual(feedback['sourceFiles'], [])
+
+    def test_reduce_complexity_regression_has_not_achieved_explanation(self):
+        response = next(
+            response
+            for target, profile_id, direction, response in FROZEN_RESPONSES
+            if (
+                target == '/v/k7m2qx'
+                and profile_id == 'visual-clutter'
+                and direction == 'reduce-complexity'
+            )
+        )
+        feedback = response['profileFeedback']
+        self.assertEqual(feedback['goalStatus'], 'not-achieved')
+        self.assertEqual(feedback['goalTitle'], 'Profile goals not achieved')
+        self.assertIn(
+            'Edge density rose 35%, adding more line-like detail.',
+            feedback['changes'],
+        )
 
     def test_beta_opposite_visual_clutter_conditions_do_not_collide(self):
         beta = {
@@ -522,12 +540,12 @@ class FrozenExplanationSeedTests(unittest.IsolatedAsyncioTestCase):
         first_count = await seed_frozen_explanations(connection)
         second_count = await seed_frozen_explanations(connection)
 
-        self.assertEqual(first_count, 11)
-        self.assertEqual(second_count, 11)
+        self.assertEqual(first_count, 12)
+        self.assertEqual(second_count, 12)
         self.assertIn('response JSONB NOT NULL', connection.execute.await_args.args[0])
         seed_sql, seed_rows = connection.executemany.await_args_list[0].args
         self.assertIn('ON CONFLICT (project_id, assessed_target, profile_id, direction)', seed_sql)
-        self.assertEqual(len(seed_rows), 11)
+        self.assertEqual(len(seed_rows), 12)
         self.assertTrue(all(isinstance(json.loads(row[4]), dict) for row in seed_rows))
 
 

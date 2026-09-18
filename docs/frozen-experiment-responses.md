@@ -36,7 +36,7 @@ clutter responses at `/v/l5q9au` from colliding.
 
 ## Migrate and seed
 
-Application startup creates the table and idempotently upserts all 11 rows. To
+Application startup creates the table and idempotently upserts all 12 rows. To
 run the same operation explicitly in the Compose service:
 
 ```bash

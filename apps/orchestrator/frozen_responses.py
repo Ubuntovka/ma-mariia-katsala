@@ -93,6 +93,38 @@ FROZEN_RESPONSES = (
         ),
     ),
     (
+        "/v/k7m2qx",
+        "visual-clutter",
+        "reduce-complexity",
+        _response(
+            "not-achieved",
+            "Profile goals not achieved",
+            "Likely users will feel the interface is denser and more visually noisy, requiring extra effort to locate key information.",
+            [
+                "Edge density rose 35%, adding more line-like detail.",
+                "Feature-congestion increased 13%, indicating more UI elements per area.",
+                "Subband entropy grew ~10%, suggesting higher overall visual complexity.",
+            ],
+            [
+                _suggestion(
+                    "Introduce more whitespace",
+                    "Increase padding and margin around groups of controls and content blocks to lower element density.",
+                    "More breathing room reduces edge density and feature congestion, making the layout feel less cluttered.",
+                ),
+                _suggestion(
+                    "Consolidate visual elements",
+                    "Merge related icons or buttons into combined components (e.g., dropdown menus, toolbars) and remove redundant decorative graphics.",
+                    "Fewer distinct features lower feature-congestion scores and simplify the visual entropy of the page.",
+                ),
+                _suggestion(
+                    "Apply visual hierarchy with progressive disclosure",
+                    "Show only primary actions and information initially; reveal secondary options on hover or click.",
+                    "Limiting what is visible at once cuts edge density and entropy, guiding attention to the most important items.",
+                ),
+            ],
+        ),
+    ),
+    (
         "/v/n8t4cw",
         "screen-whitespace",
         "more-whitespace",
