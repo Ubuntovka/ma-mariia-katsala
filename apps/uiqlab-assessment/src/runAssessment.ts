@@ -218,7 +218,8 @@ export interface QuickPickUi {
 import * as http from 'http';
 import * as https from 'https';
 
-const ORCHESTRATOR_BASE = 'http://127.0.0.1:8181';
+export const DEFAULT_ORCHESTRATOR_BASE = 'http://127.0.0.1:8181';
+let orchestratorBase = DEFAULT_ORCHESTRATOR_BASE;
 const DEFAULT_GET_TIMEOUT_MS = 10_000;
 const RESULT_REQUEST_TIMEOUT_MS = 130_000;
 const RESULT_POLL_TIMEOUT_MS = 300_000;
@@ -227,6 +228,28 @@ const RESULT_POLL_TIMEOUT_MS = 300_000;
 const MAX_MULTIPART_BODY_BYTES = 10 * 1024 * 1024;
 
 import FormData = require('form-data');
+
+export function normalizeServiceBaseUrl(value: string, label = 'service URL'): string {
+	const normalized = value.trim().replace(/\/+$/, '');
+	let parsed: URL;
+	try {
+		parsed = new URL(normalized);
+	} catch {
+		throw new Error(`${label} must be a complete http:// or https:// URL.`);
+	}
+	if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.hostname) {
+		throw new Error(`${label} must be a complete http:// or https:// URL.`);
+	}
+	return normalized;
+}
+
+export function configureOrchestratorBase(value: string): void {
+	orchestratorBase = normalizeServiceBaseUrl(value, 'UIQLab orchestrator URL');
+}
+
+function orchestratorUrl(path: string): string {
+	return `${orchestratorBase}${path}`;
+}
 
 function responseErrorDetail(data: string): string {
 	try {
@@ -350,7 +373,7 @@ export function normalizeAvailableMetricItems(items: unknown[]): MetricInfo[] {
  */
 export async function fetchAvailableAssessments(): Promise<AssessmentName[]> {
 	try {
-		const resp = await httpGetJson<unknown>(`${ORCHESTRATOR_BASE}/eval/mm`);
+		const resp = await httpGetJson<unknown>(orchestratorUrl('/eval/mm'));
 		let items: unknown[] = [];
 
 		if (Array.isArray(resp)) {
@@ -400,7 +423,7 @@ export async function submitUrlForEvaluation(
 		...gitInfo,
 		...(assessment ? { assessment } : {})
 	};
-	return await httpPostJson(`${ORCHESTRATOR_BASE}/eval/evaluate_url_input_test`, payload);
+	return await httpPostJson(orchestratorUrl('/eval/evaluate_url_input_test'), payload);
 }
 
 export async function submitFileForEvaluation(
@@ -454,7 +477,7 @@ export async function submitFileForEvaluation(
 	}
 	if (assessment) { form.append('assessment', JSON.stringify(assessment)); }
 
-	const parsed = new URL(`${ORCHESTRATOR_BASE}/eval/evaluate_with_artifacts`);
+	const parsed = new URL(orchestratorUrl('/eval/evaluate_with_artifacts'));
 	const lib = parsed.protocol === 'https:' ? (await import('https')) : (await import('http'));
 
 	const headers = form.getHeaders();
@@ -478,15 +501,15 @@ export async function submitFileForEvaluation(
 			let data = '';
 			res.on('data', (chunk) => { data += chunk; });
 			res.on('end', () => {
-			  try {
-			    if (res.statusCode && res.statusCode >= 400) {
-			      reject(new Error(`HTTP ${res.statusCode} from ${parsed.toString()}`));
-			      return;
-			    }
-			    resolve(JSON.parse(data));
-			  } catch (err) {
-			    reject(err);
-			  }
+				try {
+					if (res.statusCode && res.statusCode >= 400) {
+						reject(new Error(`HTTP ${res.statusCode} from ${parsed.toString()}`));
+						return;
+					}
+					resolve(JSON.parse(data));
+				} catch (err) {
+					reject(err);
+				}
 			});
 		});
 		req.on('error', reject);
@@ -510,7 +533,7 @@ export function toMetricIds(selectedAssessments: AssessmentName[]): string[] {
 
 export async function fetchEvaluationResult(wui_id: string, timeoutMs: number = RESULT_REQUEST_TIMEOUT_MS): Promise<unknown> {
 	return await httpGetJson<unknown>(
-		`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}`,
+		orchestratorUrl(`/eval/result/${encodeURIComponent(wui_id)}`),
 		timeoutMs,
 	);
 }
@@ -518,14 +541,14 @@ export async function fetchEvaluationResult(wui_id: string, timeoutMs: number = 
 export async function fetchAssessmentHistory(wui_id: string, baselineRunId?: number): Promise<AssessmentHistory> {
 	const query = baselineRunId === undefined ? '' : `?baseline_run_id=${encodeURIComponent(String(baselineRunId))}`;
 	return await httpGetJson(
-		`${ORCHESTRATOR_BASE}/eval/result/${encodeURIComponent(wui_id)}/history${query}`,
+		orchestratorUrl(`/eval/result/${encodeURIComponent(wui_id)}/history${query}`),
 		10_000
 	);
 }
 
 export async function fetchProjectAssessmentRuns(projectKey: string): Promise<AssessmentRunSummary[]> {
 	return await httpGetJson(
-		`${ORCHESTRATOR_BASE}/eval/projects/${encodeURIComponent(projectKey)}/assessment-runs`,
+		orchestratorUrl(`/eval/projects/${encodeURIComponent(projectKey)}/assessment-runs`),
 		10_000
 	);
 }
@@ -535,7 +558,7 @@ export async function fetchAssessmentRunComparison(
 	baselineRunId: number
 ): Promise<AssessmentRunComparison> {
 	return await httpGetJson(
-		`${ORCHESTRATOR_BASE}/eval/assessment-runs/${currentRunId}/comparison?baseline_run_id=${baselineRunId}`,
+		orchestratorUrl(`/eval/assessment-runs/${currentRunId}/comparison?baseline_run_id=${baselineRunId}`),
 		20_000
 	);
 }
@@ -546,7 +569,7 @@ export async function fetchAssessmentExplanation(
 	context: AssessmentExplanationContext = {},
 ): Promise<AssessmentExplanation> {
 	const response = await httpPostJson<AssessmentExplanation>(
-		`${ORCHESTRATOR_BASE}/eval/explanation`,
+		orchestratorUrl('/eval/explanation'),
 		{ currentResults, history: history ?? { metrics: {} }, ...context },
 		210_000
 	);
