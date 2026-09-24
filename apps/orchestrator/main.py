@@ -13,7 +13,20 @@ import re
 
 app = FastAPI()
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://nginx")
+
+def normalize_service_base_url(value: str, setting_name: str) -> str:
+    normalized = value.strip().rstrip("/")
+    parsed = urlsplit(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError(
+            f'{setting_name} must be a complete http:// or https:// URL'
+        )
+    return normalized
+
+
+BACKEND_URL = normalize_service_base_url(
+    os.getenv("BACKEND_URL", "http://nginx"), "BACKEND_URL"
+)
 POSTGRES_USER = os.getenv("POSTGRES_USER", "orchestrator")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "orchestrator")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "orchestrator_db")
@@ -1029,6 +1042,22 @@ async def explain_assessment(payload: ExplainAssessmentInput):
         )
 
 
+def backend_status_error(response: httpx.Response) -> HTTPException:
+    """Expose the backend's error detail so clients can see why a run failed."""
+    backend_detail = ""
+    try:
+        response_body = response.json()
+        if isinstance(response_body, dict) and isinstance(response_body.get("detail"), str):
+            backend_detail = response_body["detail"].strip()
+    except (ValueError, json.JSONDecodeError):
+        backend_detail = response.text.strip()
+    suffix = f": {backend_detail[:500]}" if backend_detail else ""
+    return HTTPException(
+        status_code=502,
+        detail=f"UIQLab backend returned HTTP {response.status_code}{suffix}"
+    )
+
+
 @app.post("/eval/evaluate_url_input_test")
 async def post_evaluate_url_input_test(payload: EvaluateURLInput):
     """Accept a JSON body (url, metrics, and git info) from the caller,
@@ -1088,7 +1117,7 @@ async def post_evaluate_url_input_test(payload: EvaluateURLInput):
         if run_id:
             await update_assessment_run(run_id, status='FAILED')
         if isinstance(exc, httpx.HTTPStatusError):
-            raise HTTPException(status_code=502, detail=f"UIQLab backend returned HTTP {exc.response.status_code}")
+            raise backend_status_error(exc.response)
         raise HTTPException(status_code=503, detail=f"Failed to contact UIQLab backend: {exc}")
 
 
@@ -1217,7 +1246,7 @@ async def evaluate_with_artifacts(
             if run_id:
                 await update_assessment_run(run_id, status='FAILED')
             if isinstance(exc, httpx.HTTPStatusError):
-                raise HTTPException(status_code=502, detail=f"UIQLab backend returned HTTP {exc.response.status_code}")
+                raise backend_status_error(exc.response)
             raise HTTPException(status_code=503, detail=f"Failed to contact UIQLab backend: {exc}")
 
 @app.get("/eval/result/{wui_id}")
