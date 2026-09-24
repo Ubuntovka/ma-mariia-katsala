@@ -7,6 +7,8 @@ import { initializeDiagnostics } from './vscodeDiagnostics';
 import { showHistoryComparison } from './historyWebview';
 import { getOrCreateProjectConfig, type ProjectConfig } from './projectConfig';
 import {
+	configureOrchestratorBase,
+	DEFAULT_ORCHESTRATOR_BASE,
 	fetchAssessmentRunComparison,
 	fetchProjectAssessmentRuns,
 	type AssessmentRunSummary,
@@ -45,8 +47,23 @@ function workspaceRoot(): string {
 	return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 }
 
+function applyOrchestratorConfiguration(): void {
+	const configuredUrl = vscode.workspace
+		.getConfiguration('uiqlabAssessment')
+		.get<string>('orchestratorUrl', DEFAULT_ORCHESTRATOR_BASE);
+	try {
+		configureOrchestratorBase(configuredUrl);
+	} catch (error) {
+		configureOrchestratorBase(DEFAULT_ORCHESTRATOR_BASE);
+		void vscode.window.showErrorMessage(
+			`Invalid UIQLab orchestrator URL; using ${DEFAULT_ORCHESTRATOR_BASE}: ${errorMessage(error)}`,
+		);
+	}
+}
+
 export function activate(context: vscode.ExtensionContext): void {
 	initializeDiagnostics(context);
+	applyOrchestratorConfiguration();
 	const runConfiguredAssessment = createAssessmentRunner(context);
 	const loadAssessmentRuns = async (): Promise<AssessmentRunSummary[]> => {
 		const projectConfig = await getOrCreateProjectConfig(workspaceRoot());
@@ -77,6 +94,11 @@ export function activate(context: vscode.ExtensionContext): void {
 		compareSelectedRuns,
 	);
 	context.subscriptions.push(
+		vscode.workspace.onDidChangeConfiguration((event) => {
+			if (event.affectsConfiguration('uiqlabAssessment.orchestratorUrl')) {
+				applyOrchestratorConfiguration();
+			}
+		}),
 		vscode.window.registerWebviewViewProvider(AssessmentSidebarProvider.viewType, sidebarProvider),
 		vscode.commands.registerCommand('uiqlab-assessment.runAssessment', async () => {
 			await vscode.commands.executeCommand('workbench.view.extension.uiqlab-assessment');

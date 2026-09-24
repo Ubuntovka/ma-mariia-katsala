@@ -22,6 +22,8 @@ from main import (
     metric_result_index,
     normalize_assessed_target,
     normalize_repo_url,
+    normalize_service_base_url,
+    backend_status_error,
     resolve_llm_chat_completions_url,
     select_comparison_findings,
     split_file_metrics,
@@ -44,7 +46,7 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             'screenshotHeight': 900,
             'assessment': {
                 'mode': 'profiles',
-                'profiles': [{'id': 'visual-clutter', 'direction': 'less-cluttered'}],
+                'profiles': [{'id': 'visual-clutter', 'direction': 'reduce-complexity'}],
             },
         })
 
@@ -58,7 +60,7 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             'screenshotDimensions': {'width': 1440, 'height': 900},
             'assessment': {
                 'mode': 'profiles',
-                'profiles': [{'id': 'visual-clutter', 'direction': 'less-cluttered'}],
+                'profiles': [{'id': 'visual-clutter', 'direction': 'reduce-complexity'}],
             },
         })
 
@@ -98,6 +100,35 @@ class AssessedTargetTests(unittest.TestCase):
 
     def test_existing_path_discards_query_and_fragment(self):
         self.assertEqual(normalize_assessed_target('/projects/?tab=active#top'), '/projects')
+
+
+class ServiceBaseUrlTests(unittest.TestCase):
+    def test_removes_whitespace_and_trailing_slashes(self):
+        self.assertEqual(
+            normalize_service_base_url(' https://backend.example/// ', 'BACKEND_URL'),
+            'https://backend.example'
+        )
+
+    def test_requires_an_http_url_with_a_hostname(self):
+        with self.assertRaisesRegex(RuntimeError, 'http:// or https://'):
+            normalize_service_base_url('backend.example', 'BACKEND_URL')
+        with self.assertRaisesRegex(RuntimeError, 'http:// or https://'):
+            normalize_service_base_url('ftp://backend.example', 'BACKEND_URL')
+
+
+class BackendStatusErrorTests(unittest.TestCase):
+    def test_includes_json_detail_from_the_backend(self):
+        error = backend_status_error(httpx.Response(422, json={'detail': ' Page could not be captured '}))
+        self.assertEqual(error.status_code, 502)
+        self.assertEqual(error.detail, 'UIQLab backend returned HTTP 422: Page could not be captured')
+
+    def test_falls_back_to_plain_text_and_truncates_it(self):
+        error = backend_status_error(httpx.Response(500, text='x' * 600))
+        self.assertEqual(error.detail, f"UIQLab backend returned HTTP 500: {'x' * 500}")
+
+    def test_omits_an_empty_detail(self):
+        error = backend_status_error(httpx.Response(503, json={'error': 'unavailable'}))
+        self.assertEqual(error.detail, 'UIQLab backend returned HTTP 503')
 
 
 class RepositoryUrlTests(unittest.TestCase):
@@ -370,7 +401,7 @@ class LlmExplanationTests(unittest.TestCase):
             [{'metric_id': 'm9_edge_density', 'results': [0.16]}],
             {'metrics': {'m9_edge_density': {'results': [0.24]}}},
             {'mode': 'profiles', 'profiles': [
-                {'id': 'visual-clutter', 'direction': 'less-cluttered'}
+                {'id': 'visual-clutter', 'direction': 'reduce-complexity'}
             ]},
             {
                 'status': 'achieved',
@@ -395,7 +426,7 @@ class LlmExplanationTests(unittest.TestCase):
             ]}],
             {'metrics': {'m10_feature_congestion': {'results': [{'score': 5.1}]}}},
             {'mode': 'profiles', 'profiles': [
-                {'id': 'visual-clutter', 'direction': 'less-cluttered'}
+                {'id': 'visual-clutter', 'direction': 'reduce-complexity'}
             ]},
             {'status': 'achieved', 'title': 'Profile goal achieved', 'outcomes': []},
         )

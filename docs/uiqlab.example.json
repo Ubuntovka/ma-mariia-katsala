@@ -43,7 +43,7 @@
         "profiles": [
           {
             "id": "visual-clutter",
-            "direction": "less-cluttered"
+            "direction": "reduce-complexity"
           },
           {
             "id": "colorfulness",

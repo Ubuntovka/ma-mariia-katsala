@@ -19,7 +19,10 @@ npx --prefix apps/uiqlab-assessment playwright-core install-deps chromium
 ```
 
 Start the orchestrator at `http://127.0.0.1:8181`, open this directory in VS
-Code, and press `F5` to launch an Extension Development Host.
+Code, and press `F5` to launch an Extension Development Host. To use another
+orchestrator, for example a remote deployment, set
+`uiqlabAssessment.orchestratorUrl` in VS Code settings to its complete
+`http://` or `https://` base URL. A trailing slash is optional.
 
 The browser binary is not included in a standard VSIX. It must be packaged with
 a release or installed on the machine running the extension host. In Remote

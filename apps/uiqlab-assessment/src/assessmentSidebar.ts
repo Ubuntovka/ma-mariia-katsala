@@ -318,12 +318,10 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	<h2>Web UI assessment</h2><p class="intro">Configure an assessment here. Your choices remain available while you work.</p>
 	<form id="assessment-form" novalidate>
 		<fieldset><legend>What do you want to compare?</legend><div class="comparison-options">
-			<!-- Comparison modes hidden for the thesis experiments. Restore after the experiments.
-			<label class="source-option"><input type="radio" name="comparison" value="current-latest">Current state vs latest assessment</label>
+			<label class="source-option"><input type="radio" name="comparison" value="current-latest" checked>Current state vs latest assessment</label>
 			<label class="source-option"><input type="radio" name="comparison" value="current-selected">Current state vs selected assessment</label>
+			<label class="source-option"><input type="radio" name="comparison" value="deployment-urls">Two deployed URLs</label>
 			<label class="source-option"><input type="radio" name="comparison" value="past-past">Two previous assessments</label>
-			-->
-			<label class="source-option"><input type="radio" name="comparison" value="deployment-urls" checked>Two deployed URLs</label>
 		</div>
 		<div class="mode-panel hidden" id="selected-baseline-panel"><label class="select-label" for="selected-baseline">Previous assessment</label><select id="selected-baseline"></select><p class="empty-history hidden" id="selected-empty">No previous assessment matches this page.</p></div>
 		<div class="mode-panel hidden" id="past-comparison-panel">
@@ -426,7 +424,7 @@ function escapeHtml(value: string): string {
 }
 
 const PROFILE_DESCRIPTIONS: Readonly<Record<string, string>> = {
-	'visual-clutter': 'Tracks visual clutter using edge density, feature congestion, and subband entropy.',
+	'visual-clutter': 'Tracks visual complexity using edge density, feature congestion, and subband entropy.',
 	'screen-whitespace': 'Measures the proportion of the screen occupied by white space.',
 	'text-amount': 'Measures the amount of visible text using the page word count.',
 	colorfulness: 'Measures the interface colorfulness score.',
