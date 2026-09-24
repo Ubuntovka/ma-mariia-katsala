@@ -44,7 +44,7 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             'screenshotHeight': 900,
             'assessment': {
                 'mode': 'profiles',
-                'profiles': [{'id': 'visual-clutter', 'direction': 'less-cluttered'}],
+                'profiles': [{'id': 'visual-clutter', 'direction': 'reduce-complexity'}],
             },
         })
 
@@ -58,7 +58,7 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             'screenshotDimensions': {'width': 1440, 'height': 900},
             'assessment': {
                 'mode': 'profiles',
-                'profiles': [{'id': 'visual-clutter', 'direction': 'less-cluttered'}],
+                'profiles': [{'id': 'visual-clutter', 'direction': 'reduce-complexity'}],
             },
         })
 
@@ -370,7 +370,7 @@ class LlmExplanationTests(unittest.TestCase):
             [{'metric_id': 'm9_edge_density', 'results': [0.16]}],
             {'metrics': {'m9_edge_density': {'results': [0.24]}}},
             {'mode': 'profiles', 'profiles': [
-                {'id': 'visual-clutter', 'direction': 'less-cluttered'}
+                {'id': 'visual-clutter', 'direction': 'reduce-complexity'}
             ]},
             {
                 'status': 'achieved',
@@ -395,7 +395,7 @@ class LlmExplanationTests(unittest.TestCase):
             ]}],
             {'metrics': {'m10_feature_congestion': {'results': [{'score': 5.1}]}}},
             {'mode': 'profiles', 'profiles': [
-                {'id': 'visual-clutter', 'direction': 'less-cluttered'}
+                {'id': 'visual-clutter', 'direction': 'reduce-complexity'}
             ]},
             {'status': 'achieved', 'title': 'Profile goal achieved', 'outcomes': []},
         )
