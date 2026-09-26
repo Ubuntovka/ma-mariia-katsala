@@ -15,8 +15,8 @@ suite('Profile history assessment', () => {
 		), [{ id: 'accessibility', direction: 'fewer-detected-violations' }]);
 		assert.deepStrictEqual(normalizeProfileAssessmentSelection({
 			mode: 'profiles',
-			profiles: [{ id: 'visual-clutter', direction: 'reduce-complexity' }],
-		}), [{ id: 'visual-clutter', direction: 'reduce-complexity' }]);
+			profiles: [{ id: 'visual-complexity', direction: 'reduce-complexity' }],
+		}), [{ id: 'visual-complexity', direction: 'reduce-complexity' }]);
 		assert.strictEqual(normalizeProfileAssessmentSelection({ mode: 'custom' }), undefined);
 		assert.strictEqual(normalizeProfileAssessmentSelection('invalid JSON'), undefined);
 	});
@@ -38,7 +38,7 @@ suite('Profile history assessment', () => {
 		);
 		assert.strictEqual(comparisons[0]?.meaningfulChange, false);
 		const outcomes = classifyProfileOutcomes(
-			[{ id: 'visual-clutter', direction: 'reduce-complexity' }],
+			[{ id: 'visual-complexity', direction: 'reduce-complexity' }],
 			comparisons,
 			true,
 		);
@@ -48,7 +48,7 @@ suite('Profile history assessment', () => {
 
 	test('marks reduced visual complexity as achieved when its three metrics decrease', () => {
 		const summary = assessProfilesAgainstHistory(
-			[{ id: 'visual-clutter', direction: 'reduce-complexity' }],
+			[{ id: 'visual-complexity', direction: 'reduce-complexity' }],
 			[
 				{ metric_id: 'm9', results: [0.20] },
 				{ metric_id: 'm10', results: [2.0] },
@@ -85,7 +85,7 @@ suite('Profile history assessment', () => {
 
 	test('applies every requested directional movement', () => {
 		const cases = [
-			{ profile: { id: 'visual-clutter', direction: 'increase-complexity' }, metric: 'm9', delta: 1 },
+			{ profile: { id: 'visual-complexity', direction: 'increase-complexity' }, metric: 'm9', delta: 1 },
 			{ profile: { id: 'screen-whitespace', direction: 'less-whitespace' }, metric: 'm5', delta: -1 },
 			{ profile: { id: 'text-amount', direction: 'more-words' }, metric: 'm8', delta: 1 },
 			{ profile: { id: 'text-amount', direction: 'fewer-words' }, metric: 'm8', delta: -1 },
@@ -111,7 +111,7 @@ suite('Profile history assessment', () => {
 		assert.strictEqual(opposed[0]?.goalStatus, 'not-achieved');
 
 		const mixed = classifyProfileOutcomes(
-			[{ id: 'visual-clutter', direction: 'reduce-complexity' }],
+			[{ id: 'visual-complexity', direction: 'reduce-complexity' }],
 			[
 				{ id: 'm9', current: 1, previous: 2, delta: -1, meaningfulChange: true },
 				{ id: 'm10', current: 3, previous: 2, delta: 1, meaningfulChange: true },

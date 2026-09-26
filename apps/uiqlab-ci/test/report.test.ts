@@ -52,7 +52,7 @@ test('reports an observed NIMA change without judging aesthetic quality', () => 
 });
 
 test('includes metric comparisons, profile outcomes and final gate status', () => {
-  const assessment = { mode: 'profiles' as const, profiles: [{ id: 'visual-clutter', direction: 'reduce-complexity' }] };
+  const assessment = { mode: 'profiles' as const, profiles: [{ id: 'visual-complexity', direction: 'reduce-complexity' }] };
   const results: MetricResult[] = [
     { metric_id: 'm9_edge_density', results: [0.15] },
     { metric_id: 'm10_feature_congestion', results: [5.2] },

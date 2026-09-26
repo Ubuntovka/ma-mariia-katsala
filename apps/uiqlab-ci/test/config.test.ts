@@ -27,14 +27,14 @@ test('resolves profiles to unique metric IDs and retains their intent', async ()
     projectKey: '123e4567-e89b-12d3-a456-426614174000',
     ci: { branches: ['main'] },
     assessment: { mode: 'profiles', profiles: [
-      { id: 'visual-clutter', direction: 'reduce-complexity' },
+      { id: 'visual-complexity', direction: 'reduce-complexity' },
       { id: 'screen-whitespace', direction: 'more-whitespace' },
     ] },
   }));
   const config = await loadConfig(filename);
   assert.deepEqual(config.metrics, ['m9', 'm10', 'm11', 'm5']);
   assert.deepEqual(config.assessment, { mode: 'profiles', profiles: [
-    { id: 'visual-clutter', direction: 'reduce-complexity' },
+    { id: 'visual-complexity', direction: 'reduce-complexity' },
     { id: 'screen-whitespace', direction: 'more-whitespace' },
   ] });
   assert.equal(config.qualityGateMode, 'warn');
@@ -95,7 +95,7 @@ test('rejects invalid or duplicate CI page configurations', async () => {
   await assert.rejects(loadConfig(filename), /path must be a route path starting with/);
   await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [
     { path: '/checkout', profile: 'accessibility', direction: 'observe', qualityGate: { mode: 'warn' } },
-    { path: '/checkout/', profile: 'visual-clutter', direction: 'reduce-complexity', qualityGate: { mode: 'warn' } },
+    { path: '/checkout/', profile: 'visual-complexity', direction: 'reduce-complexity', qualityGate: { mode: 'warn' } },
   ] } }));
   await assert.rejects(loadConfig(filename), /must not contain duplicate path "\/checkout"/);
   await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [{ path: '/', profile: 'accessibility', direction: 'increase', qualityGate: { mode: 'warn' } }] } }));
@@ -108,7 +108,7 @@ test('rejects invalid or duplicate CI page configurations', async () => {
   await assert.rejects(loadConfig(filename), /qualityGate\.mode must be one of: report, warn, enforce/);
   await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [{ path: '/', profile: 'accessibility', direction: 'observe', qualityGate: { mode: 'warn', requireBaseline: 'yes' } }] } }));
   await assert.rejects(loadConfig(filename), /qualityGate\.requireBaseline must be a boolean/);
-  await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [{ path: '/', profiles: [{ id: 'accessibility', direction: 'observe' }], profile: 'visual-clutter', direction: 'reduce-complexity', qualityGate: { mode: 'warn' } }] } }));
+  await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [{ path: '/', profiles: [{ id: 'accessibility', direction: 'observe' }], profile: 'visual-complexity', direction: 'reduce-complexity', qualityGate: { mode: 'warn' } }] } }));
   await assert.rejects(loadConfig(filename), /cannot combine profiles with the legacy profile\/direction fields/);
   await writeFile(filename, JSON.stringify({ ...base, ci: { ...base.ci, pages: [{ path: '/', profiles: [
     { id: 'accessibility', direction: 'observe' },
@@ -149,7 +149,7 @@ test('rejects mixing profiles with manual metrics', async () => {
   await writeFile(filename, JSON.stringify({
     projectKey: '123e4567-e89b-12d3-a456-426614174000',
     ci: { branches: ['main'], metrics: ['m9'] },
-    assessment: { mode: 'profiles', profiles: [{ id: 'visual-clutter', direction: 'observe' }] },
+    assessment: { mode: 'profiles', profiles: [{ id: 'visual-complexity', direction: 'observe' }] },
   }));
   await assert.rejects(loadConfig(filename), /cannot combine assessment profiles with manual metrics/);
 });

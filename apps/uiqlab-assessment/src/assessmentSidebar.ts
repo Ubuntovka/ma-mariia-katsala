@@ -424,7 +424,7 @@ function escapeHtml(value: string): string {
 }
 
 const PROFILE_DESCRIPTIONS: Readonly<Record<string, string>> = {
-	'visual-clutter': 'Tracks visual complexity using edge density, feature congestion, and subband entropy.',
+	'visual-complexity': 'Tracks visual complexity using edge density, feature congestion, and subband entropy.',
 	'screen-whitespace': 'Measures the proportion of the screen occupied by white space.',
 	'text-amount': 'Measures the amount of visible text using the page word count.',
 	colorfulness: 'Measures the interface colorfulness score.',

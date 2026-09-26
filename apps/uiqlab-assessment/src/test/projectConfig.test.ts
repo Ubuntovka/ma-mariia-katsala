@@ -43,7 +43,7 @@ suite('Project configuration', () => {
 			await fs.writeFile(path.join(workspaceRoot, PROJECT_CONFIG_FILENAME), JSON.stringify({
 				projectKey: '123e4567-e89b-12d3-a456-426614174000', name: 'Demo',
 				assessment: { mode: 'profiles', profiles: [
-					{ id: 'visual-clutter', direction: 'reduce-complexity' },
+					{ id: 'visual-complexity', direction: 'reduce-complexity' },
 					{ id: 'text-amount', direction: 'preserve' },
 				] },
 			}));
@@ -51,7 +51,7 @@ suite('Project configuration', () => {
 			assert.deepStrictEqual(config.assessment, {
 				mode: 'profiles',
 				profiles: [
-					{ id: 'visual-clutter', direction: 'reduce-complexity' },
+					{ id: 'visual-complexity', direction: 'reduce-complexity' },
 					{ id: 'text-amount', direction: 'preserve' },
 				],
 				metrics: ['m9', 'm10', 'm11', 'm8'],

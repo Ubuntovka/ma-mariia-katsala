@@ -145,7 +145,7 @@ array. Do not combine the two forms.
 | Profile ID | Metrics selected | Direction options and their result |
 | --- | --- | --- |
 | `general-review` | `m1`-`m14` | `observe` records all metrics without treating movement as opposed. |
-| `visual-clutter` | `m9`, `m10`, `m11` | `reduce-complexity` expects all three metrics to decrease; `increase-complexity` expects all three to increase; `preserve` opposes any meaningful movement; `observe` reports movement without opposing it. |
+| `visual-complexity` | `m9`, `m10`, `m11` | `reduce-complexity` expects all three metrics to decrease; `increase-complexity` expects all three to increase; `preserve` opposes any meaningful movement; `observe` reports movement without opposing it. |
 | `screen-whitespace` | `m5` | `more-whitespace` expects M5 to increase; `less-whitespace` expects it to decrease; `preserve` and `observe` behave as above. |
 | `text-amount` | `m8` | `more-words` expects M8 to increase; `fewer-words` expects it to decrease; `preserve` and `observe` behave as above. |
 | `colorfulness` | `m3` | `more-colorful` expects M3 to increase; `less-colorful` expects it to decrease; `preserve` and `observe` behave as above. |

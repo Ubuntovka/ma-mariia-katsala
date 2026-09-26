@@ -201,7 +201,7 @@ Content-Type: application/json
   },
   "assessment": {
     "mode": "profiles",
-    "profiles": [{ "id": "visual-clutter", "direction": "reduce-complexity" }]
+    "profiles": [{ "id": "visual-complexity", "direction": "reduce-complexity" }]
   },
   "profileAssessment": {
     "status": "achieved",
