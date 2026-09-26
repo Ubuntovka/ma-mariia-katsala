@@ -9,12 +9,19 @@ export interface MetricResult {
 export interface AssessmentRunSummary {
   id: number;
   branch?: string;
+  screenshotResultId?: string;
   [key: string]: unknown;
 }
 
 export interface AssessmentHistory {
   metrics?: Record<string, { results: unknown }>;
+  currentRun?: AssessmentRunSummary;
   baselineRun?: AssessmentRunSummary;
+}
+
+export interface AssessmentScreenshots {
+  current: string;
+  baseline?: string;
 }
 
 export interface ReportMetric {
@@ -41,6 +48,7 @@ export interface AssessmentReport {
   profileOutcomes: ProfileOutcome[];
   qualityGate: QualityGateResult;
   comparison: { kind: 'latest-from-branch'; branch: string; run: AssessmentRunSummary } | null;
+  screenshots?: AssessmentScreenshots;
   metrics: ReportMetric[];
   rawResults: MetricResult[];
 }
@@ -184,6 +192,7 @@ interface BuildReportInput {
   assessment?: AssessmentReport['assessment'];
   qualityGateMode?: QualityGateMode;
   requireBaseline?: boolean;
+  screenshots?: AssessmentScreenshots;
 }
 
 export function buildReport(input: BuildReportInput): AssessmentReport {
@@ -253,6 +262,7 @@ export function buildReport(input: BuildReportInput): AssessmentReport {
     rawResults: input.results,
   };
   if (input.commitHash !== undefined) report.commitHash = input.commitHash;
+  if (input.screenshots !== undefined) report.screenshots = input.screenshots;
   return report;
 }
 

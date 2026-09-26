@@ -24,6 +24,10 @@ test('renders a self-contained visual report with profiles and metric comparison
     },
     assessment: { mode: 'profiles', profiles: [{ id: 'accessibility', direction: 'fewer-detected-violations' }] },
     qualityGateMode: 'warn',
+    screenshots: {
+      baseline: 'https://assets.example.com/before.png',
+      current: 'https://assets.example.com/after.png',
+    },
   });
   const html = renderHtmlReport(report, { generatedAt: new Date('2026-08-25T10:00:00.000Z') });
   assert.match(html, /^<!doctype html>/);
@@ -36,9 +40,15 @@ test('renders a self-contained visual report with profiles and metric comparison
   assert.match(html, /Meaningful change/);
   assert.match(html, /<img src="https:\/\/assets\.example\.com\/map\.png"/);
   assert.match(html, /2026-08-25T10:00:00.000Z/);
-  assert.match(html, /mode=&lt;unsafe&gt;/);
+  assert.match(html, /mode=%3Cunsafe%3E/);
+  assert.doesNotMatch(html, /preview\.example\.com/);
+  assert.match(html, /Page screenshots/);
+  assert.match(html, />Before</);
+  assert.match(html, />After</);
+  assert.match(html, /href="#screenshot-result-42-before"/);
+  assert.match(html, /href="#screenshot-result-42-after"/);
+  assert.match(html, /aria-label="Close fullscreen screenshot"/);
   assert.doesNotMatch(html, /<label>/);
-  assert.doesNotMatch(html, /<a\b/);
 });
 
 test('renders every page and the aggregate result for a batch report', () => {
@@ -54,7 +64,8 @@ test('renders every page and the aggregate result for a batch report', () => {
   const html = renderHtmlReport(report);
   assert.match(html, /Page 1/);
   assert.match(html, /Page 2/);
-  assert.match(html, /https:\/\/example\.com\/checkout/);
+  assert.match(html, /<h2>\/checkout<\/h2>/);
+  assert.doesNotMatch(html, /https:\/\/example\.com/);
   assert.match(html, /All 2 page assessments passed/);
 });
 
@@ -72,6 +83,49 @@ test('embeds visual metric files so the artifact does not depend on localhost UR
     const html = await renderHtmlReportWithEmbeddedImages(report);
     assert.match(html, /src="data:image\/png;base64,iVBORw=="/);
     assert.doesNotMatch(html, /src="http:\/\/localhost:8001\/results\/map.png"/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('embeds before and after page screenshots in the portable artifact', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(new Uint8Array([137, 80, 78, 71]), {
+    headers: { 'content-type': 'image/png' },
+  });
+  try {
+    const report = buildReport({
+      target: 'https://preview.example.com/account?tab=profile', branch: 'main', resultId: 'visual', baselineBranch: 'main',
+      results: [], history: { baselineRun: { id: 1, branch: 'main' } },
+      screenshots: {
+        baseline: 'http://orchestrator:8181/eval/result/before/screenshot.png',
+        current: 'http://orchestrator:8181/eval/result/after/screenshot.png',
+      },
+    });
+    const html = await renderHtmlReportWithEmbeddedImages(report);
+    assert.equal((html.match(/src="data:image\/png;base64,iVBORw=="/g) ?? []).length, 2);
+    assert.match(html, /<h2>\/account\?tab=profile<\/h2>/);
+    assert.match(html, /Click to view fullscreen/);
+    assert.match(html, /class="screenshot-open" href="#screenshot-visual-before"/);
+    assert.doesNotMatch(html, /orchestrator:8181/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('shows an explicit state instead of a blank image when a screenshot cannot be embedded', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response('not found', { status: 404 });
+  try {
+    const report = buildReport({
+      target: 'https://preview.example.com/account', branch: 'main', resultId: 'visual', baselineBranch: 'main',
+      results: [], history: {},
+      screenshots: { current: 'http://orchestrator:8181/eval/result/current/screenshot.png' },
+    });
+    const html = await renderHtmlReportWithEmbeddedImages(report);
+    assert.match(html, /Screenshot unavailable/);
+    assert.doesNotMatch(html, /class="screenshot-open"/);
+    assert.doesNotMatch(html, /src="http:\/\/orchestrator:8181/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -98,8 +152,9 @@ test('renders completed and technically failed pages in the same batch artifact'
     qualityGateMode: 'enforce', requireBaseline: true, reason: 'Orchestrator returned invalid JSON.',
   });
   const html = renderHtmlReport(buildBatchReport([completed, failed], 'main'));
-  assert.match(html, /https:\/\/example\.com\//);
-  assert.match(html, /https:\/\/example\.com\/checkout/);
+  assert.match(html, /<h2>\/<\/h2>/);
+  assert.match(html, /<h2>\/checkout<\/h2>/);
+  assert.doesNotMatch(html, /https:\/\/example\.com/);
   assert.match(html, /This page could not be completed/);
   assert.match(html, /Orchestrator returned invalid JSON/);
 });

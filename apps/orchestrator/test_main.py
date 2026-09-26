@@ -5,10 +5,12 @@ from fastapi import HTTPException
 from unittest.mock import AsyncMock, patch
 
 import httpx
+import main
 
 from main import (
     assessment_run_summary,
     backend_result_ids_for_run,
+    backend_screenshot_path,
     build_explanation_messages,
     compact_source_context,
     decode_backend_result_ids,
@@ -29,6 +31,7 @@ from main import (
     split_file_metrics,
     get_eval_result,
     get_eval_result_history,
+    get_eval_result_screenshot,
 )
 
 
@@ -83,6 +86,22 @@ class AssessmentRunSummaryTests(unittest.TestCase):
             'profiles': [{'id': 'accessibility', 'direction': 'fewer-detected-violations'}],
         })
 
+    def test_exposes_the_capture_result_id_when_backend_jobs_are_available(self):
+        summary = assessment_run_summary({
+            'id': 19,
+            'createdAt': datetime(2026, 8, 11, 12, 30, tzinfo=timezone.utc),
+            'commitHash': None,
+            'gitDirty': False,
+            'branch': 'main',
+            'assessedTarget': '/',
+            'screenshotWidth': None,
+            'screenshotHeight': None,
+            'assessment': None,
+            'backend_result_ids': ['desktop-capture', 'html-input'],
+        })
+
+        self.assertEqual(summary['screenshotResultId'], 'desktop-capture')
+
 
 class AssessedTargetTests(unittest.TestCase):
     def test_full_url_is_reduced_to_page_path(self):
@@ -114,6 +133,58 @@ class ServiceBaseUrlTests(unittest.TestCase):
             normalize_service_base_url('backend.example', 'BACKEND_URL')
         with self.assertRaisesRegex(RuntimeError, 'http:// or https://'):
             normalize_service_base_url('ftp://backend.example', 'BACKEND_URL')
+
+
+class BackendScreenshotPathTests(unittest.TestCase):
+    def test_uses_only_evaluator_owned_raster_paths(self):
+        self.assertEqual(
+            backend_screenshot_path('http://localhost:8001/input_files/capture.png'),
+            '/input_files/capture.png',
+        )
+        self.assertIsNone(backend_screenshot_path('http://example.com/results/capture.png'))
+        self.assertIsNone(backend_screenshot_path('http://example.com/input_files/../secret.png'))
+
+
+class BackendScreenshotProxyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fetches_the_evaluator_capture_through_the_backend_origin(self):
+        requested_urls = []
+
+        class BackendResponse:
+            def __init__(self, *, data=None, content=b'', content_type='application/json'):
+                self.data = data
+                self.content = content
+                self.headers = {'content-type': content_type}
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.data
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def get(self, url):
+                requested_urls.append(url)
+                if '/eval/data/' in url:
+                    return BackendResponse(data={
+                        'screenshot_path': 'http://localhost:8001/input_files/capture.png',
+                    })
+                return BackendResponse(content=b'png-bytes', content_type='image/png')
+
+        with patch('main.httpx.AsyncClient', return_value=Client()):
+            response = await get_eval_result_screenshot('capture-id')
+
+        self.assertEqual(response.body, b'png-bytes')
+        self.assertEqual(response.media_type, 'image/png')
+        self.assertEqual(requested_urls, [
+            f'{main.BACKEND_URL}/eval/data/capture-id',
+            f'{main.BACKEND_ARTIFACT_URL}/input_files/capture.png',
+        ])
 
 
 class BackendStatusErrorTests(unittest.TestCase):

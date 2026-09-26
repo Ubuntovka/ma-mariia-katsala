@@ -62,6 +62,19 @@ function safeLink(value: string): string | undefined {
   }
 }
 
+function displayTarget(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.pathname || '/'}${url.search}${url.hash}`;
+  } catch {
+    return value;
+  }
+}
+
+function screenshotDomId(resultId: string, label: string): string {
+  return `screenshot-${resultId}-${label}`.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+}
+
 function formatNumber(value: number): string {
   return new Intl.NumberFormat('en', { maximumFractionDigits: 3 }).format(value);
 }
@@ -198,17 +211,37 @@ function renderProfiles(report: AssessmentReport): string {
   return `<section><div class="section-heading"><div><span class="eyebrow">Profile assessment</span><h2>Profile outcomes</h2></div><span class="count">${report.profileOutcomes.length}</span></div><div class="profile-grid">${profiles}</div></section>`;
 }
 
+function renderScreenshots(report: AssessmentReport, options: HtmlReportOptions): string {
+  if (!report.screenshots) return '';
+  const screenshots = [
+    ...(report.screenshots.baseline ? [{ label: 'Before', url: report.screenshots.baseline }] : []),
+    { label: 'After', url: report.screenshots.current },
+  ];
+  return `<section class="screenshot-section"><div class="section-heading"><div><span class="eyebrow">Visual comparison</span><h2>Page screenshots</h2></div><span class="count">${screenshots.length}</span></div><div class="screenshot-grid ${screenshots.length === 1 ? 'screenshot-grid-single' : ''}">${screenshots.map(({ label, url }) => {
+    const source = options.imageSources?.get(url);
+    const available = Boolean(source) || options.imageSources === undefined;
+    const id = screenshotDomId(report.resultId, label);
+    const image = available
+      ? `<a class="screenshot-open" href="#${id}" aria-label="View ${label.toLowerCase()} screenshot fullscreen"><img src="${escapeHtml(source ?? url)}" alt="${label} screenshot of ${escapeHtml(displayTarget(report.target))}" loading="lazy"></a>`
+      : '<div class="screenshot-unavailable" role="img" aria-label="Screenshot unavailable"><strong>Screenshot unavailable</strong><span>The capture could not be embedded while this report was generated.</span></div>';
+    const close = available ? '<a class="screenshot-close" href="#" aria-label="Close fullscreen screenshot">&#215;</a>' : '';
+    const instruction = available ? ' · Click to view fullscreen' : '';
+    return `<figure class="page-screenshot" id="${id}"><div class="screenshot-label">${label}</div>${close}${image}<figcaption>${label === 'Before' ? 'Latest compatible baseline' : 'Current assessment'}${instruction}</figcaption></figure>`;
+  }).join('')}</div></section>`;
+}
+
 function renderPage(report: AssessmentReport, options: HtmlReportOptions, index?: number): string {
   const comparison = report.comparison
     ? `Latest compatible run from <strong>${escapeHtml(report.comparison.branch)}</strong>`
     : 'No compatible baseline was available; this run establishes one.';
   return `<section class="page-report">
     <div class="page-heading">
-      <div><span class="eyebrow">${index === undefined ? 'Assessed page' : `Page ${index + 1}`}</span><h2>${escapeHtml(report.target)}</h2></div>
+      <div><span class="eyebrow">${index === undefined ? 'Assessed page' : `Page ${index + 1}`}</span><h2>${escapeHtml(displayTarget(report.target))}</h2></div>
       <span class="result-id">Result ${escapeHtml(report.resultId)}</span>
     </div>
     ${renderGate(report.qualityGate)}
     <div class="comparison-note"><span aria-hidden="true">&#8644;</span><span>${comparison}</span></div>
+    ${renderScreenshots(report, options)}
     ${renderProfiles(report)}
     <section><div class="section-heading"><div><span class="eyebrow">Measured evidence</span><h2>Metric results</h2></div><span class="count">${report.metrics.length}</span></div><div class="metric-grid">${report.metrics.map((metric) => renderMetric(metric, options)).join('')}</div></section>
   </section>`;
@@ -217,7 +250,7 @@ function renderPage(report: AssessmentReport, options: HtmlReportOptions, index?
 function renderFailedPage(report: FailedPageAssessmentReport, index: number): string {
   return `<section class="page-report">
     <div class="page-heading">
-      <div><span class="eyebrow">Page ${index + 1}</span><h2>${escapeHtml(report.target)}</h2></div>
+      <div><span class="eyebrow">Page ${index + 1}</span><h2>${escapeHtml(displayTarget(report.target))}</h2></div>
       <span class="outcome">Technical failure</span>
     </div>
     ${renderGate(report.qualityGate)}
@@ -325,6 +358,7 @@ export function renderHtmlReport(report: unknown, options: HtmlReportOptions = {
     .result-id,.count,.change-badge,.outcome { padding:5px 9px; border-radius:999px; background:var(--muted-surface); color:var(--soft); font-size:11px; font-weight:750; white-space:nowrap; }
     .result-id { max-width:220px; overflow:hidden; text-overflow:ellipsis; font-family:"SFMono-Regular",Consolas,monospace; }
     .comparison-note { display:flex; gap:9px; margin:-10px 0 26px; padding:10px 12px; border-radius:6px; color:var(--soft); background:var(--subtle); font-size:13px; }
+    .screenshot-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }.screenshot-grid-single { grid-template-columns:minmax(0,720px); }.page-screenshot { position:relative; min-width:0; margin:0; overflow:hidden; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }.screenshot-open { position:relative; display:block; color:inherit; cursor:zoom-in; }.screenshot-open::after { content:"View fullscreen"; position:absolute; right:10px; bottom:10px; padding:6px 9px; border-radius:5px; color:#fff; background:rgba(16,47,70,.88); font-size:10px; font-weight:750; opacity:0; transform:translateY(3px); transition:opacity .18s ease,transform .18s ease; }.screenshot-open:hover::after,.screenshot-open:focus-visible::after { opacity:1; transform:translateY(0); }.page-screenshot img,.screenshot-unavailable { display:block; width:100%; aspect-ratio:16/9; object-fit:contain; background:#fff; }.screenshot-unavailable { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; padding:34px; color:var(--muted); text-align:center; }.screenshot-unavailable strong { color:var(--soft); font-size:14px; }.screenshot-unavailable span { max-width:330px; font-size:12px; line-height:1.45; }.page-screenshot figcaption { padding:8px 10px; color:var(--muted); font-size:11px; text-align:center; }.screenshot-label { position:absolute; z-index:2; top:9px; left:9px; padding:5px 9px; border-radius:999px; color:#fff; background:rgba(16,47,70,.9); font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; }.screenshot-close { display:none; }.page-screenshot:target { position:fixed; z-index:1000; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; margin:0; padding:48px; overflow:auto; border:0; border-radius:0; background:rgba(5,15,23,.96); }.page-screenshot:target .screenshot-open { display:flex; width:100%; min-height:0; flex:1; align-items:center; justify-content:center; cursor:default; }.page-screenshot:target .screenshot-open::after { display:none; }.page-screenshot:target img { width:auto; max-width:100%; height:auto; max-height:calc(100vh - 120px); aspect-ratio:auto; background:transparent; }.page-screenshot:target figcaption { color:#dbe6eb; }.page-screenshot:target .screenshot-label { top:18px; left:20px; }.page-screenshot:target .screenshot-close { position:fixed; z-index:3; top:14px; right:18px; display:grid; place-items:center; width:38px; height:38px; border:1px solid rgba(255,255,255,.45); border-radius:50%; color:#fff; background:rgba(16,47,70,.92); font-size:25px; line-height:1; text-decoration:none; }
     section section { margin-top:26px; }.section-heading { align-items:center; margin-bottom:12px; }.section-heading h2 { margin:3px 0 0; color:var(--navy); font-size:19px; }.count { min-width:28px; text-align:center; }
     .profile-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:11px; }
     .profile-card { padding:15px; border:1px solid var(--border); border-top:4px solid var(--accent); border-radius:8px; background:var(--surface); }.profile-card.outcome-aligned { border-top-color:var(--success); }.profile-card.outcome-opposed { border-top-color:var(--danger); }.profile-card.outcome-mixed { border-top-color:var(--warning); }
@@ -336,8 +370,9 @@ export function renderHtmlReport(report: unknown, options: HtmlReportOptions = {
     details { margin-top:12px; border-top:1px solid var(--muted-surface); }.metric-card summary { padding-top:10px; color:var(--muted); cursor:pointer; font-size:11px; font-weight:700; }.metric-card pre { max-height:260px; overflow:auto; margin:10px 0 0; padding:11px; border-radius:5px; color:var(--soft); background:#f5f7f8; font:11px/1.45 "SFMono-Regular",Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
     .state-card { max-width:680px; margin:16px auto; padding:34px; border:1px solid var(--border); border-top:5px solid var(--danger); border-radius:10px; text-align:center; }.state-skipped { border-top-color:var(--accent); }.state-icon { display:grid; place-items:center; width:45px; height:45px; margin:0 auto 14px; border-radius:50%; color:#fff; background:var(--danger); font-size:23px; font-weight:800; }.state-skipped .state-icon { background:var(--accent); }.state-card h2 { margin:5px 0 10px; color:var(--navy); }.state-card>p { margin:0; color:var(--soft); line-height:1.55; }
     footer { padding:15px 34px; border-top:1px solid var(--border); color:var(--muted); background:var(--subtle); font-size:11px; text-align:center; }
-    @media (max-width:760px) { .shell { margin:0; border-width:0; border-radius:0; }.brand { align-items:flex-start; }.brand-mark { display:none; }.brand { flex-wrap:wrap; }.header-status { order:3; } header,main { padding:22px 18px; }.overview { grid-template-columns:repeat(2,1fr); }.metric-grid { grid-template-columns:1fr; }.metric-values { grid-template-columns:1fr 1fr; }.metric-values .arrow { display:none; }.page-heading { display:block; }.result-id { display:inline-block; margin-top:9px; } }
-    @media print { html,body { background:#fff; }.shell { max-width:none; margin:0; border:0; box-shadow:none; }.metric-card,.profile-card,.gate,.overview>div { break-inside:avoid; } details { display:none; } footer { background:#fff; } }
+    @media (max-width:760px) { .shell { margin:0; border-width:0; border-radius:0; }.brand { align-items:flex-start; }.brand-mark { display:none; }.brand { flex-wrap:wrap; }.header-status { order:3; } header,main { padding:22px 18px; }.overview { grid-template-columns:repeat(2,1fr); }.screenshot-grid { grid-template-columns:1fr; }.metric-grid { grid-template-columns:1fr; }.metric-values { grid-template-columns:1fr 1fr; }.metric-values .arrow { display:none; }.page-heading { display:block; }.result-id { display:inline-block; margin-top:9px; } }
+    @media (prefers-reduced-motion:reduce) { .screenshot-open::after { transition:none; } }
+    @media print { html,body { background:#fff; }.shell { max-width:none; margin:0; border:0; box-shadow:none; }.page-screenshot,.metric-card,.profile-card,.gate,.overview>div { break-inside:avoid; }.screenshot-close,.screenshot-open::after { display:none!important; } details { display:none; } footer { background:#fff; } }
   </style>
 </head>
 <body>

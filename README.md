@@ -63,8 +63,10 @@ Copy-Item .env.example .env
 
 Edit `.env` and set `BACKEND_URL` to the backend's Docker service name and port.
 The default, `http://nginx`, assumes the backend uses the service name `nginx`
-on `thesis-network`. LLM settings are optional and are needed only for AI
-explanations.
+on `thesis-network`. `BACKEND_ARTIFACT_URL` must reach the backend's
+`/input_files` and `/results` routes; its Docker Desktop default uses the
+published evaluator port at `host.docker.internal:8001`. LLM settings are
+optional and are needed only for AI explanations.
 
 ### 3. Start UIQLab
 

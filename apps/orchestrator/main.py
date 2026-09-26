@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response
 from pydantic import BaseModel
 from typing import List, Optional, Tuple
 from urllib.parse import urlsplit
@@ -26,6 +26,9 @@ def normalize_service_base_url(value: str, setting_name: str) -> str:
 
 BACKEND_URL = normalize_service_base_url(
     os.getenv("BACKEND_URL", "http://nginx"), "BACKEND_URL"
+)
+BACKEND_ARTIFACT_URL = normalize_service_base_url(
+    os.getenv("BACKEND_ARTIFACT_URL", BACKEND_URL), "BACKEND_ARTIFACT_URL"
 )
 POSTGRES_USER = os.getenv("POSTGRES_USER", "orchestrator")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "orchestrator")
@@ -1374,6 +1377,16 @@ def backend_result_ids_for_run(run, fallback_id: Optional[str] = None) -> List[s
     return [fallback_id] if fallback_id else []
 
 
+def backend_screenshot_path(value) -> Optional[str]:
+    """Return only evaluator-owned input image paths from screenshot metadata."""
+    if not isinstance(value, str):
+        return None
+    path = urlsplit(value).path
+    if not re.fullmatch(r'/input_files/[^/]+\.(?:png|jpe?g|webp)', path, re.IGNORECASE):
+        return None
+    return path
+
+
 async def fetch_merged_backend_results(client, backend_ids: List[str]):
     """Fetch transient UIQLab results for every job and merge them by metric ID."""
     responses = await asyncio.gather(*[
@@ -1436,7 +1449,37 @@ def assessment_run_summary(run):
             assessment = None
     if assessment is not None:
         summary['assessment'] = assessment
+    backend_ids = backend_result_ids_for_run(run)
+    if backend_ids:
+        summary['screenshotResultId'] = backend_ids[0]
     return summary
+
+
+@app.get("/eval/result/{wui_id}/screenshot.png")
+async def get_eval_result_screenshot(wui_id: str):
+    """Proxy an evaluator-owned desktop capture for use in portable CI reports."""
+    timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            metadata_response = await client.get(f"{BACKEND_URL}/eval/data/{wui_id}")
+            metadata_response.raise_for_status()
+            metadata = metadata_response.json()
+            path = backend_screenshot_path(
+                metadata.get('screenshot_path') if isinstance(metadata, dict) else None
+            )
+            if path is None:
+                raise HTTPException(status_code=404, detail='Screenshot not found')
+            screenshot_response = await client.get(f"{BACKEND_ARTIFACT_URL}{path}")
+            screenshot_response.raise_for_status()
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=502, detail=f'Failed to load screenshot: {exc}')
+
+    content_type = screenshot_response.headers.get('content-type', '').split(';', 1)[0]
+    if content_type not in {'image/png', 'image/jpeg', 'image/webp'}:
+        raise HTTPException(status_code=502, detail='Evaluator returned an invalid screenshot type')
+    return Response(content=screenshot_response.content, media_type=content_type)
 
 
 @app.get("/eval/result/{wui_id}/history")
