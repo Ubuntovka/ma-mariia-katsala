@@ -98,10 +98,11 @@ option.
 
 `uiqlab-report.html` is responsive and self-contained: its styling is embedded,
 it uses no JavaScript, and the current page capture, compatible baseline capture,
-and visual metric files are downloaded and embedded while the CI job can still
-reach the evaluator. Page headings show only the route rather than the temporary
-preview origin, and each embedded page capture can be clicked for a fullscreen
-view. Open it directly from the downloaded
+and before/after visual metric files are downloaded and embedded while the CI job
+can still reach the evaluator. Page headings show only the route rather than the
+temporary preview origin, and each embedded page capture can be clicked for a
+fullscreen view. Visual metric images can likewise be clicked to inspect them
+at full size. Open the report directly from the downloaded
 pipeline artifact. Its print layout can also be saved as a PDF from the browser.
 Keep the JSON artifact for tooling and long-term machine-readable results.
 

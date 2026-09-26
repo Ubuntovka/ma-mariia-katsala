@@ -34,6 +34,7 @@ export interface ReportMetric {
   meaningfulChange?: boolean;
   materialityRule?: { absoluteChangeAtLeast: number; relativeChangePercentAtLeast?: number };
   raw: unknown[];
+  baselineRaw?: unknown;
 }
 
 export interface AssessmentReport {
@@ -208,6 +209,7 @@ export function buildReport(input: BuildReportInput): AssessmentReport {
       name: METRIC_NAMES[family] ?? metricId,
       raw: result.results,
     };
+    if (previousEntry !== undefined) metric.baselineRaw = previousEntry.results;
     if (current !== undefined) metric.current = current;
     if (previous !== undefined) metric.previous = previous;
     if (delta !== undefined) {

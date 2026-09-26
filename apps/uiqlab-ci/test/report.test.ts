@@ -27,6 +27,7 @@ test('formats scalar comparisons and applies materiality rules', () => {
   assert.match(summary, /Word count: 430 → 487 \(\+13.3%\)/);
   assert.match(summary, /Automatically detected violations: 3 → 4/);
   assert.equal(report.metrics.find((metric) => metric.id.startsWith('m10'))?.meaningfulChange, true);
+  assert.deepEqual(report.metrics.find((metric) => metric.id.startsWith('m10'))?.baselineRaw, [0.42]);
   assert.equal(report.qualityGate.status, 'pass');
 });
 

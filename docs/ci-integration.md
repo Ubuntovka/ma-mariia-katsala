@@ -12,12 +12,12 @@ after every run:
 - `uiqlab-report.html` is a self-contained, responsive visual report with the
   same palette and information hierarchy as the IDE results. It includes the
   overall gate, page and profile outcomes, baseline comparisons, metric cards,
-  embedded before/after page captures, embedded visual metric files, and
+  embedded before/after page captures, before/after visual metric files, and
   expandable raw values. Page headings contain only the route after the preview
   host and port, and embedded page captures open in a fullscreen overlay when
-  clicked. It has no JavaScript or external stylesheet. Visual files are fetched
-  while the CI job can still reach the evaluator, avoiding broken `localhost`
-  URLs in downloaded artifacts.
+  clicked. Visual metric images also open at full size. It has no JavaScript or
+  external stylesheet. Visual files are fetched while the CI job can still reach
+  the evaluator, avoiding broken `localhost` URLs in downloaded artifacts.
 - `uiqlab-report.json` remains the machine-readable source of truth for later
   automation.
 

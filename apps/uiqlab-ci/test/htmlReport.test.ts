@@ -47,6 +47,8 @@ test('renders a self-contained visual report with profiles and metric comparison
   assert.match(html, />After</);
   assert.match(html, /href="#screenshot-result-42-before"/);
   assert.match(html, /href="#screenshot-result-42-after"/);
+  assert.match(html, /class="screenshot-close" href="#screenshot-result-42-before-closed"/);
+  assert.match(html, /class="screenshot-close" href="#screenshot-result-42-after-closed"/);
   assert.match(html, /aria-label="Close fullscreen screenshot"/);
   assert.doesNotMatch(html, /<label>/);
 });
@@ -77,12 +79,25 @@ test('embeds visual metric files so the artifact does not depend on localhost UR
   try {
     const report = buildReport({
       target: 'https://example.com', branch: 'main', resultId: 'visual', baselineBranch: 'main',
-      results: [{ metric_id: 'm10_feature_congestion', results: [4.2, 'http://localhost:8001/results/map.png'] }],
-      history: {},
+      results: [{ metric_id: 'm10_feature_congestion', results: [4.2, 'http://localhost:8001/results/after-map.png'] }],
+      history: {
+        baselineRun: { id: 1, branch: 'main' },
+        metrics: { m10_feature_congestion: { results: [3.8, 'http://localhost:8001/results/before-map.png'] } },
+      },
     });
     const html = await renderHtmlReportWithEmbeddedImages(report);
-    assert.match(html, /src="data:image\/png;base64,iVBORw=="/);
-    assert.doesNotMatch(html, /src="http:\/\/localhost:8001\/results\/map.png"/);
+    assert.equal((html.match(/src="data:image\/png;base64,iVBORw=="/g) ?? []).length, 2);
+    assert.match(html, /class="metric-visual-phase">Before</);
+    assert.match(html, /class="metric-visual-phase">After</);
+    assert.match(html, /Before · Visual result 1/);
+    assert.match(html, /After · Visual result 1/);
+    assert.match(html, /class="metric-visual-open" href="#metric-visual-visual-m10_feature_congestion-before-1"/);
+    assert.match(html, /class="metric-visual-open" href="#metric-visual-visual-m10_feature_congestion-after-1"/);
+    assert.match(html, /class="metric-visual-close" href="#metric-visual-visual-m10_feature_congestion-before-1-closed"/);
+    assert.match(html, /class="metric-visual-close" href="#metric-visual-visual-m10_feature_congestion-after-1-closed"/);
+    assert.match(html, /aria-label="Close full-size visual result"/);
+    assert.match(html, /Click to view full size/);
+    assert.doesNotMatch(html, /src="http:\/\/localhost:8001\/results\//);
   } finally {
     globalThis.fetch = originalFetch;
   }
