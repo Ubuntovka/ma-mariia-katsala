@@ -200,3 +200,27 @@ test('fails an enforced page when any one of its profiles is opposed', () => {
   assert.equal(buildReport({ ...input, qualityGateMode: 'warn' }).qualityGate.status, 'warning');
   assert.equal(buildReport({ ...input, qualityGateMode: 'report' }).qualityGate.status, 'pass');
 });
+
+test('prints profile goals and non-significant movements in the job log', () => {
+  const assessment = { mode: 'profiles' as const, profiles: [{ id: 'visual-complexity', direction: 'reduce-complexity' }, { id: 'text-amount', direction: 'fewer-words' }] };
+  const results: MetricResult[] = [
+    { metric_id: 'm9_edge_density', results: [0.02857] },
+    { metric_id: 'm10_feature_congestion', results: [10.2] },
+    { metric_id: 'm11_subband_entropy', results: [2.244] },
+    { metric_id: 'm8_word_count', results: [206] },
+  ];
+  const history: AssessmentHistory = { baselineRun: { id: 4, branch: 'main' }, metrics: {
+    m9_edge_density: { results: [0.03347] }, m10_feature_congestion: { results: [9.92] },
+    m11_subband_entropy: { results: [2.228] }, m8_word_count: { results: [212] },
+  } };
+  const report = buildReport({ target: 'https://example.com/courses', branch: 'feature/ui', resultId: 'job', baselineBranch: 'main', results, history, assessment, qualityGateMode: 'enforce' });
+  assert.equal(report.qualityGate.status, 'pass');
+  assert.equal(report.profileGoals?.status, 'partial');
+  const summary = formatSummary(report, 'main');
+  assert.match(summary, /Profile goals: Profile goals partially achieved\./);
+  assert.match(summary, /Goal: achieved/);
+  assert.match(summary, /Goal: not reached \(no meaningful change\)/);
+  assert.match(summary, /Not significant \(not counted\):/);
+  assert.match(summary, /Feature congestion increased: 9\.92 → 10\.2 \(\+2\.8%\) — small change against the goal, not significant \(significant from \|change\| ≥ 0\.5 or ≥ 10%\)/);
+  assert.match(summary, /Word count decreased: 212 → 206 \(-2\.8%\) — small change toward the goal, not significant \(significant from \|change\| ≥ 20 or ≥ 10%\)/);
+});

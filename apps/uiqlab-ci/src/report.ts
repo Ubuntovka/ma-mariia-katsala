@@ -1,5 +1,15 @@
 import { ASSESSMENT_PROFILES } from './assessmentProfiles.js';
-import { classifyProfiles, evaluateQualityGate, qualityGateExitCode, type ProfileOutcome, type QualityGateMode, type QualityGateResult } from './qualityGate.js';
+import {
+  classifyProfiles,
+  evaluateQualityGate,
+  qualityGateExitCode,
+  summarizeProfileGoals,
+  type ProfileGoalStatus,
+  type ProfileGoalSummary,
+  type ProfileOutcome,
+  type QualityGateMode,
+  type QualityGateResult,
+} from './qualityGate.js';
 
 export interface MetricResult {
   metric_id: string;
@@ -47,6 +57,7 @@ export interface AssessmentReport {
   resultId: string;
   assessment: { mode: 'custom' } | { mode: 'profiles'; profiles: Array<{ id: string; direction: string }> };
   profileOutcomes: ProfileOutcome[];
+  profileGoals?: ProfileGoalSummary;
   qualityGate: QualityGateResult;
   comparison: { kind: 'latest-from-branch'; branch: string; run: AssessmentRunSummary } | null;
   screenshots?: AssessmentScreenshots;
@@ -182,6 +193,33 @@ function formatMetricComparison(metric: ReportMetric & { current: number; previo
   return `${values}${formatDelta(metric.delta, metric.relativeDeltaPercent)}`;
 }
 
+const GOAL_STATUS_LABELS: Record<ProfileGoalStatus, string> = {
+  achieved: 'achieved',
+  'not-achieved': 'not achieved',
+  partial: 'partially achieved',
+  unchanged: 'not reached (no meaningful change)',
+  observed: 'observed',
+  'not-comparable': 'not comparable',
+};
+
+export function goalStatusLabel(status: ProfileGoalStatus): string {
+  return GOAL_STATUS_LABELS[status];
+}
+
+export function materialityRuleLabel(metric: Pick<ReportMetric, 'materialityRule'>): string | undefined {
+  const rule = metric.materialityRule;
+  if (!rule) return undefined;
+  const absolute = `|change| ≥ ${formatNumber(rule.absoluteChangeAtLeast)}`;
+  return rule.relativeChangePercentAtLeast === undefined ? absolute : `${absolute} or ≥ ${rule.relativeChangePercentAtLeast}%`;
+}
+
+function toleranceInterpretation(movement: ProfileOutcome['withinToleranceMetrics'][number]['movement']): string {
+  if (movement === 'toward') return 'small change toward the goal, not significant';
+  if (movement === 'against') return 'small change against the goal, not significant';
+  if (movement === 'undirected') return 'not significant';
+  return 'no change';
+}
+
 interface BuildReportInput {
   target: string;
   branch: string;
@@ -239,6 +277,7 @@ export function buildReport(input: BuildReportInput): AssessmentReport {
         ...(metric.previous !== undefined ? { previous: metric.previous } : {}),
         ...(metric.delta !== undefined ? { delta: metric.delta } : {}),
         ...(metric.meaningfulChange !== undefined ? { meaningfulChange: metric.meaningfulChange } : {}),
+        ...(metric.relativeDeltaPercent !== undefined ? { relativeDeltaPercent: metric.relativeDeltaPercent } : {}),
       })),
       Boolean(input.history.baselineRun),
     )
@@ -263,6 +302,7 @@ export function buildReport(input: BuildReportInput): AssessmentReport {
     metrics,
     rawResults: input.results,
   };
+  if (assessment.mode === 'profiles') report.profileGoals = summarizeProfileGoals(profileOutcomes);
   if (input.commitHash !== undefined) report.commitHash = input.commitHash;
   if (input.screenshots !== undefined) report.screenshots = input.screenshots;
   return report;
@@ -356,6 +396,7 @@ export function formatSummary(
   const lines = [
     'Web UI Assessment', '', `Quality gate: ${report.qualityGate.status.toUpperCase()} (${report.qualityGate.mode})`,
     `Decision: ${gateDecision}`,
+    ...(report.profileGoals ? [`Profile goals: ${report.profileGoals.title}. ${report.profileGoals.description}`] : []),
     `Exit code: ${qualityGateExitCode(report.qualityGate, warningExitCode)}`,
     `Target: ${report.target}`,
     report.comparison ? `Compared with: latest assessment from ${baselineBranch}` : `Compared with: no previous assessment from ${baselineBranch} was available`,
@@ -363,7 +404,7 @@ export function formatSummary(
   if (report.profileOutcomes.length > 0) {
     lines.push('', 'Profiles:');
     for (const profile of report.profileOutcomes) {
-      lines.push(`- ${ASSESSMENT_PROFILES[profile.id]?.displayName ?? profile.id}`, `  Expected direction: ${profile.direction}`, `  Outcome: ${profile.outcome.toUpperCase()}`, `  Reason: ${profile.reason}`);
+      lines.push(`- ${ASSESSMENT_PROFILES[profile.id]?.displayName ?? profile.id}`, `  Expected direction: ${profile.direction}`, `  Outcome: ${profile.outcome.toUpperCase()}`, `  Goal: ${goalStatusLabel(profile.goalStatus)}`, `  Reason: ${profile.reason}`);
       if (profile.meaningfulMetrics.length > 0) {
         lines.push('  Meaningful changes:');
         for (const metricId of profile.meaningfulMetrics) {
@@ -374,6 +415,16 @@ export function formatSummary(
             ? 'observed for this profile'
             : `${profile.alignedMetrics.includes(metricId) ? 'aligned with' : 'opposed to'} the profile goal`;
           lines.push(`    - ${metric.name} ${movement}: ${formatMetricComparison({ ...metric, current: metric.current, previous: metric.previous, delta: metric.delta })} — ${interpretation}`);
+        }
+      }
+      if (profile.withinToleranceMetrics.length > 0) {
+        lines.push('  Not significant (not counted):');
+        for (const entry of profile.withinToleranceMetrics) {
+          const metric = report.metrics.find((candidate) => candidate.id.split('_', 1)[0] === entry.id);
+          if (!metric || metric.current === undefined || metric.previous === undefined || metric.delta === undefined) continue;
+          const movement = metric.delta > 0 ? 'increased' : metric.delta < 0 ? 'decreased' : 'unchanged';
+          const rule = materialityRuleLabel(metric);
+          lines.push(`    - ${metric.name} ${movement}: ${formatMetricComparison({ ...metric, current: metric.current, previous: metric.previous, delta: metric.delta })} — ${toleranceInterpretation(entry.movement)}${rule ? ` (significant from ${rule})` : ''}`);
         }
       }
     }

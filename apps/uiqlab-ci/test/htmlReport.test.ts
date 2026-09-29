@@ -173,3 +173,22 @@ test('renders completed and technically failed pages in the same batch artifact'
   assert.match(html, /This page could not be completed/);
   assert.match(html, /Orchestrator returned invalid JSON/);
 });
+
+test('shows profile goal status and non-significant movement chips', () => {
+  const report = buildReport({
+    target: 'https://preview.example.com/dashboard',
+    branch: 'feature/ui',
+    resultId: 'result-7',
+    baselineBranch: 'main',
+    results: [{ metric_id: 'm8_word_count', results: [206] }],
+    history: { baselineRun: { id: 1, branch: 'main' }, metrics: { m8_word_count: { results: [212] } } },
+    assessment: { mode: 'profiles', profiles: [{ id: 'text-amount', direction: 'fewer-words' }] },
+    qualityGateMode: 'enforce',
+  });
+  const html = renderHtmlReport(report);
+  assert.match(html, /Quality gate · enforce/);
+  assert.match(html, /class="goal-summary goal-unchanged"/);
+  assert.match(html, /No meaningful progress toward the goals/);
+  assert.match(html, /Goal · not reached \(no meaningful change\)/);
+  assert.match(html, /class="metric-chip tolerance tolerance-toward" title="Significant from \|change\| ≥ 20 or ≥ 10%">m8 -2\.83% · toward goal, not significant</);
+});

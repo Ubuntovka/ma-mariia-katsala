@@ -158,6 +158,22 @@ Profile outcomes are `aligned`, `opposed`, `mixed`, `unchanged`, or
 `not-comparable`. Only fixed, materially changed scalar metrics influence the
 directional outcome; visual/raw results remain available in the reports.
 
+Each profile also carries a goal status, using the same rules as the IDE
+profile dashboard: `achieved`, `not-achieved`, `partial`, `unchanged`,
+`observed`, or `not-comparable`. The page report adds a `profileGoals` summary
+(for example **No meaningful progress toward the goals**). The goal status is
+informational: the quality gate checks for movement *against* the configured
+directions, so an `unchanged` profile passes in every mode. This keeps pages
+that a change does not touch from blocking it.
+
+Comparable metrics that stay within their materiality threshold are labelled
+**not significant** in the reports and are listed per profile in the JSON field
+`withinToleranceMetrics`. Each entry is marked as moving `toward` or `against`
+the direction, with `none` for no change or `undirected` for
+`preserve`/`observe`. These metrics do not change the outcome, but the job log,
+the HTML report, and the profile reason show them together with the threshold,
+so a small change in either direction remains visible.
+
 ### Quality-gate options and outcomes
 
 | Mode | Aligned, unchanged, or not comparable | Mixed | Opposed |

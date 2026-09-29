@@ -289,6 +289,12 @@ is classified as `aligned`, `opposed`, `mixed`, `unchanged`, or
 `not-comparable`. A first run is `not-comparable`, establishes the baseline, and
 passes.
 
+The CI report also shows each profile's goal status and a page-level goal
+summary. These use the same rules as the IDE dashboard, so an `unchanged`
+profile reads as *goal not reached* while the gate still passes. Changes below
+the materiality threshold are listed as *not significant* and do not affect the
+outcome.
+
 Configure each multi-page entry's `qualityGate.mode` as `report`, `warn`, or
 `enforce`. The global `qualityGate.mode` remains available for single-page CI
 runs and defaults to `warn`. Report mode always exits successfully; warn mode

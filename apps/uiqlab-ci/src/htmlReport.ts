@@ -1,5 +1,6 @@
-import type { AssessmentReport, BatchAssessmentReport, FailedPageAssessmentReport, PageAssessmentReport, ReportMetric } from './report.js';
+import { goalStatusLabel, materialityRuleLabel, type AssessmentReport, type BatchAssessmentReport, type FailedPageAssessmentReport, type PageAssessmentReport, type ReportMetric } from './report.js';
 import { ASSESSMENT_PROFILES } from './assessmentProfiles.js';
+import type { ProfileOutcome } from './qualityGate.js';
 
 type GateStatus = 'pass' | 'warning' | 'fail';
 
@@ -169,7 +170,7 @@ function renderMetric(metric: ReportMetric, options: HtmlReportOptions, resultId
   const deltaClass = metric.delta === undefined || metric.delta === 0 ? 'neutral' : metric.delta > 0 ? 'up' : 'down';
   const materiality = metric.meaningfulChange === undefined
     ? ''
-    : `<span class="change-badge ${metric.meaningfulChange ? 'material' : 'stable'}">${metric.meaningfulChange ? 'Meaningful change' : 'Within tolerance'}</span>`;
+    : `<span class="change-badge ${metric.meaningfulChange ? 'material' : 'stable'}">${metric.meaningfulChange ? 'Meaningful change' : 'Not significant'}</span>`;
   const relative = metric.relativeDeltaPercent === undefined
     ? ''
     : `<span>${signedNumber(metric.relativeDeltaPercent)}%</span>`;
@@ -198,6 +199,27 @@ function renderMetric(metric: ReportMetric, options: HtmlReportOptions, resultId
   </article>`;
 }
 
+function renderGoalSummary(report: AssessmentReport): string {
+  if (!report.profileGoals) return '';
+  const { status, title, description } = report.profileGoals;
+  return `<div class="goal-summary goal-${escapeHtml(status)}"><span class="eyebrow">Profile goals · ${escapeHtml(goalStatusLabel(status))}</span><strong>${escapeHtml(title)}</strong><p>${escapeHtml(description)}</p></div>`;
+}
+
+function toleranceChip(entry: ProfileOutcome['withinToleranceMetrics'][number], report: AssessmentReport): string {
+  const metric = report.metrics.find((candidate) => candidate.id.split('_', 1)[0] === entry.id);
+  const change = entry.relativeDeltaPercent === undefined ? signedNumber(entry.delta) : `${signedNumber(entry.relativeDeltaPercent)}%`;
+  const label = entry.movement === 'none'
+    ? 'no change'
+    : entry.movement === 'toward'
+      ? `${change} · toward goal, not significant`
+      : entry.movement === 'against'
+        ? `${change} · against goal, not significant`
+        : `${change} · not significant`;
+  const rule = metric ? materialityRuleLabel(metric) : undefined;
+  const title = rule ? ` title="Significant from ${escapeHtml(rule)}"` : '';
+  return `<span class="metric-chip tolerance tolerance-${entry.movement}"${title}>${escapeHtml(entry.id)} ${escapeHtml(label)}</span>`;
+}
+
 function renderProfiles(report: AssessmentReport): string {
   if (report.profileOutcomes.length === 0) return '';
   const profiles = report.profileOutcomes.map((profile) => {
@@ -205,9 +227,14 @@ function renderProfiles(report: AssessmentReport): string {
     const metrics = [
       ...profile.alignedMetrics.map((metric) => `<span class="metric-chip aligned">${escapeHtml(metric)} ${profile.direction === 'observe' ? 'observed' : 'aligned'}</span>`),
       ...profile.opposedMetrics.map((metric) => `<span class="metric-chip opposed">${escapeHtml(metric)} opposed</span>`),
+      ...(profile.withinToleranceMetrics ?? []).map((entry) => toleranceChip(entry, report)),
     ].join('');
+    const goal = profile.goalStatus
+      ? `<div class="profile-goal goal-${escapeHtml(profile.goalStatus)}">Goal · ${escapeHtml(goalStatusLabel(profile.goalStatus))}</div>`
+      : '';
     return `<article class="profile-card outcome-${escapeHtml(outcome)}">
       <div class="profile-heading"><div><span class="eyebrow">Expected direction · ${escapeHtml(profile.direction)}</span><h3>${escapeHtml(ASSESSMENT_PROFILES[profile.id]?.displayName ?? profile.id)}</h3></div><span class="outcome">${escapeHtml(outcome.replace('-', ' '))}</span></div>
+      ${goal}
       <p>${escapeHtml(profile.reason)}</p>
       ${metrics ? `<div class="metric-chips">${metrics}</div>` : ''}
     </article>`;
@@ -244,6 +271,7 @@ function renderPage(report: AssessmentReport, options: HtmlReportOptions, index?
       <span class="result-id">Result ${escapeHtml(report.resultId)}</span>
     </div>
     ${renderGate(report.qualityGate)}
+    ${renderGoalSummary(report)}
     <div class="comparison-note"><span aria-hidden="true">&#8644;</span><span>${comparison}</span></div>
     ${renderScreenshots(report, options)}
     ${renderProfiles(report)}
@@ -366,9 +394,11 @@ export function renderHtmlReport(report: unknown, options: HtmlReportOptions = {
     .screenshot-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }.screenshot-grid-single { grid-template-columns:minmax(0,720px); }.page-screenshot { position:relative; min-width:0; margin:0; overflow:hidden; border:1px solid var(--border); border-radius:8px; background:var(--subtle); }.screenshot-open { position:relative; display:block; color:inherit; cursor:zoom-in; }.screenshot-open::after { content:"View fullscreen"; position:absolute; right:10px; bottom:10px; padding:6px 9px; border-radius:5px; color:#fff; background:rgba(16,47,70,.88); font-size:10px; font-weight:750; opacity:0; transform:translateY(3px); transition:opacity .18s ease,transform .18s ease; }.screenshot-open:hover::after,.screenshot-open:focus-visible::after { opacity:1; transform:translateY(0); }.page-screenshot img,.screenshot-unavailable { display:block; width:100%; aspect-ratio:16/9; object-fit:contain; background:#fff; }.screenshot-unavailable { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; padding:34px; color:var(--muted); text-align:center; }.screenshot-unavailable strong { color:var(--soft); font-size:14px; }.screenshot-unavailable span { max-width:330px; font-size:12px; line-height:1.45; }.page-screenshot figcaption { padding:8px 10px; color:var(--muted); font-size:11px; text-align:center; }.screenshot-label { position:absolute; z-index:2; top:9px; left:9px; padding:5px 9px; border-radius:999px; color:#fff; background:rgba(16,47,70,.9); font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; }.screenshot-close { display:none; }.page-screenshot:target { position:fixed; z-index:1000; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; margin:0; padding:48px; overflow:auto; border:0; border-radius:0; background:rgba(5,15,23,.96); }.page-screenshot:target .screenshot-open { display:flex; width:100%; min-height:0; flex:1; align-items:center; justify-content:center; cursor:default; }.page-screenshot:target .screenshot-open::after { display:none; }.page-screenshot:target img { width:auto; max-width:100%; height:auto; max-height:calc(100vh - 120px); aspect-ratio:auto; background:transparent; }.page-screenshot:target figcaption { color:#dbe6eb; }.page-screenshot:target .screenshot-label { top:18px; left:20px; }.page-screenshot:target .screenshot-close { position:fixed; z-index:3; top:14px; right:18px; display:grid; place-items:center; width:38px; height:38px; border:1px solid rgba(255,255,255,.45); border-radius:50%; color:#fff; background:rgba(16,47,70,.92); font-size:25px; line-height:1; text-decoration:none; }
     section section { margin-top:26px; }.section-heading { align-items:center; margin-bottom:12px; }.section-heading h2 { margin:3px 0 0; color:var(--navy); font-size:19px; }.count { min-width:28px; text-align:center; }
     .profile-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:11px; }
-    .profile-card { padding:15px; border:1px solid var(--border); border-top:4px solid var(--accent); border-radius:8px; background:var(--surface); }.profile-card.outcome-aligned { border-top-color:var(--success); }.profile-card.outcome-opposed { border-top-color:var(--danger); }.profile-card.outcome-mixed { border-top-color:var(--warning); }
+    .profile-card { padding:15px; border:1px solid var(--border); border-top:4px solid var(--accent); border-radius:8px; background:var(--surface); }.profile-card.outcome-aligned { border-top-color:var(--success); }.profile-card.outcome-opposed { border-top-color:var(--danger); }.profile-card.outcome-mixed { border-top-color:var(--warning); }.profile-card.outcome-unchanged { border-top-color:var(--muted); }
     .profile-card h3 { margin:4px 0 0; color:var(--navy); font-size:16px; text-transform:capitalize; }.profile-card p { margin:12px 0 0; color:var(--soft); font-size:13px; line-height:1.45; }.outcome { color:var(--accent); background:var(--accent-soft); text-transform:capitalize; }.outcome-aligned .outcome { color:var(--success); background:var(--success-soft); }.outcome-opposed .outcome { color:var(--danger); background:var(--danger-soft); }.outcome-mixed .outcome { color:var(--warning); background:var(--warning-soft); }
-    .metric-chips { display:flex; flex-wrap:wrap; gap:5px; margin-top:12px; }.metric-chip { padding:4px 7px; border-radius:4px; background:var(--muted-surface); color:var(--soft); font:700 10px "SFMono-Regular",Consolas,monospace; }.metric-chip.aligned { color:var(--success); background:var(--success-soft); }.metric-chip.opposed { color:var(--danger); background:var(--danger-soft); }
+    .metric-chips { display:flex; flex-wrap:wrap; gap:5px; margin-top:12px; }.metric-chip { padding:4px 7px; border-radius:4px; background:var(--muted-surface); color:var(--soft); font:700 10px "SFMono-Regular",Consolas,monospace; }.metric-chip.aligned { color:var(--success); background:var(--success-soft); }.metric-chip.opposed { color:var(--danger); background:var(--danger-soft); }.metric-chip.tolerance { border:1px dashed var(--border); background:var(--surface); }.metric-chip.tolerance-toward { color:var(--success); border-color:#a9d6c2; }.metric-chip.tolerance-against { color:var(--danger); border-color:#e0aaaa; }
+    .goal-summary { margin:-12px 0 24px; padding:12px 16px; border:1px solid var(--border); border-left:4px solid var(--accent); border-radius:8px; background:var(--subtle); }.goal-summary strong { display:block; margin:3px 0 2px; color:var(--ink); font-size:15px; }.goal-summary p { margin:0; color:var(--soft); font-size:13px; line-height:1.45; }.goal-summary.goal-achieved { border-left-color:var(--success); }.goal-summary.goal-not-achieved { border-left-color:var(--danger); }.goal-summary.goal-partial,.goal-summary.goal-unchanged { border-left-color:var(--warning); }.goal-summary.goal-unchanged .eyebrow,.goal-summary.goal-partial .eyebrow { color:var(--warning); }.goal-summary.goal-not-achieved .eyebrow { color:var(--danger); }.goal-summary.goal-achieved .eyebrow { color:var(--success); }
+    .profile-goal { display:inline-block; margin-top:10px; padding:3px 8px; border-radius:4px; color:var(--soft); background:var(--muted-surface); font-size:11px; font-weight:750; }.profile-goal.goal-achieved { color:var(--success); background:var(--success-soft); }.profile-goal.goal-not-achieved { color:var(--danger); background:var(--danger-soft); }.profile-goal.goal-partial,.profile-goal.goal-unchanged { color:var(--warning); background:var(--warning-soft); }
     .metric-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:12px; }.metric-card { min-width:0; padding:16px; border:1px solid var(--border); border-radius:8px; background:var(--surface); }.metric-id { color:var(--accent); font:750 10px "SFMono-Regular",Consolas,monospace; text-transform:uppercase; }.metric-card h3 { margin:3px 0 0; color:var(--navy); font-size:16px; }.change-badge.material { color:var(--warning); background:var(--warning-soft); }.change-badge.stable { color:var(--success); background:var(--success-soft); }
     .metric-values { display:grid; grid-template-columns:1fr auto 1fr 1.2fr; gap:9px; align-items:center; margin-top:15px; }.metric-values>div:not(.arrow) { min-width:0; padding:10px; border-radius:6px; background:var(--subtle); }.metric-values strong { display:block; margin-top:4px; color:var(--navy); font-size:18px; overflow-wrap:anywhere; }.metric-values .arrow { color:var(--muted); }.metric-values .delta { border-left:3px solid var(--muted); }.metric-values .delta-up { border-color:var(--accent); }.metric-values .delta-down { border-color:var(--navy); }.metric-values .delta span:last-child { margin-top:3px; color:var(--muted); font-size:11px; }.metric-values-single { grid-template-columns:1fr 1fr; }.baseline-note { color:var(--muted); font-size:12px; line-height:1.4; }
     .metric-visual-comparison { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; margin-top:12px; }.metric-visual-set { min-width:0; padding:10px; border:1px solid var(--muted-surface); border-radius:7px; background:var(--subtle); }.metric-visual-phase { display:block; margin-bottom:8px; color:var(--accent); font-size:10px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }.metric-visuals { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:9px; }.metric-visual { position:relative; min-width:0; margin:0; overflow:hidden; border:1px solid var(--border); border-radius:6px; background:var(--surface); }.metric-visual-open { position:relative; display:block; cursor:zoom-in; }.metric-visual-open::after { content:"View full size"; position:absolute; right:7px; bottom:7px; padding:5px 7px; border-radius:4px; color:#fff; background:rgba(16,47,70,.88); font-size:9px; font-weight:750; opacity:0; transform:translateY(3px); transition:opacity .18s ease,transform .18s ease; }.metric-visual-open:hover::after,.metric-visual-open:focus-visible::after { opacity:1; transform:translateY(0); }.metric-visuals img { display:block; width:100%; max-height:260px; object-fit:contain; background:#fff; }.metric-visuals figcaption { padding:6px 8px; color:var(--muted); font-size:10px; text-align:center; }.metric-visual-close { display:none; }.metric-visual:target { position:fixed; z-index:1000; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; margin:0; padding:48px; overflow:auto; border:0; border-radius:0; background:rgba(5,15,23,.96); }.metric-visual:target .metric-visual-open { display:flex; width:100%; min-height:0; flex:1; align-items:center; justify-content:center; cursor:default; }.metric-visual:target .metric-visual-open::after { display:none; }.metric-visual:target img { width:auto; max-width:100%; height:auto; max-height:calc(100vh - 120px); background:transparent; }.metric-visual:target figcaption { color:#dbe6eb; font-size:11px; }.metric-visual:target .metric-visual-close { position:fixed; z-index:3; top:14px; right:18px; display:grid; place-items:center; width:38px; height:38px; border:1px solid rgba(255,255,255,.45); border-radius:50%; color:#fff; background:rgba(16,47,70,.92); font-size:25px; line-height:1; text-decoration:none; }
@@ -377,7 +407,7 @@ export function renderHtmlReport(report: unknown, options: HtmlReportOptions = {
     footer { padding:15px 34px; border-top:1px solid var(--border); color:var(--muted); background:var(--subtle); font-size:11px; text-align:center; }
     @media (max-width:760px) { .shell { margin:0; border-width:0; border-radius:0; }.brand { align-items:flex-start; }.brand-mark { display:none; }.brand { flex-wrap:wrap; }.header-status { order:3; } header,main { padding:22px 18px; }.overview { grid-template-columns:repeat(2,1fr); }.screenshot-grid { grid-template-columns:1fr; }.metric-grid { grid-template-columns:1fr; }.metric-values { grid-template-columns:1fr 1fr; }.metric-values .arrow { display:none; }.page-heading { display:block; }.result-id { display:inline-block; margin-top:9px; } }
     @media (prefers-reduced-motion:reduce) { .screenshot-open::after,.metric-visual-open::after { transition:none; } }
-    @media print { html,body { background:#fff; }.shell { max-width:none; margin:0; border:0; box-shadow:none; }.page-screenshot,.metric-card,.profile-card,.gate,.overview>div { break-inside:avoid; }.screenshot-close,.screenshot-open::after,.metric-visual-close,.metric-visual-open::after { display:none!important; } details { display:none; } footer { background:#fff; } }
+    @media print { html,body { background:#fff; }.shell { max-width:none; margin:0; border:0; box-shadow:none; }.page-screenshot,.metric-card,.profile-card,.gate,.goal-summary,.overview>div { break-inside:avoid; }.screenshot-close,.screenshot-open::after,.metric-visual-close,.metric-visual-open::after { display:none!important; } details { display:none; } footer { background:#fff; } }
   </style>
 </head>
 <body>
