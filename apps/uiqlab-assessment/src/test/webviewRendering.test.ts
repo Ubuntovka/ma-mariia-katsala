@@ -279,7 +279,7 @@ suite('Webview rendering', () => {
 			title: 'Profile goal achieved',
 			description: 'The goal was achieved.',
 			outcomes: [{
-				id: 'visual-clutter',
+				id: 'visual-complexity',
 				direction: 'reduce-complexity',
 				outcome: 'aligned',
 				goalStatus: 'achieved',

@@ -33,7 +33,7 @@ const COMPARABLE_METRICS = new Set(Array.from({ length: 14 }, (_, index) => `m${
 
 export type RunConfiguredAssessment = (
 	request: AssessmentRunRequest,
-	shareDeployment: boolean,
+	shareEvaluation: boolean,
 	useLlmExplanation: boolean,
 	shareSourceCode: boolean,
 ) => Promise<void>;
@@ -310,8 +310,8 @@ async function submitAssessment(
 }
 
 export function createAssessmentRunner(context: vscode.ExtensionContext): RunConfiguredAssessment {
-	return async (request, shareDeployment, useLlmExplanation, shareSourceCode): Promise<void> => {
-		if (request.dataSource.kind !== 'local-url' && !shareDeployment) { return; }
+	return async (request, shareEvaluation, useLlmExplanation, shareSourceCode): Promise<void> => {
+		if (!shareEvaluation) { return; }
 		const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
 		let projectConfig: ProjectConfig;
 		try {

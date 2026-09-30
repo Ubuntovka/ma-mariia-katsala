@@ -338,9 +338,9 @@ export async function buildHistoryComparisonContent(
 
 	const m9Direction = m9Match
 		? m9Match.comparison.percentagePointDelta > 0
-			? 'Edge density increased; this generally indicates more visual clutter.'
+			? 'Edge density increased; this generally indicates more visual complexity.'
 			: m9Match.comparison.percentagePointDelta < 0
-				? 'Edge density decreased; this generally indicates less visual clutter.'
+				? 'Edge density decreased; this generally indicates less visual complexity.'
 				: 'Edge density did not change.'
 		: '';
 	const m9EdgeMapCards = m9Match?.comparison.edgeMapIou !== undefined
@@ -366,14 +366,14 @@ export async function buildHistoryComparisonContent(
 			<p class="structural-summary">${m9Direction}</p>
 			${m9EdgeImages}
 			${m9EdgeMapCards}
-			<div class="explanation"><p>The scalar edge density is the primary comparison. A higher density generally indicates more visual clutter. When both binary edge images are available, IoU and F1 additionally show how strongly the detected edge locations overlap, while the images help localize where the clutter pattern changed.</p></div>
+			<div class="explanation"><p>The scalar edge density is the primary comparison. A higher density generally indicates more visual complexity. When both binary edge images are available, IoU and F1 additionally show how strongly the detected edge locations overlap, while the images help localize where the complexity pattern changed.</p></div>
 		</section>` : '';
 
 	const m10Direction = m10Match
 		? m10Match.comparison.scalarDelta > 0
-			? 'Feature congestion increased; this generally indicates more display clutter.'
+			? 'Feature congestion increased; this generally indicates more visual complexity.'
 			: m10Match.comparison.scalarDelta < 0
-				? 'Feature congestion decreased; this generally indicates less display clutter.'
+				? 'Feature congestion decreased; this generally indicates less visual complexity.'
 				: 'Feature congestion did not change.'
 		: '';
 	const m10MapCards = m10Match?.comparison.mapMeanAbsoluteDifference !== undefined
@@ -399,14 +399,14 @@ export async function buildHistoryComparisonContent(
 			<p class="structural-summary">${m10Direction}</p>
 			${m10MapImages}
 			${m10MapCards}
-			<div class="explanation"><p>The scalar feature-congestion score is the primary comparison. Higher values generally indicate more display clutter. When both visualizations are available, each congestion map is normalized independently to 0–1; mean absolute difference measures overall spatial change, while overlap compares the highest-congestion 10% of locations to help localize where clutter shifted.</p></div>
+			<div class="explanation"><p>The scalar feature-congestion score is the primary comparison. Higher values generally indicate more visual complexity. When both visualizations are available, each congestion map is normalized independently to 0–1; mean absolute difference measures overall spatial change, while overlap compares the highest-congestion 10% of locations to help localize where complexity shifted.</p></div>
 		</section>` : '';
 
 	const m11Direction = m11Match
 		? m11Match.comparison.absoluteDelta > 0
-			? 'Subband entropy increased; according to the metric definition, this indicates more visual clutter.'
+			? 'Subband entropy increased; according to the metric definition, this indicates more visual complexity.'
 			: m11Match.comparison.absoluteDelta < 0
-				? 'Subband entropy decreased; according to the metric definition, this indicates less visual clutter.'
+				? 'Subband entropy decreased; according to the metric definition, this indicates less visual complexity.'
 				: 'Subband entropy did not change.'
 		: '';
 	const m11Section = m11Match ? `
@@ -420,7 +420,7 @@ export async function buildHistoryComparisonContent(
 				<div class="card"><span class="label">Relative delta</span><span class="value">${relativeChange(m11Match.comparison.relativeDeltaPercent)}</span></div>
 			</div>
 			<p class="structural-summary">${m11Direction}</p>
-			<div class="explanation"><p>Subband entropy estimates visual clutter through the information carried across image subbands. The absolute delta is current minus previous entropy, and the relative delta expresses that change against the previous value. Higher entropy indicates more visual clutter according to the metric definition.</p></div>
+			<div class="explanation"><p>Subband entropy estimates visual complexity through the information carried across image subbands. The absolute delta is current minus previous entropy, and the relative delta expresses that change against the previous value. Higher entropy indicates more visual complexity according to the metric definition.</p></div>
 		</section>` : '';
 
 	const m12Direction = m12Match

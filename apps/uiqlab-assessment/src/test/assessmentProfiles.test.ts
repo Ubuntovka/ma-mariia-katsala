@@ -16,7 +16,7 @@ suite('Assessment profiles', () => {
 				directions: ['observe'],
 				metrics: ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14'],
 			},
-			'visual-clutter': {
+			'visual-complexity': {
 				displayName: 'Visual complexity',
 				directions: ['reduce-complexity', 'increase-complexity', 'preserve', 'observe'],
 				metrics: ['m9', 'm10', 'm11'],
@@ -46,18 +46,18 @@ suite('Assessment profiles', () => {
 
 	test('resolves several sidebar profiles to a unique ordered metric union', () => {
 		assert.deepStrictEqual(SIDEBAR_ASSESSMENT_PROFILE_IDS, [
-			'visual-clutter',
+			'visual-complexity',
 			'screen-whitespace',
 			'text-amount',
 			'colorfulness',
 			'accessibility',
 		]);
 		assert.deepStrictEqual(resolveSidebarProfiles([
-			{ id: 'visual-clutter', direction: 'reduce-complexity' },
+			{ id: 'visual-complexity', direction: 'reduce-complexity' },
 			{ id: 'screen-whitespace', direction: 'more-whitespace' },
 		], 'Selected profiles'), {
 			profiles: [
-				{ id: 'visual-clutter', direction: 'reduce-complexity' },
+				{ id: 'visual-complexity', direction: 'reduce-complexity' },
 				{ id: 'screen-whitespace', direction: 'more-whitespace' },
 			],
 			metrics: ['m9', 'm10', 'm11', 'm5'],

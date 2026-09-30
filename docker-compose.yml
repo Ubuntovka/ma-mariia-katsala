@@ -6,8 +6,11 @@ services:
     container_name: orchestrator
     ports:
       - "${ORCHESTRATOR_PORT:-8181}:8181"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - BACKEND_URL=${BACKEND_URL}
+      - BACKEND_ARTIFACT_URL=${BACKEND_ARTIFACT_URL:-http://host.docker.internal:8001}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}

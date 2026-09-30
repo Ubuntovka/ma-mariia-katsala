@@ -134,6 +134,8 @@ async function assessPage(
       expectedBaselineBranch: config.baselineBranch,
     },
   );
+  const currentScreenshotId = history.currentRun?.screenshotResultId ?? submission.result_id;
+  const baselineScreenshotId = history.baselineRun?.screenshotResultId;
   return buildReport({
     target: page.target,
     branch: meta.branch,
@@ -145,6 +147,12 @@ async function assessPage(
     assessment: page.assessment,
     qualityGateMode: page.qualityGateMode,
     requireBaseline: page.requireBaseline,
+    screenshots: {
+      current: `${baseUrl}/eval/result/${encodeURIComponent(currentScreenshotId)}/screenshot.png`,
+      ...(baselineScreenshotId
+        ? { baseline: `${baseUrl}/eval/result/${encodeURIComponent(baselineScreenshotId)}/screenshot.png` }
+        : {}),
+    },
   });
 }
 

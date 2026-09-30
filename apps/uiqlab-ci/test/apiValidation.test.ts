@@ -7,12 +7,15 @@ test('validates submission and history contracts', () => {
   assert.throws(() => validateSubmissionResponse({ result_id: '' }), /non-empty result_id/);
   assert.deepEqual(validateHistoryResponse({
     metrics: { m14_nima: { results: [{ mean: 5.2 }] } },
-    baselineRun: { id: 7, branch: 'main', commitHash: 'abc' },
+    currentRun: { id: 8, branch: 'feature', screenshotResultId: 'current-id' },
+    baselineRun: { id: 7, branch: 'main', commitHash: 'abc', screenshotResultId: 'baseline-id' },
   }), {
     metrics: { m14_nima: { results: [{ mean: 5.2 }] } },
-    baselineRun: { id: 7, branch: 'main', commitHash: 'abc' },
+    currentRun: { id: 8, branch: 'feature', screenshotResultId: 'current-id' },
+    baselineRun: { id: 7, branch: 'main', commitHash: 'abc', screenshotResultId: 'baseline-id' },
   });
   assert.throws(() => validateHistoryResponse({ baselineRun: { id: '7' } }), /positive integer id/);
+  assert.throws(() => validateHistoryResponse({ currentRun: { id: 8, screenshotResultId: '' } }), /non-empty string/);
   assert.throws(() => validateHistoryResponse({ metrics: { unknown: { results: [] } } }), /invalid metric entry/);
   assert.throws(() => validateHistoryResponse({
     baselineRun: { id: 7, branch: 'develop' },

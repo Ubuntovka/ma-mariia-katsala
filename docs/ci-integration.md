@@ -12,9 +12,12 @@ after every run:
 - `uiqlab-report.html` is a self-contained, responsive visual report with the
   same palette and information hierarchy as the IDE results. It includes the
   overall gate, page and profile outcomes, baseline comparisons, metric cards,
-  embedded visual metric files, and expandable raw values. It has no JavaScript
-  or external stylesheet. Visual files are fetched while the CI job can still
-  reach the evaluator, avoiding broken `localhost` URLs in downloaded artifacts.
+  embedded before/after page captures, before/after visual metric files, and
+  expandable raw values. Page headings contain only the route after the preview
+  host and port, and embedded page captures open in a fullscreen overlay when
+  clicked. Visual metric images also open at full size. It has no JavaScript or
+  external stylesheet. Visual files are fetched while the CI job can still reach
+  the evaluator, avoiding broken `localhost` URLs in downloaded artifacts.
 - `uiqlab-report.json` remains the machine-readable source of truth for later
   automation.
 
@@ -145,7 +148,7 @@ array. Do not combine the two forms.
 | Profile ID | Metrics selected | Direction options and their result |
 | --- | --- | --- |
 | `general-review` | `m1`-`m14` | `observe` records all metrics without treating movement as opposed. |
-| `visual-clutter` | `m9`, `m10`, `m11` | `reduce-complexity` expects all three metrics to decrease; `increase-complexity` expects all three to increase; `preserve` opposes any meaningful movement; `observe` reports movement without opposing it. |
+| `visual-complexity` | `m9`, `m10`, `m11` | `reduce-complexity` expects all three metrics to decrease; `increase-complexity` expects all three to increase; `preserve` opposes any meaningful movement; `observe` reports movement without opposing it. |
 | `screen-whitespace` | `m5` | `more-whitespace` expects M5 to increase; `less-whitespace` expects it to decrease; `preserve` and `observe` behave as above. |
 | `text-amount` | `m8` | `more-words` expects M8 to increase; `fewer-words` expects it to decrease; `preserve` and `observe` behave as above. |
 | `colorfulness` | `m3` | `more-colorful` expects M3 to increase; `less-colorful` expects it to decrease; `preserve` and `observe` behave as above. |
@@ -154,6 +157,22 @@ array. Do not combine the two forms.
 Profile outcomes are `aligned`, `opposed`, `mixed`, `unchanged`, or
 `not-comparable`. Only fixed, materially changed scalar metrics influence the
 directional outcome; visual/raw results remain available in the reports.
+
+Each profile also carries a goal status, using the same rules as the IDE
+profile dashboard: `achieved`, `not-achieved`, `partial`, `unchanged`,
+`observed`, or `not-comparable`. The page report adds a `profileGoals` summary
+(for example **No meaningful progress toward the goals**). The goal status is
+informational: the quality gate checks for movement *against* the configured
+directions, so an `unchanged` profile passes in every mode. This keeps pages
+that a change does not touch from blocking it.
+
+Comparable metrics that stay within their materiality threshold are labelled
+**not significant** in the reports and are listed per profile in the JSON field
+`withinToleranceMetrics`. Each entry is marked as moving `toward` or `against`
+the direction, with `none` for no change or `undirected` for
+`preserve`/`observe`. These metrics do not change the outcome, but the job log,
+the HTML report, and the profile reason show them together with the threshold,
+so a small change in either direction remains visible.
 
 ### Quality-gate options and outcomes
 

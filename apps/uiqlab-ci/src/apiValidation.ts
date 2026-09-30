@@ -84,18 +84,28 @@ export function validateHistoryResponse(
     })));
     history.metrics = validated;
   }
+  const validateRun = (value: unknown, label: 'currentRun' | 'baselineRun') => {
+    const run = record(value);
+    if (!run || !Number.isInteger(run.id) || (run.id as number) <= 0) {
+      throw new Error(`Orchestrator history ${label} must contain a positive integer id.`);
+    }
+    if (run.branch !== undefined && typeof run.branch !== 'string') {
+      throw new Error(`Orchestrator history ${label}.branch must be a string.`);
+    }
+    if (run.screenshotResultId !== undefined && (typeof run.screenshotResultId !== 'string' || run.screenshotResultId.length === 0 || run.screenshotResultId.length > 500)) {
+      throw new Error(`Orchestrator history ${label}.screenshotResultId must be a non-empty string.`);
+    }
+    return run as NonNullable<AssessmentHistory[typeof label]>;
+  };
+  if (response.currentRun !== undefined) {
+    history.currentRun = validateRun(response.currentRun, 'currentRun');
+  }
   if (response.baselineRun !== undefined) {
-    const baseline = record(response.baselineRun);
-    if (!baseline || !Number.isInteger(baseline.id) || (baseline.id as number) <= 0) {
-      throw new Error('Orchestrator history baselineRun must contain a positive integer id.');
-    }
-    if (baseline.branch !== undefined && typeof baseline.branch !== 'string') {
-      throw new Error('Orchestrator history baselineRun.branch must be a string.');
-    }
+    const baseline = validateRun(response.baselineRun, 'baselineRun');
     if (options.expectedBaselineBranch !== undefined && baseline.branch !== options.expectedBaselineBranch) {
       throw new Error(`Orchestrator returned a baseline from branch "${String(baseline.branch)}" instead of "${options.expectedBaselineBranch}".`);
     }
-    history.baselineRun = baseline as NonNullable<AssessmentHistory['baselineRun']>;
+    history.baselineRun = baseline;
   }
   return history;
 }

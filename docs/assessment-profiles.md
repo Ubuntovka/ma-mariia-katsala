@@ -129,7 +129,7 @@ default and for the compatible single-page CI mode. Set `assessment.mode` to
     "mode": "profiles",
     "profiles": [
       {
-        "id": "visual-clutter",
+        "id": "visual-complexity",
         "direction": "reduce-complexity"
       }
     ]
@@ -149,7 +149,7 @@ profiles are resolved to metric IDs before an assessment is submitted.
 | Profile ID | Display name | Allowed directions | Metrics |
 | --- | --- | --- | --- |
 | `general-review` | General review | `observe` | All metrics, `m1` through `m14` |
-| `visual-clutter` | Visual complexity | `reduce-complexity`, `increase-complexity`, `preserve`, `observe` | Edge density (`m9`), Feature congestion (`m10`), Subband entropy (`m11`) |
+| `visual-complexity` | Visual complexity | `reduce-complexity`, `increase-complexity`, `preserve`, `observe` | Edge density (`m9`), Feature congestion (`m10`), Subband entropy (`m11`) |
 | `screen-whitespace` | Screen white space | `more-whitespace`, `less-whitespace`, `preserve`, `observe` | White space proportion (`m5`) |
 | `text-amount` | Text amount | `more-words`, `fewer-words`, `preserve`, `observe` | Word count (`m8`) |
 | `colorfulness` | Colorfulness | `more-colorful`, `less-colorful`, `preserve`, `observe` | Colorfulness (`m3`) |
@@ -172,7 +172,7 @@ For example:
     "mode": "profiles",
     "profiles": [
       {
-        "id": "visual-clutter",
+        "id": "visual-complexity",
         "direction": "reduce-complexity"
       },
       {
@@ -254,7 +254,7 @@ For a profile-based assessment, the CI report includes:
     "mode": "profiles",
     "profiles": [
       {
-        "id": "visual-clutter",
+        "id": "visual-complexity",
         "direction": "reduce-complexity"
       }
     ]
@@ -288,6 +288,12 @@ baseline using the existing deterministic materiality tolerances. Each profile
 is classified as `aligned`, `opposed`, `mixed`, `unchanged`, or
 `not-comparable`. A first run is `not-comparable`, establishes the baseline, and
 passes.
+
+The CI report also shows each profile's goal status and a page-level goal
+summary. These use the same rules as the IDE dashboard, so an `unchanged`
+profile reads as *goal not reached* while the gate still passes. Changes below
+the materiality threshold are listed as *not significant* and do not affect the
+outcome.
 
 Configure each multi-page entry's `qualityGate.mode` as `report`, `warn`, or
 `enforce`. The global `qualityGate.mode` remains available for single-page CI
