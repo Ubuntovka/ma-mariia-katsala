@@ -13,6 +13,8 @@ import {
 import { renderExplanationHtml, renderTargetLink } from './webviewFormatting';
 import type { HistoryComparisonContent } from './historyRendering';
 
+const LOCAL_M13_UNAVAILABLE_MESSAGE = 'M13 not available for local captures';
+
 function profileFeedbackStatus(status: string): { className: string; label: string; icon: string } {
 	switch (status) {
 		case 'achieved': return { className: 'achieved', label: 'Goal achieved', icon: '✓' };
@@ -135,6 +137,7 @@ export function generateResultsHtml(
 	profileFeedback?: ProfileLlmFeedback,
 	customFeedback?: CustomMetricLlmFeedback,
 	comparison?: HistoryComparisonContent,
+	unavailableMetricIds: readonly string[] = [],
 ): string {
 	const inputResults = Array.isArray(results) ? results : [];
 	const imageUrls = new Set<string>();
@@ -187,6 +190,17 @@ export function generateResultsHtml(
 		</div>
 		`;
 	}).join('');
+	const unavailableItems = [...new Set(unavailableMetricIds.map((metricId) => metricId.toLowerCase()))]
+		.filter((metricId) => metricId === 'm13')
+		.map(() => `<div class="metric-result metric-unavailable">
+			<h3>Accessibility checks</h3>
+			<div class="result-values"><div class="result-item">${LOCAL_M13_UNAVAILABLE_MESSAGE}</div></div>
+		</div>`)
+		.join('');
+	const renderedMetricCount = filteredResults.length + (unavailableItems ? 1 : 0);
+	const availabilityHtml = unavailableItems
+		? `<section class="metric-availability-notice" role="status"><strong>${LOCAL_M13_UNAVAILABLE_MESSAGE}</strong><p>Accessibility checks require a deployed URL.</p></section>`
+		: '';
 	const explanationHtml = profileFeedback
 		? renderProfileLlmFeedback(profileFeedback)
 		: customFeedback
@@ -208,9 +222,9 @@ export function generateResultsHtml(
 		</details>`
 		: '';
 	const rawMetricsHtml = `<details class="raw-metrics"${isComplete ? '' : ' open'}>
-		<summary><span class="raw-metrics-label">Raw metrics</span><span class="raw-metrics-actions"><span class="results-count">${filteredResults.length} ${filteredResults.length === 1 ? 'metric' : 'metrics'}</span><span class="raw-metrics-toggle" aria-hidden="true">▶</span></span></summary>
+		<summary><span class="raw-metrics-label">Raw metrics</span><span class="raw-metrics-actions"><span class="results-count">${renderedMetricCount} ${renderedMetricCount === 1 ? 'metric' : 'metrics'}</span><span class="raw-metrics-toggle" aria-hidden="true">▶</span></span></summary>
 		<div class="raw-metrics-content">
-			${resultItems.length > 0 ? resultItems : '<div class="empty-state"><p>No results available yet. Please try again.</p></div>'}
+			${resultItems || unavailableItems ? `${resultItems}${unavailableItems}` : '<div class="empty-state"><p>No results available yet. Please try again.</p></div>'}
 		</div>
 	</details>`;
 
@@ -372,6 +386,9 @@ export function generateResultsHtml(
 		.file-chips code { max-width: 100%; overflow: hidden; padding: 3px 6px; border-radius: 4px; background: var(--surface-muted); color: var(--ink-soft); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 		.no-suggestions { margin-bottom: 14px; color: var(--muted); font-size: 13px; }
 		.profile-ai-feedback .ai-note { margin-top: 4px; }
+		.metric-availability-notice { margin-bottom: 24px; padding: 16px 18px; border: 1px solid var(--warning); border-left: 5px solid var(--warning); border-radius: 7px; background: var(--surface-warning); color: var(--ink-soft); }
+		.metric-availability-notice strong { color: var(--navy); }
+		.metric-availability-notice p { margin-top: 4px; color: var(--muted); font-size: 13px; }
 		.custom-ai-feedback { margin-bottom: 26px; padding: 22px; border: 1px solid #e3dccd; border-top: 5px solid var(--llm); border-radius: 10px; background: var(--surface-llm); }
 		.custom-ai-heading { display: grid; grid-template-areas: "icon title" "icon badges"; grid-template-columns: auto minmax(0, 1fr); align-items: start; column-gap: 12px; row-gap: 8px; }
 		.custom-ai-title { grid-area: title; min-width: 0; }
@@ -637,6 +654,7 @@ export function generateResultsHtml(
 		</div>
 		<div class="content">
 			${explanationHtml}
+			${availabilityHtml}
 			${comparison?.profileOverviewHtml ?? ''}
 			${comparisonHtml}
 			${rawMetricsHtml}

@@ -35,6 +35,12 @@ export interface ProfileAssessmentSummary {
 	outcomes: ProfileOutcome[];
 }
 
+export interface ProfileAssessmentContext {
+	localCapture?: boolean;
+}
+
+export const LOCAL_ACCESSIBILITY_UNAVAILABLE_REASON = 'Not available for local pages: accessibility checks need a deployed URL.';
+
 export function normalizeProfileAssessmentSelection(value: unknown): AssessmentProfileSelection[] | undefined {
 	let parsed = value;
 	if (typeof parsed === 'string') {
@@ -194,8 +200,22 @@ export function classifyProfileOutcomes(
 	profiles: readonly AssessmentProfileSelection[],
 	metrics: readonly ProfileMetricComparison[],
 	hasBaseline: boolean,
+	context: ProfileAssessmentContext = {},
 ): ProfileOutcome[] {
 	return profiles.map((profile) => {
+		if (context.localCapture && profile.id === 'accessibility') {
+			return {
+				id: profile.id,
+				direction: profile.direction,
+				outcome: 'not-comparable',
+				goalStatus: 'not-comparable',
+				reason: LOCAL_ACCESSIBILITY_UNAVAILABLE_REASON,
+				comparableMetrics: [],
+				meaningfulMetrics: [],
+				alignedMetrics: [],
+				opposedMetrics: [],
+			};
+		}
 		const profileMetrics = new Set(ASSESSMENT_PROFILES[profile.id]?.metrics ?? []);
 		const comparable = hasBaseline
 			? metrics.filter((metric) => profileMetrics.has(metric.id)
@@ -302,10 +322,12 @@ export function assessProfilesAgainstHistory(
 	currentResults: readonly AssessmentMetricResult[],
 	historyMetrics: Readonly<Record<string, { results: unknown }>>,
 	hasBaseline: boolean,
+	context: ProfileAssessmentContext = {},
 ): ProfileAssessmentSummary {
 	return summarizeProfileAssessment(classifyProfileOutcomes(
 		profiles,
 		buildProfileMetricComparisons(currentResults, historyMetrics),
 		hasBaseline,
+		context,
 	));
 }

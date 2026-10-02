@@ -135,6 +135,20 @@ suite('Profile history assessment', () => {
 		assert.strictEqual(observed[0]?.goalStatus, 'observed');
 	});
 
+	test('marks the accessibility profile as not comparable for a local capture', () => {
+		const outcome = classifyProfileOutcomes(
+			[{ id: 'accessibility', direction: 'fewer-detected-violations' }],
+			[{ id: 'm13', current: 0, previous: 0, delta: 0, meaningfulChange: false }],
+			true,
+			{ localCapture: true },
+		)[0];
+
+		assert.strictEqual(outcome?.outcome, 'not-comparable');
+		assert.strictEqual(outcome?.goalStatus, 'not-comparable');
+		assert.strictEqual(outcome?.reason, 'Not available for local pages: accessibility checks need a deployed URL.');
+		assert.deepStrictEqual(outcome?.comparableMetrics, []);
+	});
+
 	test('produces an overall partial result for a combination of profile outcomes', () => {
 		const summary = summarizeProfileAssessment([
 			{

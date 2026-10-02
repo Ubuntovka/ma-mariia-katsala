@@ -531,6 +531,22 @@ export function toMetricIds(selectedAssessments: AssessmentName[]): string[] {
 	});
 }
 
+export function submittedMetricIdsForRequest(request: AssessmentRunRequest): string[] {
+	const metricIds = toMetricIds(request.assessments);
+	return request.dataSource.kind === 'local-url'
+		? metricIds.filter((metricId) => metricId.split('_')[0].toLowerCase() !== 'm13')
+		: metricIds;
+}
+
+export function localCaptureOmitsM13(
+	request: AssessmentRunRequest,
+	assessment: AssessmentSelection | undefined = request.assessment,
+): boolean {
+	return request.dataSource.kind === 'local-url'
+		&& (toMetricIds(request.assessments).some((metricId) => metricId.split('_')[0].toLowerCase() === 'm13')
+			|| (assessment?.mode === 'profiles' && assessment.profiles.some((profile) => profile.id === 'accessibility')));
+}
+
 export async function fetchEvaluationResult(wui_id: string, timeoutMs: number = RESULT_REQUEST_TIMEOUT_MS): Promise<unknown> {
 	return await httpGetJson<unknown>(
 		orchestratorUrl(`/eval/result/${encodeURIComponent(wui_id)}`),

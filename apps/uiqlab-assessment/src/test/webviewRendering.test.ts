@@ -208,6 +208,13 @@ suite('Webview rendering', () => {
 		assert.match(html, /<details class="raw-metrics" open>/);
 	});
 
+	test('shows M13 as unavailable for local captures instead of a value', () => {
+		const html = generateResultsHtml([], 'http://localhost:3000', true, undefined, undefined, undefined, undefined, undefined, ['m13']);
+		assert.match(html, /M13 not available for local captures/);
+		assert.match(html, /Accessibility checks require a deployed URL/);
+		assert.doesNotMatch(html, /0 violations/);
+	});
+
 	test('escapes every backend-controlled result value before rendering it', () => {
 		const html = generateResultsHtml([{
 			metric_id: 'unknown</h3><script>alert(1)</script>',

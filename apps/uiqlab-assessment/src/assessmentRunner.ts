@@ -14,6 +14,8 @@ import {
 	fetchAssessmentHistory,
 	formatAssessmentRunSummary,
 	pollEvaluationResult,
+	localCaptureOmitsM13,
+	submittedMetricIdsForRequest,
 	submitFileForEvaluation,
 	submitUrlForEvaluation,
 	toMetricIds,
@@ -82,6 +84,7 @@ function renderResults(
 	profileFeedback?: ProfileLlmFeedback,
 	customFeedback?: CustomMetricLlmFeedback,
 	comparison?: HistoryComparisonContent,
+	unavailableMetricIds: readonly string[] = [],
 ): void {
 	panel.webview.html = generateResultsHtml(
 		results,
@@ -92,6 +95,7 @@ function renderResults(
 		profileFeedback,
 		customFeedback,
 		comparison,
+		unavailableMetricIds,
 	);
 }
 
@@ -102,6 +106,7 @@ async function buildExplanationContext(
 	target: string,
 	workspaceRoot: string,
 	shareSourceCode: boolean,
+	localCapture: boolean,
 ) {
 	const sourceContext = shareSourceCode
 		? await collectWorkspaceSourceContext(workspaceRoot, target)
@@ -117,6 +122,7 @@ async function buildExplanationContext(
 			currentResults,
 			history?.metrics ?? {},
 			Boolean(history?.baselineRun),
+			{ localCapture },
 		),
 		target,
 		...(sourceContext.length > 0 ? { sourceContext } : {}),
@@ -231,6 +237,7 @@ async function runDeploymentUrlComparison(
 				dataSource.currentDeploymentUrl,
 				workspaceRoot,
 				false,
+				false,
 			);
 			const response = await fetchAssessmentExplanation(currentResults, history, explanationContext);
 			explanation = response.explanation;
@@ -298,7 +305,7 @@ async function submitAssessment(
 		capture.screenshot,
 		'capture.png',
 		'image/png',
-		request.assessments,
+		submittedMetricIdsForRequest(request),
 		gitInfo,
 		target,
 		capture.screenshotDimensions,
@@ -324,6 +331,8 @@ export function createAssessmentRunner(context: vscode.ExtensionContext): RunCon
 			?? (projectConfig.assessment?.mode === 'profiles'
 				? { mode: 'profiles', profiles: projectConfig.assessment.profiles }
 				: { mode: 'custom' });
+		const submittedMetricIds = submittedMetricIdsForRequest(request);
+		const unavailableMetricIds = localCaptureOmitsM13(request, assessmentSelection) ? ['m13'] : [];
 		void vscode.window.showInformationMessage(formatAssessmentRunSummary(request));
 
 		if (request.dataSource.kind !== 'local-url') {
@@ -354,10 +363,15 @@ export function createAssessmentRunner(context: vscode.ExtensionContext): RunCon
 						token,
 					);
 				}
+				if (request.dataSource.kind === 'local-url' && submittedMetricIds.length === 0) {
+					const panel = ensureResultsPanel(undefined);
+					renderResults(panel, [], request.dataSource.localUrl, true, undefined, undefined, undefined, undefined, undefined, unavailableMetricIds);
+					return [];
+				}
 				const submission = await submitAssessment(
 					request, assessmentSelection, workspaceRoot, projectConfig, progress, token,
 				);
-				const expectedCount = new Set(toMetricIds(request.assessments)).size;
+				const expectedCount = new Set(submittedMetricIds).size;
 				const assessmentStep = submission.totalSteps - 1;
 				let panel: vscode.WebviewPanel | undefined;
 				progress.report({ message: `Step ${assessmentStep} of ${submission.totalSteps}: Running assessments (0 of ${expectedCount} complete)` });
@@ -366,7 +380,7 @@ export function createAssessmentRunner(context: vscode.ExtensionContext): RunCon
 						const completedCount = new Set(updates.map((result) => result.metric_id.split('_')[0])).size;
 						progress.report({ message: `Step ${assessmentStep} of ${submission.totalSteps}: Running assessments (${Math.min(completedCount, expectedCount)} of ${expectedCount} complete)` });
 						panel = ensureResultsPanel(panel);
-						renderResults(panel, updates, submission.target, false);
+						renderResults(panel, updates, submission.target, false, undefined, undefined, undefined, undefined, undefined, unavailableMetricIds);
 					},
 					isCancelled: () => token.isCancellationRequested,
 					onError: (error) => logDiagnostic('Evaluation result polling failed; retrying', error),
@@ -386,6 +400,7 @@ export function createAssessmentRunner(context: vscode.ExtensionContext): RunCon
 					try {
 						const explanationContext = await buildExplanationContext(
 							assessmentSelection, currentResults, history, submission.target, workspaceRoot, shareSourceCode,
+							request.dataSource.kind === 'local-url',
 						);
 						const response = await fetchAssessmentExplanation(currentResults, history, explanationContext);
 						explanation = response.explanation;
@@ -400,15 +415,17 @@ export function createAssessmentRunner(context: vscode.ExtensionContext): RunCon
 					? await buildHistoryComparisonContent(
 						currentResults,
 						history,
-						toMetricIds(request.assessments),
-						request.assessment,
+						submittedMetricIds,
+						assessmentSelection,
+						request.dataSource.kind === 'local-url',
 					)
 					: undefined;
-				renderResults(panel, currentResults, submission.target, true, explanation, explanationError, profileFeedback, customFeedback, comparison);
+				renderResults(panel, currentResults, submission.target, true, explanation, explanationError, profileFeedback, customFeedback, comparison, unavailableMetricIds);
 				return currentResults;
 			});
 
 			void vscode.window.showInformationMessage(results.length > 0
+				|| (submittedMetricIds.length === 0 && unavailableMetricIds.length > 0)
 				? 'UIQLab assessment complete. Results are ready.'
 				: 'Timed out or cancelled waiting for evaluation results.');
 		} catch (error) {

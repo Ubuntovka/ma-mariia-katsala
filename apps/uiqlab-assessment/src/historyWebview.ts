@@ -102,6 +102,7 @@ export async function buildHistoryComparisonContent(
 	history: AssessmentHistory,
 	selectedMetricIds: string[] = [],
 	assessmentSelection?: unknown,
+	localCapture: boolean = Boolean(history.currentRun?.screenshotDimensions),
 ): Promise<HistoryComparisonContent | undefined> {
 	const requestedMetricIds = requestedHistoryMetricIds(selectedMetricIds, currentResults);
 	const historyMetricIds = Object.keys(history.metrics);
@@ -115,6 +116,7 @@ export async function buildHistoryComparisonContent(
 			currentResults,
 			history.metrics,
 			Boolean(history.baselineRun),
+			{ localCapture },
 		))
 		: '';
 	const currentM4Result = currentResults.find(
@@ -534,12 +536,14 @@ export async function showHistoryComparison(
 	url: string,
 	selectedMetricIds: string[] = [],
 	assessmentSelection?: unknown,
+	localCapture: boolean = Boolean(history.currentRun?.screenshotDimensions),
 ): Promise<boolean> {
 	const comparison = await buildHistoryComparisonContent(
 		currentResults,
 		history,
 		selectedMetricIds,
 		assessmentSelection,
+		localCapture,
 	);
 	if (!comparison) { return false; }
 	const panel = vscode.window.createWebviewPanel(

@@ -9,6 +9,7 @@ import {
 	normalizeAvailableMetricItems,
 	normalizeServiceBaseUrl,
 	pollEvaluationResult,
+	submittedMetricIdsForRequest,
 	type QuickPickUi,
 } from '../runAssessment';
 import { getMetricDefinition, METRIC_DEFINITIONS } from '../metricCatalog';
@@ -150,6 +151,24 @@ suite('Run assessment requests', () => {
 				localUrl: 'http://localhost:3000',
 			},
 		});
+	});
+
+	test('drops M13 from the submitted metric list for a local source', () => {
+		assert.deepStrictEqual(submittedMetricIdsForRequest({
+			assessments: ['m3', 'm13', 'm14'],
+			assessment: {
+				mode: 'profiles',
+				profiles: [{ id: 'accessibility', direction: 'fewer-detected-violations' }],
+			},
+			dataSource: { kind: 'local-url', localUrl: 'http://localhost:3000' },
+		}), ['m3', 'm14']);
+	});
+
+	test('keeps M13 in the submitted metric list for a deployed source', () => {
+		assert.deepStrictEqual(submittedMetricIdsForRequest({
+			assessments: ['m3', 'm13', 'm14'],
+			dataSource: { kind: 'deployment-url', deploymentUrl: 'https://example.com' },
+		}), ['m3', 'm13', 'm14']);
 	});
 
 	test('formats a readable summary', () => {

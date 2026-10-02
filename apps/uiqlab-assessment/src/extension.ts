@@ -33,6 +33,7 @@ async function compareAssessmentRuns(
 			comparison.current.assessedTarget ?? projectConfig.name,
 			[],
 			comparison.current.assessment,
+			Boolean(comparison.current.screenshotDimensions),
 		);
 		if (!shown) {
 			void vscode.window.showInformationMessage('The selected assessments do not contain any comparable metrics.');
