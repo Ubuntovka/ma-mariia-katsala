@@ -122,6 +122,9 @@ export async function capturePage(url: string, timeoutMs = 30000): Promise<Captu
       if (!response) {
         throw new Error('Navigation failed: no response received');
       }
+      if (!response.ok()) {
+        throw new Error(`Page returned HTTP ${response.status()} ${response.statusText()}`);
+      }
     } catch (error) {
       throw new Error(`Navigation failed: ${errorMessage(error)}`);
     }
