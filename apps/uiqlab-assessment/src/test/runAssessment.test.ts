@@ -13,9 +13,16 @@ import {
 	type QuickPickUi,
 } from '../runAssessment';
 import { getMetricDefinition, METRIC_DEFINITIONS } from '../metricCatalog';
-import { formatAssessmentRunLabel } from '../sidebarFormatting';
+import { formatAssessmentRunLabel, SIDEBAR_THEME_CSS } from '../sidebarFormatting';
 
 suite('Run assessment requests', () => {
+	test('maps the sidebar to VS Code light and dark theme classes', () => {
+		assert.match(SIDEBAR_THEME_CSS, /body\.vscode-light, body\.vscode-high-contrast-light \{ color-scheme: light; \}/);
+		assert.match(SIDEBAR_THEME_CSS, /body\.vscode-dark, body\.vscode-high-contrast \{ color-scheme: dark; \}/);
+		assert.match(SIDEBAR_THEME_CSS, /--vscode-sideBar-background/);
+		assert.match(SIDEBAR_THEME_CSS, /--vscode-input-background, #ffffff/);
+	});
+
 	test('exposes all assessment names and data source options', () => {
 		assert.strictEqual(ASSESSMENTS.length, 14);
 		assert.deepStrictEqual(DATA_SOURCE_OPTIONS, ['Deployment URL', 'Local URL']);
