@@ -11,7 +11,7 @@ import {
 	type AssessmentProfileSelection,
 } from './assessmentProfiles';
 import { METRIC_DEFINITIONS } from './metricCatalog';
-import { formatAssessmentRunLabel } from './sidebarFormatting';
+import { formatAssessmentRunLabel, SIDEBAR_THEME_CSS } from './sidebarFormatting';
 
 export type SidebarInitialSelection =
 	| { mode: 'profiles'; profiles: AssessmentProfileSelection[] }
@@ -256,9 +256,10 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
 <style nonce="${nonce}">
-	:root { color-scheme: light dark; }
+	${SIDEBAR_THEME_CSS}
 	* { box-sizing: border-box; }
-	body { margin: 0; padding: 14px 12px 24px; color: var(--vscode-foreground); font: var(--vscode-font-size) var(--vscode-font-family); }
+	html { min-height: 100%; background: var(--uiqlab-sidebar-background); }
+	body { min-height: 100vh; margin: 0; padding: 14px 12px 24px; color: var(--vscode-foreground); background: var(--uiqlab-sidebar-background); font: var(--vscode-font-size) var(--vscode-font-family); }
 	h2 { font-size: 16px; margin: 0 0 4px; }
 	.intro { color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1.45; margin: 0 0 18px; }
 	fieldset { border: 0; padding: 0; margin: 0 0 18px; min-width: 0; }
@@ -266,12 +267,17 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	.source-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 	.selection-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
 	.comparison-options { display: grid; gap: 6px; }
-	.source-option { border: 1px solid var(--vscode-input-border, transparent); padding: 7px; cursor: pointer; }
+	.source-option { border: 1px solid var(--uiqlab-surface-border); border-radius: 3px; background: var(--uiqlab-surface-background); padding: 7px; cursor: pointer; }
+	.source-option:hover { background: var(--uiqlab-hover-background); }
 	.source-option:has(input:checked) { border-color: var(--vscode-focusBorder); background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+	.source-option:focus-within { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
 	.source-option input { margin: 0 5px 0 0; }
 	label[for="url"] { display: block; font-weight: 600; margin: 12px 0 6px; }
-	input[type="url"] { width: 100%; border: 1px solid var(--vscode-input-border, transparent); background: var(--vscode-input-background); color: var(--vscode-input-foreground); padding: 7px 8px; outline: none; }
-	select { width: 100%; border: 1px solid var(--vscode-input-border, transparent); background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); padding: 7px 8px; outline: none; }
+	input[type="checkbox"], input[type="radio"] { accent-color: var(--vscode-button-background); }
+	input[type="url"] { width: 100%; border: 1px solid var(--uiqlab-surface-border); border-radius: 2px; background: var(--uiqlab-surface-background); color: var(--vscode-input-foreground); padding: 7px 8px; outline: none; }
+	input[type="url"]::placeholder { color: var(--vscode-input-placeholderForeground); opacity: 1; }
+	select { width: 100%; border: 1px solid var(--uiqlab-surface-border); border-radius: 2px; background: var(--vscode-dropdown-background, var(--uiqlab-surface-background)); color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground)); padding: 7px 8px; outline: none; }
+	select:focus { border-color: var(--vscode-focusBorder); }
 	.select-label { display: block; margin: 10px 0 6px; font-weight: 600; }
 	.mode-panel { margin-top: 8px; padding: 4px 0; }
 	.hidden { display: none; }
@@ -283,12 +289,12 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	.preference-title { display: block; font-weight: 600; line-height: 1.35; }
 	.preference-description { display: block; margin-top: 2px; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.4; }
 	.demo-badge { display: inline-block; margin-left: 4px; padding: 1px 5px; border-radius: 8px; color: var(--vscode-badge-foreground); background: var(--vscode-badge-background); font-size: 9px; font-weight: 600; line-height: 1.35; text-transform: uppercase; vertical-align: 1px; }
-	.preference + .preference { border-top: 1px solid var(--vscode-widget-border); }
+	.preference + .preference { border-top: 1px solid var(--uiqlab-surface-border); }
 	.preference.disabled { opacity: .55; }
-	.local-availability-hint { margin: 8px 0 0; padding: 7px 9px; border-left: 3px solid var(--vscode-notificationsWarningIcon-foreground); color: var(--vscode-descriptionForeground); background: var(--vscode-textBlockQuote-background); font-size: 11px; line-height: 1.4; }
+	.local-availability-hint { margin: 8px 0 0; padding: 7px 9px; border-left: 3px solid var(--vscode-notificationsWarningIcon-foreground); color: var(--vscode-descriptionForeground); background: var(--uiqlab-subtle-background); font-size: 11px; line-height: 1.4; }
 	.profile.unavailable, .metric.unavailable { opacity: .55; }
 	.profile.unavailable label, .metric.unavailable label { cursor: not-allowed; }
-	.ai-privacy-notice { margin-top: 8px; border: 1px solid var(--vscode-widget-border); border-radius: 4px; background: var(--vscode-textBlockQuote-background); color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.45; }
+	.ai-privacy-notice { margin-top: 8px; border: 1px solid var(--uiqlab-surface-border); border-radius: 4px; background: var(--uiqlab-subtle-background); color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.45; }
 	.ai-privacy-notice summary { padding: 9px 10px; color: var(--vscode-foreground); font-size: 12px; font-weight: 600; cursor: pointer; }
 	.ai-privacy-notice summary:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -2px; }
 	.ai-privacy-content { padding: 0 10px 10px; }
@@ -296,12 +302,12 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	.ai-privacy-notice p + p { margin-top: 6px; }
 	.switch { position: relative; display: inline-block; flex: 0 0 auto; width: 34px; height: 18px; }
 	.switch input { width: 1px; height: 1px; opacity: 0; }
-	.slider { position: absolute; inset: 0; border: 1px solid var(--vscode-input-border, var(--vscode-widget-border)); border-radius: 9px; background: var(--vscode-input-background); cursor: pointer; transition: background .15s; }
+	.slider { position: absolute; inset: 0; border: 1px solid var(--uiqlab-surface-border); border-radius: 9px; background: var(--uiqlab-surface-background); cursor: pointer; transition: background .15s; }
 	.slider::before { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--vscode-descriptionForeground); transition: transform .15s, background .15s; }
 	.switch input:checked + .slider { border-color: var(--vscode-focusBorder); background: var(--vscode-button-background); }
 	.switch input:checked + .slider::before { transform: translateX(16px); background: var(--vscode-button-foreground); }
 	.switch input:focus-visible + .slider { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
-	.profile { padding: 9px 0; border-bottom: 1px solid var(--vscode-widget-border); }
+	.profile { padding: 9px 0; border-bottom: 1px solid var(--uiqlab-surface-border); }
 	.profile-label { display: flex; gap: 7px; align-items: flex-start; font-weight: 600; line-height: 1.35; cursor: pointer; }
 	.profile-label input { margin-top: 2px; }
 	.direction-label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; margin: 7px 0 0 22px; color: var(--vscode-descriptionForeground); font-size: 11px; }
@@ -315,7 +321,7 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	.section-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 10px 0 4px; }
 	.section-row strong { font-size: 12px; }
 	.link-button { border: 0; padding: 0; color: var(--vscode-textLink-foreground); background: none; font: inherit; font-size: 11px; cursor: pointer; }
-	.metric { padding: 7px 0; border-bottom: 1px solid var(--vscode-widget-border); }
+	.metric { padding: 7px 0; border-bottom: 1px solid var(--uiqlab-surface-border); }
 	.metric-label { display: flex; gap: 7px; align-items: flex-start; line-height: 1.35; cursor: pointer; }
 	.metric-label input { margin-top: 2px; }
 	.metric-id { display: inline-block; min-width: 28px; margin-right: 5px; color: var(--vscode-descriptionForeground); font-size: 10px; text-transform: uppercase; }
@@ -325,6 +331,7 @@ export class AssessmentSidebarProvider implements vscode.WebviewViewProvider {
 	.error { display: none; color: var(--vscode-errorForeground); font-size: 12px; margin: 0 0 8px; }
 	button.run { width: 100%; border: 0; background: var(--vscode-button-background); color: var(--vscode-button-foreground); padding: 8px 12px; font-weight: 600; cursor: pointer; }
 	button.run:hover { background: var(--vscode-button-hoverBackground); }
+	button.run:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
 	button.run:disabled { opacity: .65; cursor: wait; }
 </style></head><body>
 	<h2>Web UI assessment</h2><p class="intro">Configure an assessment here. Your choices remain available while you work.</p>
