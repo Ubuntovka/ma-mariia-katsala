@@ -1,6 +1,6 @@
-# UIQLab
+# UITend
 
-UIQLab assesses web interfaces from a VS Code extension or CI/CD pipeline. This
+UITend assesses web interfaces from a VS Code extension or CI/CD pipeline. This
 repository contains the orchestrator, PostgreSQL storage, the extension, and the
 CI client. The metric-evaluation backend is a separate service.
 
@@ -27,15 +27,15 @@ cd ma-mariia-katsala
 Install the extension and CI client dependencies:
 
 ```bash
-npm ci --prefix apps/uiqlab-assessment
-npm ci --prefix apps/uiqlab-ci
-npx --prefix apps/uiqlab-assessment playwright-core install chromium
+npm ci --prefix apps/uitend-assessment
+npm ci --prefix apps/uitend-ci
+npx --prefix apps/uitend-assessment playwright-core install chromium
 ```
 
 On Linux, install Chromium's system libraries if local capture fails:
 
 ```bash
-npx --prefix apps/uiqlab-assessment playwright-core install-deps chromium
+npx --prefix apps/uitend-assessment playwright-core install-deps chromium
 ```
 
 ### 2. Configure the services
@@ -68,7 +68,7 @@ on `thesis-network`. `BACKEND_ARTIFACT_URL` must reach the backend's
 published evaluator port at `host.docker.internal:8001`. LLM settings are
 optional and are needed only for AI explanations.
 
-### 3. Start UIQLab
+### 3. Start UITend
 
 ```bash
 docker compose up --build -d
@@ -77,7 +77,7 @@ docker compose up --build -d
 The orchestrator is available at <http://localhost:8181> and its API docs at
 <http://localhost:8181/docs>. PostgreSQL is exposed on port `5433`.
 
-Open `apps/uiqlab-assessment` in VS Code and press `F5` to build and launch the
+Open `apps/uitend-assessment` in VS Code and press `F5` to build and launch the
 extension. Its local-capture workflow expects the orchestrator at
 `http://127.0.0.1:8181`.
 
@@ -90,8 +90,8 @@ docker compose down
 ## Development checks
 
 ```bash
-npm test --prefix apps/uiqlab-assessment
-npm test --prefix apps/uiqlab-ci
+npm test --prefix apps/uitend-assessment
+npm test --prefix apps/uitend-ci
 docker compose config --quiet
 ```
 
@@ -100,5 +100,5 @@ docker compose config --quiet
 - [Assessment profiles](docs/assessment-profiles.md)
 - [CI integration](docs/ci-integration.md)
 - [LLM explanations](docs/llm-explanation-integration.md)
-- [Extension usage](apps/uiqlab-assessment/README.md)
-- [CI client reference](apps/uiqlab-ci/README.md)
+- [Extension usage](apps/uitend-assessment/README.md)
+- [CI client reference](apps/uitend-ci/README.md)

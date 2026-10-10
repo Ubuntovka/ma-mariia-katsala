@@ -1,9 +1,9 @@
 services:
-  orchestrator:
+  uitend-orchestrator:
     build:
-      context: ./apps/orchestrator
+      context: ./apps/uitend-orchestrator
       dockerfile: Dockerfile
-    container_name: orchestrator
+    container_name: uitend-orchestrator
     ports:
       - "${ORCHESTRATOR_PORT:-8181}:8181"
     extra_hosts:
@@ -14,22 +14,22 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_HOST=orchestrator-postgres
-      - UIQLAB_RESULT_READ_TIMEOUT_SECONDS=${UIQLAB_RESULT_READ_TIMEOUT_SECONDS:-300}
+      - POSTGRES_HOST=uitend-orchestrator-postgres
+      - UITEND_RESULT_READ_TIMEOUT_SECONDS=${UITEND_RESULT_READ_TIMEOUT_SECONDS:-300}
       - LLM_API_URL=${LLM_API_URL}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_MODEL=${LLM_MODEL}
       - LLM_CONNECT_TIMEOUT_SECONDS=${LLM_CONNECT_TIMEOUT_SECONDS:-60}
       - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-180}
     depends_on:
-      - orchestrator-postgres
+      - uitend-orchestrator-postgres
     networks:
-      - orchestrator-network
+      - uitend-orchestrator-network
       - thesis-network
 
-  orchestrator-postgres:
+  uitend-orchestrator-postgres:
     image: postgres:15
-    container_name: orchestrator-postgresql
+    container_name: uitend-orchestrator-postgresql
     restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -49,10 +49,10 @@ services:
       timeout: 3s
       retries: 10
     networks:
-      - orchestrator-network
+      - uitend-orchestrator-network
 
 networks:
-  orchestrator-network:
+  uitend-orchestrator-network:
     driver: bridge
 
   thesis-network:
@@ -64,23 +64,23 @@ volumes:
 
 
 #services:
-#  orchestrator:
+#  uitend-orchestrator:
 #    build:
-#      context: ./apps/orchestrator
+#      context: ./apps/uitend-orchestrator
 #      dockerfile: Dockerfile
-#    container_name: orchestrator
+#    container_name: uitend-orchestrator
 #    ports:
 #      - "${ORCHESTRATOR_PORT:-8181}:8181"
 #    environment:
 #      - BACKEND_URL=${BACKEND_URL}
 #    depends_on:
-#      - orchestrator-postgres
+#      - uitend-orchestrator-postgres
 #    networks:
-#      - orchestrator-network
+#      - uitend-orchestrator-network
 #
-#  orchestrator-postgres:
+#  uitend-orchestrator-postgres:
 #    image: postgres:15
-#    container_name: orchestrator-postgresql
+#    container_name: uitend-orchestrator-postgresql
 #    restart: always
 #    environment:
 #      POSTGRES_USER: ${POSTGRES_USER}
@@ -97,10 +97,10 @@ volumes:
 #      timeout: 3s
 #      retries: 10
 #    networks:
-#      - orchestrator-network
+#      - uitend-orchestrator-network
 #
 #networks:
-#  orchestrator-network:
+#  uitend-orchestrator-network:
 #    driver: bridge
 #
 #volumes:

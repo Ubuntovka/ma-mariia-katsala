@@ -44,8 +44,8 @@ htmlcov/
 
 node_modules/
 ma-rui-feng-thesis-rui-feng
-apps/uiqlab-assessment/out
-apps/uiqlab-assessment/.vscode-test
+apps/uitend-assessment/out
+apps/uitend-assessment/.vscode-test
 
 # GitLab Runner working directories
 builds/
