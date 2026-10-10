@@ -1,13 +1,13 @@
 # Assessment profiles
 
-UIQLab supports predefined assessment profiles in both the CI/CD client and the
+UITend supports predefined assessment profiles in both the CI/CD client and the
 IDE extension. A profile selects a related group of metrics and records the
 intended direction of the assessment. The direction does not affect metric
 execution; it determines how scalar changes are classified in comparisons.
 
 ## IDE sidebar selection
 
-The **UIQLab Assessment** sidebar offers two mutually exclusive modes:
+The **UITend Assessment** sidebar offers two mutually exclusive modes:
 
 - **Profiles** lists the five specific profiles and excludes `general-review`.
   Select one or more profiles and choose one allowed direction for every
@@ -23,12 +23,12 @@ metric IDs with `{ "mode": "custom" }` metadata. Switching modes clears the
 inactive selection so previously checked profiles cannot affect a custom run,
 and previously checked metrics cannot affect a profile run.
 
-The assessment selection in `.uiqlab.json` initializes the corresponding
+The assessment selection in `.uitend.json` initializes the corresponding
 sidebar mode. A configured `general-review` selection initializes custom mode
 with all 14 metrics because General review is deliberately absent from the
 sidebar profile list. Without configured assessment settings, profile mode
 opens without a preselected profile. Changes in the sidebar affect the
-interactive run only and do not modify `.uiqlab.json`.
+interactive run only and do not modify `.uitend.json`.
 
 ## IDE profile goal feedback
 
@@ -161,7 +161,7 @@ resolution.
 
 ## Multiple profiles
 
-UIQLab preserves profile order while resolving their metric lists and removes
+UITend preserves profile order while resolving their metric lists and removes
 duplicate metric IDs. Each metric therefore runs at most once per assessment.
 
 For example:
@@ -312,27 +312,27 @@ LLM explanations remain outside the quality-gate flow.
 
 ## Relevant implementation files
 
-- `apps/uiqlab-ci/src/assessmentProfiles.ts`: CI profile catalog and resolver.
-- `apps/uiqlab-ci/src/config.ts`: CI configuration parsing and validation.
-- `apps/uiqlab-ci/src/qualityGate.ts`: deterministic profile classification and gate decisions.
-- `apps/uiqlab-ci/src/report.ts`: profile metadata in CI reports.
-- `apps/uiqlab-ci/src/workflow.ts`: ordered page URL resolution and sequential execution.
-- `apps/uiqlab-assessment/src/assessmentProfiles.ts`: IDE profile catalog and resolver.
-- `apps/uiqlab-assessment/src/assessmentSidebar.ts`: multi-profile and direction selection in the IDE sidebar.
-- `apps/uiqlab-assessment/src/profileAssessment.ts`: deterministic IDE profile outcome and overall-goal classification.
-- `apps/uiqlab-assessment/src/projectConfig.ts`: IDE configuration parsing and validation.
-- `apps/orchestrator/main.py`: assessment metadata persistence and run summaries.
-- `docs/uiqlab.example.json`: example profile configuration.
+- `apps/uitend-ci/src/assessmentProfiles.ts`: CI profile catalog and resolver.
+- `apps/uitend-ci/src/config.ts`: CI configuration parsing and validation.
+- `apps/uitend-ci/src/qualityGate.ts`: deterministic profile classification and gate decisions.
+- `apps/uitend-ci/src/report.ts`: profile metadata in CI reports.
+- `apps/uitend-ci/src/workflow.ts`: ordered page URL resolution and sequential execution.
+- `apps/uitend-assessment/src/assessmentProfiles.ts`: IDE profile catalog and resolver.
+- `apps/uitend-assessment/src/assessmentSidebar.ts`: multi-profile and direction selection in the IDE sidebar.
+- `apps/uitend-assessment/src/profileAssessment.ts`: deterministic IDE profile outcome and overall-goal classification.
+- `apps/uitend-assessment/src/projectConfig.ts`: IDE configuration parsing and validation.
+- `apps/uitend-orchestrator/main.py`: assessment metadata persistence and run summaries.
+- `docs/uitend.example.json`: example profile configuration.
 
 ## Verification
 
 Run the focused checks with:
 
 ```sh
-npm test --prefix apps/uiqlab-ci
-npm run compile --prefix apps/uiqlab-assessment
-python3 -m unittest discover -s apps/orchestrator
+npm test --prefix apps/uitend-ci
+npm run compile --prefix apps/uitend-assessment
+python3 -m unittest discover -s apps/uitend-orchestrator
 ```
 
 The orchestrator command requires the Python dependencies from
-`apps/orchestrator/requirements.txt`.
+`apps/uitend-orchestrator/requirements.txt`.

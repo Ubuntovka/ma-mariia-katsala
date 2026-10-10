@@ -57,7 +57,7 @@ configuration and is safe to commit.
 
 ## Privacy and operator responsibility
 
-UIQLab does not provide an LLM service, model account, or API credentials. The
+UITend does not provide an LLM service, model account, or API credentials. The
 person operating the assessment backend selects and configures their own
 OpenAI-compatible API endpoint, model, and API key. Consequently, the selected
 provider's terms and configured retention, model-training, and international-
@@ -369,12 +369,12 @@ but model-generated HTML cannot execute in the webview.
 
 | File | Responsibility |
 | --- | --- |
-| `apps/orchestrator/main.py` | Environment configuration, metric descriptions, prompt preparation, URL normalization, provider request, response parsing, and `/eval/explanation`. |
-| `apps/orchestrator/test_main.py` | Unit tests for URL normalization, prompt contents, URL omission, and response extraction. |
-| `apps/uiqlab-assessment/src/runAssessment.ts` | Client function that calls the orchestrator explanation endpoint and enforces the extension timeout. |
-| `apps/uiqlab-assessment/src/extension.ts` | Calls the explanation function after assessment completion and renders success or failure states. |
-| `apps/uiqlab-assessment/src/sourceContext.ts` | Selects and bounds opt-in frontend source context for profile and custom-metric explanations. |
-| `apps/uiqlab-assessment/src/assessmentSidebar.ts` | Stores and enforces the per-workspace source-sharing permission toggle. |
+| `apps/uitend-orchestrator/main.py` | Environment configuration, metric descriptions, prompt preparation, URL normalization, provider request, response parsing, and `/eval/explanation`. |
+| `apps/uitend-orchestrator/test_main.py` | Unit tests for URL normalization, prompt contents, URL omission, and response extraction. |
+| `apps/uitend-assessment/src/runAssessment.ts` | Client function that calls the orchestrator explanation endpoint and enforces the extension timeout. |
+| `apps/uitend-assessment/src/extension.ts` | Calls the explanation function after assessment completion and renders success or failure states. |
+| `apps/uitend-assessment/src/sourceContext.ts` | Selects and bounds opt-in frontend source context for profile and custom-metric explanations. |
+| `apps/uitend-assessment/src/assessmentSidebar.ts` | Stores and enforces the per-workspace source-sharing permission toggle. |
 | `docker-compose.yml` | Passes LLM variables into the orchestrator container. |
 | `.env.example` | Documents non-secret example configuration. |
 | `.gitignore` | Keeps the real `.env` private while allowing `.env.example` to be committed. |
@@ -414,7 +414,7 @@ it remains bounded by the overall `LLM_TIMEOUT_SECONDS` deadline.
 
 ### `httpx.ReadTimeout` while polling `/eval/result/...`
 
-This can come from the separate UIQLab assessment backend rather than the LLM.
+This can come from the separate UITend assessment backend rather than the LLM.
 Look at the stack trace: calls through `get_eval_result()` and
 `fetch_merged_backend_results()` concern metric polling; calls through
 `explain_assessment()` concern the LLM provider.
@@ -424,7 +424,7 @@ Look at the stack trace: calls through `get_eval_result()` and
 Run the extension checks:
 
 ```bash
-cd apps/uiqlab-assessment
+cd apps/uitend-assessment
 npm run check-types
 npm run lint
 npm run compile-tests
@@ -433,7 +433,7 @@ npm run compile-tests
 Run the orchestrator tests in an environment with its dependencies installed:
 
 ```bash
-cd apps/orchestrator
+cd apps/uitend-orchestrator
 python -m pip install -r requirements.txt
 python -m unittest test_main.py
 ```
