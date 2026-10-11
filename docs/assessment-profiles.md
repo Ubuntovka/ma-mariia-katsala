@@ -1,96 +1,36 @@
 # Assessment profiles
 
-UITend supports predefined assessment profiles in both the CI/CD client and the
-IDE extension. A profile selects a related group of metrics and records the
-intended direction of the assessment. The direction does not affect metric
-execution; it determines how scalar changes are classified in comparisons.
+An assessment profile groups related metrics and records the intended direction
+of change. Directions affect comparisons and quality gates, not metric
+execution.
 
-## IDE sidebar selection
+## Using profiles in the IDE
 
-The **UITend Assessment** sidebar offers two mutually exclusive modes:
+The **UITend Assessment** sidebar has two modes:
 
-- **Profiles** lists the five specific profiles and excludes `general-review`.
-  Select one or more profiles and choose one allowed direction for every
-  selected profile.
-- **Custom metrics** lists `m1` through `m14`. Any combination can be selected,
-  **All** and **None** controls are available, and every metric retains its
-  expandable **What does this measure?** description.
+- **Profiles**: select one or more profiles and a direction for each.
+  `general-review` is excluded because it is equivalent to all metrics.
+- **Custom metrics**: select any combination of `m1` through `m14`.
 
-When an assessment starts, the extension validates the active selection in the
-extension host. Profile mode resolves profiles to metric IDs, removes overlaps,
-and submits the profile metadata. Custom mode submits exactly the selected
-metric IDs with `{ "mode": "custom" }` metadata. Switching modes clears the
-inactive selection so previously checked profiles cannot affect a custom run,
-and previously checked metrics cannot affect a profile run.
+Profile selections are resolved to metric IDs and duplicates are removed.
+Switching modes clears the inactive selection. Sidebar changes apply only to
+the interactive run and do not modify `.uitend.json`.
 
-The assessment selection in `.uitend.json` initializes the corresponding
-sidebar mode. A configured `general-review` selection initializes custom mode
-with all 14 metrics because General review is deliberately absent from the
-sidebar profile list. Without configured assessment settings, profile mode
-opens without a preselected profile. Changes in the sidebar affect the
-interactive run only and do not modify `.uitend.json`.
+When a compatible baseline exists, the history comparison shows whether each
+profile goal was achieved and which material metric changes aligned with,
+opposed, or did not significantly affect its direction. Custom runs keep the
+metric-by-metric comparison without the profile dashboard.
 
-## IDE profile goal feedback
+If **Use LLM explanation** is enabled, UITend adds advisory guidance above the
+raw results. The optional **Allow LLM to use source code (Demo)** setting may
+share up to 10 relevant frontend files, limited to 24 KiB per file and 100 KiB
+total. It is off by default. See
+[LLM-based assessment explanations](llm-explanation-integration.md).
 
-For a profile-based run with a compatible historical baseline, the IDE history
-comparison starts with a visual profile-goal dashboard. The dashboard contains:
+## Configuration
 
-- an overall result such as **Profile goals achieved**, **Profile goals not
-  achieved**, **Partially achieved**, or **Not enough comparison data**;
-- one status card per selected profile, including its chosen direction;
-- a horizontal change bar showing how many comparable primary metrics followed
-  the direction, remained within the materiality threshold, or opposed it;
-- a short deterministic reason for each outcome.
-
-The existing detailed metric comparison remains directly below the dashboard.
-Custom metric comparisons do not render the profile dashboard and keep their
-current overview unchanged.
-
-If **Use LLM explanation** is enabled during a profile run, the Evaluation
-Results editor also shows structured **AI profile guidance**. The deterministic
-history outcome remains authoritative; the LLM briefly explains the measured
-movement and proposes two to four next-step experiments for the selected
-directions. This appears as a status header, compact change rows, and numbered
-suggestion cards rather than one prose block. Custom metric runs use a parallel
-structured analysis panel that separates measured evidence, technical
-interpretation, and practical implementation actions.
-
-The sidebar provides a separate **Allow LLM to use source code (Demo)** toggle.
-This experimental feature is available for profile and custom-metric runs with
-LLM feedback, stored per workspace, and off by default. With permission, the IDE extension
-selects up to 10 relevant frontend files, limited to 24 KiB per file and 100 KiB
-total. The files are supplied to the LLM to produce more precise,
-project-specific interpretations and suggestions. The active editor and assessed route are
-prioritized; generated directories, dependencies, minified JavaScript, and
-source maps are excluded. The LLM cannot search the project, and the captured
-page HTML is not used as this source context. Without permission, the same
-explanation is generated from assessment/history data and uses metrics only.
-
-The history comparison lists every metric requested by the current assessment,
-not only metrics shared with the baseline. A requested metric without a
-compatible historical result is shown by name with **No baseline available**.
-Its current value is intentionally not repeated because it is already available
-in **Evaluation Results**. If a stored baseline exists but cannot be compared,
-the metric instead shows **Comparison unavailable**.
-
-The dashboard is shown in the **Assessment History Comparison** editor opened
-beside the raw **Evaluation Results** editor. After rebuilding the extension,
-reload the Extension Development Host so it loads the new `dist/extension.js`.
-If the orchestrator is running from Docker, restart that service after changing
-the orchestrator source.
-
-The IDE uses the same primary scalar extraction, materiality thresholds, and
-direction mappings as the CI/CD quality-gate classification. `preserve` is
-achieved when no meaningful change is detected. `observe` is presented as an
-observation rather than as a pass/fail goal. Metrics without a deterministic
-primary scalar remain visible in the detailed comparison but do not decide a
-profile outcome.
-
-## Profile configuration
-
-For a multi-page CI assessment, configure an ordered `ci.pages` array. Every
-page has one or more of the seven profile IDs and one allowed direction for each
-profile:
+For multi-page CI assessments, configure `ci.pages`. Each page has its own
+profiles and quality gate:
 
 ```json
 {
@@ -113,86 +53,20 @@ profile:
 }
 ```
 
-The CI client resolves each page's profiles and quality-gate mode independently,
-de-duplicates overlapping metric IDs, and submits one orchestrator assessment
-at a time. A page's directions, resolved metrics, and gate policy cannot leak
-into another page. The top-level
-`assessment` and `qualityGate` configuration remains available as the IDE
-default and for the compatible single-page CI mode. Set `assessment.mode` to
-`profiles` and provide one or more profile selections:
-
-```json
-{
-  "projectKey": "123e4567-e89b-12d3-a456-426614174000",
-  "name": "example-web-app",
-  "assessment": {
-    "mode": "profiles",
-    "profiles": [
-      {
-        "id": "visual-complexity",
-        "direction": "reduce-complexity"
-      }
-    ]
-  },
-  "ci": {
-    "branches": ["main", "feature/ui-*"],
-    "baselineBranch": "main"
-  }
-}
-```
-
-Each selection requires both an `id` and a valid `direction`. The selected
-profiles are resolved to metric IDs before an assessment is submitted.
-
-## Available profiles
-
-| Profile ID | Display name | Allowed directions | Metrics |
-| --- | --- | --- | --- |
-| `general-review` | General review | `observe` | All metrics, `m1` through `m14` |
-| `visual-complexity` | Visual complexity | `reduce-complexity`, `increase-complexity`, `preserve`, `observe` | Edge density (`m9`), Feature congestion (`m10`), Subband entropy (`m11`) |
-| `screen-whitespace` | Screen white space | `more-whitespace`, `less-whitespace`, `preserve`, `observe` | White space proportion (`m5`) |
-| `text-amount` | Text amount | `more-words`, `fewer-words`, `preserve`, `observe` | Word count (`m8`) |
-| `colorfulness` | Colorfulness | `more-colorful`, `less-colorful`, `preserve`, `observe` | Colorfulness (`m3`) |
-| `accessibility` | Accessibility | `fewer-detected-violations`, `preserve`, `observe` | Automatically detected violations (`m13`) |
-
-The profile catalog uses the stable metric identifiers already used by the
-assessment backend. Display names returned by the backend do not affect profile
-resolution.
-
-## Multiple profiles
-
-UITend preserves profile order while resolving their metric lists and removes
-duplicate metric IDs. Each metric therefore runs at most once per assessment.
-
-For example:
+For a single-page CI run or the IDE default, use a top-level `assessment`:
 
 ```json
 {
   "assessment": {
     "mode": "profiles",
     "profiles": [
-      {
-        "id": "visual-complexity",
-        "direction": "reduce-complexity"
-      },
-      {
-        "id": "screen-whitespace",
-        "direction": "more-whitespace"
-      }
+      { "id": "visual-complexity", "direction": "reduce-complexity" }
     ]
   }
 }
 ```
 
-This resolves to:
-
-```json
-["m9", "m10", "m11", "m5"]
-```
-
-## Custom metric selection
-
-Manual metric selection remains available as `custom` mode:
+Manual selection uses custom mode:
 
 ```json
 {
@@ -203,136 +77,51 @@ Manual metric selection remains available as `custom` mode:
 }
 ```
 
-Existing configurations that define manual metrics under `ci.metrics` remain
-supported and are treated as custom selection:
+The legacy `ci.metrics` field remains supported for single-page custom runs.
+Do not combine profile and manual metric selection.
 
-```json
-{
-  "ci": {
-    "branches": ["main"],
-    "metrics": ["m8", "m10", "m13", "m14"]
-  }
-}
-```
+## Available profiles
 
-Profile selection cannot be combined with either `assessment.metrics` or the
-legacy `ci.metrics` field. A configuration must use profiles or manual metrics,
-not both.
+| Profile ID | Allowed directions | Metrics |
+| --- | --- | --- |
+| `general-review` | `observe` | All metrics, `m1`–`m14` |
+| `visual-complexity` | `reduce-complexity`, `increase-complexity`, `preserve`, `observe` | `m9`, `m10`, `m11` |
+| `screen-whitespace` | `more-whitespace`, `less-whitespace`, `preserve`, `observe` | `m5` |
+| `text-amount` | `more-words`, `fewer-words`, `preserve`, `observe` | `m8` |
+| `colorfulness` | `more-colorful`, `less-colorful`, `preserve`, `observe` | `m3` |
+| `accessibility` | `fewer-detected-violations`, `preserve`, `observe` | `m13` |
+
+`preserve` treats material movement in either direction as opposed.
+`observe` reports movement without creating a pass/fail goal. The
+accessibility profile covers automatically detected violations, not overall
+accessibility.
+
+## Comparison and quality gates
+
+UITend compares each profile's primary scalar metrics with the latest
+compatible baseline. Outcomes are `aligned`, `opposed`, `mixed`,
+`unchanged`, or `not-comparable`. Fixed materiality thresholds prevent small
+changes from affecting the outcome. Visual and structured metrics remain in
+the report but do not determine a direction.
+
+Quality-gate modes behave as follows:
+
+| Mode | Aligned, unchanged, or not comparable | Mixed | Opposed |
+| --- | --- | --- | --- |
+| `report` | Pass | Pass | Pass |
+| `warn` | Pass | Warning | Warning |
+| `enforce` | Pass | Warning | Fail |
+
+A first run normally passes and establishes a baseline. Set
+`qualityGate.requireBaseline` to `true` to fail when no compatible baseline
+exists. LLM explanations never affect the gate.
+
+See [CI integration](ci-integration.md) for exit codes, variables, and pipeline
+examples.
 
 ## Validation
 
-Configuration loading fails with a descriptive error when:
-
-- `assessment.mode` is not `profiles` or `custom`;
-- the profile list is missing or empty;
-- a profile ID is unknown;
-- a direction is not allowed for its profile;
-- the same profile is selected more than once;
-- profile selection is combined with manual metrics;
-- custom metrics are missing, duplicated, or outside `m1` through `m14`;
-- `ci.pages` is empty, contains an invalid or duplicate route path, or is
-  combined with legacy `ci.metrics`;
-- a CI page has no profiles, repeats a profile, is missing a profile direction
-  or `qualityGate.mode`, uses an unsupported direction, or uses an unknown gate
-  mode.
-
-Both the CI client and IDE extension validate configuration selections. The IDE
-extension also validates selections submitted from the sidebar before starting
-an assessment.
-
-## Assessment results and reports
-
-The selected mode and profile intent are passed to the orchestrator alongside
-the resolved metric list. Assessment runs store this metadata and expose it in
-run summaries used by IDE history and comparison flows.
-
-For a profile-based assessment, the CI report includes:
-
-```json
-{
-  "assessment": {
-    "mode": "profiles",
-    "profiles": [
-      {
-        "id": "visual-complexity",
-        "direction": "reduce-complexity"
-      }
-    ]
-  }
-}
-```
-
-Custom assessments are represented as:
-
-```json
-{
-  "assessment": {
-    "mode": "custom"
-  }
-}
-```
-
-Profile IDs and directions are retained so future CI and IDE features can
-explain results in the context of the user's intent.
-
-Multi-page CI output uses report schema version 2. Its ordered `pages` array
-contains one complete page report with all profile selections for that
-orchestrator run. Each page report retains its configured `report`, `warn`, or
-`enforce` mode. The batch quality gate uses mode `per-page` and reflects the
-most severe page gate.
-
-## Quality gate
-
-The CI client compares primary scalar metrics with the latest compatible
-baseline using the existing deterministic materiality tolerances. Each profile
-is classified as `aligned`, `opposed`, `mixed`, `unchanged`, or
-`not-comparable`. A first run is `not-comparable`, establishes the baseline, and
-passes.
-
-The CI report also shows each profile's goal status and a page-level goal
-summary. These use the same rules as the IDE dashboard, so an `unchanged`
-profile reads as *goal not reached* while the gate still passes. Changes below
-the materiality threshold are listed as *not significant* and do not affect the
-outcome.
-
-Configure each multi-page entry's `qualityGate.mode` as `report`, `warn`, or
-`enforce`. The global `qualityGate.mode` remains available for single-page CI
-runs and defaults to `warn`. Report mode always exits successfully; warn mode
-returns a non-blocking warning for mixed or opposed outcomes; enforce mode
-blocks opposed outcomes and warns for mixed outcomes. The gate does not
-calculate an overall quality score.
-
-With multiple profiles on one page, `enforce` fails when at least one profile is
-`opposed`; it warns when none are opposed but at least one is `mixed`. `warn`
-produces a warning when at least one profile is `opposed` or `mixed`. Requiring
-all profiles to be opposed would allow one regression to be hidden by unrelated
-profile improvements.
-
-LLM explanations remain outside the quality-gate flow.
-
-## Relevant implementation files
-
-- `apps/uitend-ci/src/assessmentProfiles.ts`: CI profile catalog and resolver.
-- `apps/uitend-ci/src/config.ts`: CI configuration parsing and validation.
-- `apps/uitend-ci/src/qualityGate.ts`: deterministic profile classification and gate decisions.
-- `apps/uitend-ci/src/report.ts`: profile metadata in CI reports.
-- `apps/uitend-ci/src/workflow.ts`: ordered page URL resolution and sequential execution.
-- `apps/uitend-assessment/src/assessmentProfiles.ts`: IDE profile catalog and resolver.
-- `apps/uitend-assessment/src/assessmentSidebar.ts`: multi-profile and direction selection in the IDE sidebar.
-- `apps/uitend-assessment/src/profileAssessment.ts`: deterministic IDE profile outcome and overall-goal classification.
-- `apps/uitend-assessment/src/projectConfig.ts`: IDE configuration parsing and validation.
-- `apps/uitend-orchestrator/main.py`: assessment metadata persistence and run summaries.
-- `docs/uitend.example.json`: example profile configuration.
-
-## Verification
-
-Run the focused checks with:
-
-```sh
-npm test --prefix apps/uitend-ci
-npm run compile --prefix apps/uitend-assessment
-python3 -m unittest discover -s apps/uitend-orchestrator
-```
-
-The orchestrator command requires the Python dependencies from
-`apps/uitend-orchestrator/requirements.txt`.
+UITend rejects unknown or repeated profiles, unsupported directions, invalid
+metric IDs, duplicate page paths, empty selections, and configurations that
+combine profiles with manual metrics. Each multi-page entry must include a
+route path, at least one profile, and `qualityGate.mode`.
