@@ -2,7 +2,7 @@
 
 UITend assesses web interfaces from a VS Code extension or CI/CD pipeline. This
 repository contains the orchestrator, PostgreSQL storage, the extension, and the
-CI client. The metric-evaluation backend is a separate service.
+CI client. The metric-evaluation backend (UIQLab) is a separate service.
 
 ## Installation
 
@@ -20,7 +20,7 @@ in your terminal. Start Docker Desktop first on macOS and Windows.
 ### 1. Get the project
 
 ```bash
-git clone https://github.com/Ubuntovka/ma-mariia-katsala.git
+git clone https://gitlab.hrz.tu-chemnitz.de/vsr/edu/advising/ma-mariia-katsala.git
 cd ma-mariia-katsala
 ```
 
@@ -40,14 +40,17 @@ npx --prefix apps/uitend-assessment playwright-core install-deps chromium
 
 ### 2. Configure the services
 
-The orchestrator requires the separate metric-evaluation backend. Create its
-shared Docker network once if it does not already exist:
+The orchestrator uses UIQLab as its backend. See
+[`uiqlab-compose/README.md`](uiqlab-compose/README.md) for how to get and start
+UIQLab.
+
+Create the shared Docker network once if it does not already exist:
 
 ```bash
 docker network create thesis-network
 ```
 
-Then start the backend on `thesis-network`.
+Then start UIQLab on `thesis-network` as described in its instructions.
 
 Copy the environment template:
 
@@ -71,8 +74,12 @@ optional and are needed only for AI explanations.
 ### 3. Start UITend
 
 ```bash
-docker compose up --build -d
+docker compose up -d --wait uitend-orchestrator-postgres
+docker compose up --build -d uitend-orchestrator
 ```
+
+The first command starts PostgreSQL and waits until it is healthy. The second
+then starts the orchestrator.
 
 The orchestrator is available at <http://localhost:8181> and its API docs at
 <http://localhost:8181/docs>. PostgreSQL is exposed on port `5433`.
@@ -93,6 +100,7 @@ docker compose down
 npm test --prefix apps/uitend-assessment
 npm test --prefix apps/uitend-ci
 docker compose config --quiet
+docker compose exec uitend-orchestrator python -m unittest test_main.py
 ```
 
 ## Documentation
@@ -102,3 +110,12 @@ docker compose config --quiet
 - [LLM explanations](docs/llm-explanation-integration.md)
 - [Extension usage](apps/uitend-assessment/README.md)
 - [CI client reference](apps/uitend-ci/README.md)
+
+## Authors and acknowledgment
+
+UITend is by Mariia Katsala, supervised by Dr.-Ing. Sebastian Heil, as a
+Master's thesis in Web Engineering at TU Chemnitz.
+
+UIQLab is by Heil, Liusnando and Gaedke (ICWE 2025). UIQLab-X is by Rui Feng
+(master's thesis, TU Chemnitz, 2026). Neither UIQLab nor UIQLab-X is part of
+this repository.
