@@ -1,85 +1,38 @@
-# CI Integration
+# CI integration
 
-## Purpose
+The UITend CI client assesses one or more routes from a deployed commit
+preview. It writes:
 
-The UITend CI client runs Web UI Assessments against several routes of a public
-commit preview. It processes the configured pages in order. For each page it
-submits one URL to the orchestrator, waits for that page's profile metrics, and
-compares the results with the same page's latest compatible assessment from the
-baseline branch before starting the next page. The client writes two artifacts
-after every run:
+- `uitend-report.html`: a self-contained visual report with comparisons and
+  embedded captures;
+- `uitend-report.json`: the machine-readable report.
 
-- `uitend-report.html` is a self-contained, responsive visual report with the
-  same palette and information hierarchy as the IDE results. It includes the
-  overall gate, page and profile outcomes, baseline comparisons, metric cards,
-  embedded before/after page captures, before/after visual metric files, and
-  expandable raw values. Page headings contain only the route after the preview
-  host and port, and embedded page captures open in a fullscreen overlay when
-  clicked. Visual metric images also open at full size. It has no JavaScript or
-  external stylesheet. Visual files are fetched while the CI job can still reach
-  the evaluator, avoiding broken `localhost` URLs in downloaded artifacts.
-- `uitend-report.json` remains the machine-readable source of truth for later
-  automation.
+Pages run sequentially. Each is compared with the latest compatible assessment
+from the configured baseline branch.
 
-The HTML report also includes print styles, so it can be opened in a browser
-and printed or saved as PDF without requiring a separate CI dependency.
+## Setup
 
-For profile-based assessments, the client classifies meaningful metric changes
-against the selected directions and applies the configured quality-gate mode.
-It reuses fixed comparison tolerances and does not calculate an overall score.
+1. Commit `.uitend.json` at the application repository root. Keep the
+   `projectKey` created by the UITend extension.
+2. Deploy the current commit to a URL reachable by the UITend services.
+3. Set `UITEND_ORCHESTRATOR_URL` as a protected CI/CD variable when
+   appropriate.
+4. Pass the preview URL to the assessment job as `UITEND_PREVIEW_URL`.
+5. Run the client and retain both reports as job artifacts.
 
-## Integration checklist
+The first compatible run establishes a baseline and passes unless
+`requireBaseline` is enabled.
 
-To add UITend to a GitLab project:
+## Configuration
 
-1. Commit `.uitend.json` at the repository root. Keep the `projectKey` created
-   by the UITend extension, then add the `ci` object described below.
-2. Make the UITend CI client available to the job. The examples in this
-   repository build it from `apps/uitend-ci`; if the consuming project installs
-   or checks it out elsewhere, change only the three client commands.
-3. Add a preview job to `.gitlab-ci.yml`. It must deploy the current commit to a
-   URL that the UITend assessment service can reach without a developer login.
-4. Add `UITEND_ORCHESTRATOR_URL` under **Settings > CI/CD > Variables**. Do not
-   put credentials or other secrets in `.gitlab-ci.yml` or the preview dotenv
-   artifact.
-5. Add the assessment job, pass the preview URL through a dotenv artifact, and
-   retain both generated reports as job artifacts.
-6. Validate the YAML with GitLab CI Lint, push a configured branch, and download
-   `uitend-report.html` from the job to verify the first run. Unless a baseline
-   is required, the first compatible run passes and establishes that baseline.
-
-## When the assessment runs
-
-The CI provider decides when a pipeline and its jobs are created. After the job
-starts, the UITend client checks the current branch against `ci.branches` in
-`.uitend.json`.
-
-The recommended behavior is:
-
-- run after every commit pushed to a configured branch;
-- run for every new commit in a merge request, using the source branch and the
-  merge request's preview environment;
-- run again after a merge if the merge creates a new commit on a configured
-  target branch;
-- avoid creating both a branch pipeline and a merge-request pipeline for the
-  same commit.
-
-If the branch does not match `ci.branches`, the client writes a report with
-`"status": "skipped"` and exits successfully. The preview job may still have
-run by that point. To avoid creating unnecessary preview environments, mirror
-the relevant branch conditions in the CI provider's job rules.
-
-## Configure `.uitend.json`
-
-The extension and CI client share the repository-root `.uitend.json` file. The
-following is a complete recommended multi-page configuration:
+A multi-page configuration looks like this:
 
 ```json
 {
   "projectKey": "123e4567-e89b-12d3-a456-426614174000",
   "name": "example-web-app",
   "ci": {
-    "branches": ["main", "feature/ui-*", "redesign/**"],
+    "branches": ["main", "feature/ui-*"],
     "baselineBranch": "main",
     "pages": [
       {
@@ -100,185 +53,73 @@ following is a complete recommended multi-page configuration:
 }
 ```
 
-The checked-in [uitend.example.json](uitend.example.json) contains a larger
-copyable example. JSON does not support comments, so use the reference tables
-below when adapting it.
+See [uitend.example.json](uitend.example.json) for a larger example and
+[assessment profiles](assessment-profiles.md) for profile IDs and directions.
 
-### Top-level and CI options
+### Main options
 
-| Setting | Required | Allowed values and default | Result |
-| --- | --- | --- | --- |
-| `projectKey` | Yes | A UUID, normally generated by the UITend extension | Identifies the project when assessments and baselines are stored. Do not create a new value for each branch or pipeline. |
-| `name` | Recommended; required by the extension | Non-empty project name | Appears as project metadata. The CI client can run without it. |
-| `assessment` | Only for single-page mode | See the single-page alternatives below | Selects profiles or manual metrics when `ci.pages` is absent. It is also the IDE's default assessment selection. |
-| `qualityGate` | Only for single-page mode | `mode` defaults to `warn`; `requireBaseline` defaults to `false` | Controls the gate for the exact `UITEND_PREVIEW_URL`. It does not provide defaults for entries in `ci.pages`. |
-| `ci.branches` | Yes | Non-empty array of exact names or glob patterns | A matching branch is assessed. A non-matching branch creates skipped HTML/JSON reports and exits `0`. |
-| `ci.baselineBranch` | No | Branch name; default `main` | Compares each page with its latest compatible completed run from this branch. |
-| `ci.pages` | Recommended | Non-empty ordered array | Enables multi-page profile mode. Pages are assessed sequentially and keep independent gates. |
-| `ci.metrics` | Legacy single-page only | Unique IDs from `m1` through `m14` | Assesses manual metrics in custom mode. It cannot be combined with `ci.pages` or profile mode. |
-| `ci.timeoutMs` | No | Positive number; default `300000` | Maximum polling time for each page. One slow or failed page does not consume the next page's timeout. |
-| `ci.pollIntervalMs` | No | Positive number; default `2000` | Delay between requests for assessment results. Smaller values poll more often. |
-
-Branch patterns match the complete branch name. `*` matches zero or more
-characters except `/`, `**` can cross `/`, and `?` matches exactly one
-non-`/` character. For example, `feature/*` matches `feature/cart` but not
-`feature/cart/header`; `feature/**` matches both.
-
-A compatible baseline has the same `projectKey`, normalized page path, and
-screenshot dimensions and comes from `ci.baselineBranch`. The host name of a
-commit preview may change because UITend stores URL assessments by normalized
-path. The selected metrics do not all need to exist in the older run; available
-matching metrics are compared individually.
-
-### `ci.pages[]` options
-
-| Setting | Required | Allowed values and default | Result |
-| --- | --- | --- | --- |
-| `path` | Yes | Route beginning with `/`, without `?` or `#` | Appended to the path of `UITEND_PREVIEW_URL`. A trailing slash is removed except for `/`; normalized paths must be unique. |
-| `profiles` | Yes | Non-empty array of unique `{ "id", "direction" }` objects | Resolves the metrics for this page. Metrics shared by selected profiles run only once. |
-| `qualityGate.mode` | Yes | `report`, `warn`, or `enforce` | Applies only to this page. There is deliberately no inherited default in multi-page mode. |
-| `qualityGate.requireBaseline` | No | Boolean; default `false` | If `true`, no compatible baseline makes the page fail with exit code `1`, even in `report` mode. If `false`, the first run passes as `not-comparable`. |
-
-The old singular `profile` and `direction` fields are accepted in place of
-`profiles` for backward compatibility, but new configurations should use the
-array. Do not combine the two forms.
-
-### Profiles and directions
-
-| Profile ID | Metrics selected | Direction options and their result |
+| Setting | Required/default | Purpose |
 | --- | --- | --- |
-| `general-review` | `m1`-`m14` | `observe` records all metrics without treating movement as opposed. |
-| `visual-complexity` | `m9`, `m10`, `m11` | `reduce-complexity` expects all three metrics to decrease; `increase-complexity` expects all three to increase; `preserve` opposes any meaningful movement; `observe` reports movement without opposing it. |
-| `screen-whitespace` | `m5` | `more-whitespace` expects M5 to increase; `less-whitespace` expects it to decrease; `preserve` and `observe` behave as above. |
-| `text-amount` | `m8` | `more-words` expects M8 to increase; `fewer-words` expects it to decrease; `preserve` and `observe` behave as above. |
-| `colorfulness` | `m3` | `more-colorful` expects M3 to increase; `less-colorful` expects it to decrease; `preserve` and `observe` behave as above. |
-| `accessibility` | `m13` | `fewer-detected-violations` expects fewer automatically detected violations; `preserve` and `observe` behave as above. This profile does not assess overall accessibility. |
+| `projectKey` | Required UUID | Identifies the project across branches and pipelines. |
+| `name` | Recommended | Project name shown in metadata. |
+| `ci.branches` | Required | Exact branch names or glob patterns to assess. |
+| `ci.baselineBranch` | Default `main` | Branch used for historical comparisons. |
+| `ci.pages` | Recommended | Ordered route configurations for multi-page profile mode. |
+| `ci.timeoutMs` | Default `300000` | Maximum wait per page. |
+| `ci.pollIntervalMs` | Default `2000` | Delay between result requests. |
 
-Profile outcomes are `aligned`, `opposed`, `mixed`, `unchanged`, or
-`not-comparable`. Only fixed, materially changed scalar metrics influence the
-directional outcome; visual/raw results remain available in the reports.
+Each `ci.pages[]` entry requires:
 
-Each profile also carries a goal status, using the same rules as the IDE
-profile dashboard: `achieved`, `not-achieved`, `partial`, `unchanged`,
-`observed`, or `not-comparable`. The page report adds a `profileGoals` summary
-(for example **No meaningful progress toward the goals**). The goal status is
-informational: the quality gate checks for movement *against* the configured
-directions, so an `unchanged` profile passes in every mode. This keeps pages
-that a change does not touch from blocking it.
+| Setting | Purpose |
+| --- | --- |
+| `path` | Route beginning with `/`, without a query or fragment. |
+| `profiles` | One or more unique `{ "id", "direction" }` objects. |
+| `qualityGate.mode` | `report`, `warn`, or `enforce`. |
+| `qualityGate.requireBaseline` | Optional boolean; defaults to `false`. |
 
-Comparable metrics that stay within their materiality threshold are labelled
-**not significant** in the reports and are listed per profile in the JSON field
-`withinToleranceMetrics`. Each entry is marked as moving `toward` or `against`
-the direction, with `none` for no change or `undirected` for
-`preserve`/`observe`. These metrics do not change the outcome, but the job log,
-the HTML report, and the profile reason show them together with the threshold,
-so a small change in either direction remains visible.
+Branch globs match the whole name: `*` does not cross `/`, `**` does, and
+`?` matches one non-`/` character.
 
-### Quality-gate options and outcomes
+For a single-page run, omit `ci.pages` and set the top-level `assessment`
+and `qualityGate`. Custom mode accepts `m1` through `m14`; the legacy
+`ci.metrics` field is also supported. Do not mix profiles and manual metrics.
+
+## Quality gates and exit codes
 
 | Mode | Aligned, unchanged, or not comparable | Mixed | Opposed |
 | --- | --- | --- | --- |
 | `report` | Pass (`0`) | Pass (`0`) | Pass (`0`) |
-| `warn` | Pass (`0`) | Warning (`2` by default) | Warning (`2` by default) |
-| `enforce` | Pass (`0`) | Warning (`2` by default) | Fail (`1`) |
+| `warn` | Pass (`0`) | Warning (`2`) | Warning (`2`) |
+| `enforce` | Pass (`0`) | Warning (`2`) | Fail (`1`) |
 
-`requireBaseline: true` overrides this table when no compatible baseline exists
-and fails with exit code `1`. A technical error also exits `1`. Warning exit
-code `2` can be changed to `0` with `UITEND_WARNING_EXIT_CODE` or
-`--warning-exit-code`; the assessment remains a warning in both reports.
+`requireBaseline: true` fails with exit code `1` when no compatible
+baseline exists. Technical errors also exit `1`. Set
+`UITEND_WARNING_EXIT_CODE=0` if the CI provider cannot treat exit code `2`
+as an allowed warning.
 
-### Single-page alternatives
+## Variables and command-line options
 
-Omit `ci.pages` to assess the exact `UITEND_PREVIEW_URL`. Choose one of these
-forms; do not combine profiles and manual metrics:
+CLI flags override their environment-variable equivalents.
 
-```json
-{
-  "assessment": {
-    "mode": "profiles",
-    "profiles": [
-      { "id": "accessibility", "direction": "fewer-detected-violations" }
-    ]
-  },
-  "qualityGate": { "mode": "enforce", "requireBaseline": false }
-}
-```
+| Environment variable | CLI flag | Default or purpose |
+| --- | --- | --- |
+| `UITEND_ORCHESTRATOR_URL` | `--orchestrator-url` | Required for assessed branches. |
+| `UITEND_PREVIEW_URL` | `--url` | Required public preview base URL. |
+| `UITEND_BRANCH` | `--branch` | Overrides automatic branch detection. |
+| `UITEND_CONFIG` | `--config` | Default `.uitend.json`. |
+| `UITEND_REPORT` | `--report` | Default `uitend-report.json`. |
+| `UITEND_HTML_REPORT` | `--html-report` | Default `uitend-report.html`. |
+| `UITEND_WARNING_EXIT_CODE` | `--warning-exit-code` | `0` or `2`; default `2`. |
+| `UITEND_COMMIT_SHA` | — | Optional commit override. |
+| `UITEND_REPOSITORY_URL` | — | Optional repository URL override. |
+| `UITEND_MERGE_REQUEST_ID` | — | Optional merge-request ID override. |
 
-```json
-{
-  "assessment": {
-    "mode": "custom",
-    "metrics": ["m8", "m13", "m14"]
-  },
-  "qualityGate": { "mode": "report", "requireBaseline": false }
-}
-```
+## GitLab CI example
 
-For compatibility, custom metrics can instead be placed in `ci.metrics`. If no
-single-page selection is present, the CI client defaults to `m8`, `m10`, `m13`,
-and `m14` in custom mode. Custom mode reports metric changes but has no profile
-direction to enforce.
-
-The manual metric IDs produce these results:
-
-| ID | Result |
-| --- | --- |
-| `m1` | PNG file size, used as a visual complexity indicator. |
-| `m2` | JPEG file size and PNG-to-JPEG compression ratio. |
-| `m3` | Hasler-Süsstrunk perceived-colorfulness score. |
-| `m4` | Mean and standard deviation of CIELAB lightness and color channels. |
-| `m5` | White-space proportion/distribution score from UIED segmentation. |
-| `m6` | UIED component-segmentation image and component JSON. |
-| `m7` | UMSI saliency heatmap and overlay. |
-| `m8` | Visible DOM word count. |
-| `m9` | Canny edge density and edge image. |
-| `m10` | Feature-congestion score and congestion map. |
-| `m11` | Subband-entropy clutter score. |
-| `m12` | Shannon information-entropy score. |
-| `m13` | axe-core accessibility violation count and issue details. |
-| `m14` | NIMA predicted aesthetic/technical-quality mean score and standard deviation. |
-
-`m4`, `m6`, and `m7` produce structured or visual results rather than the
-single scalar used for direction classification. They are retained in the HTML
-and JSON reports but do not by themselves make a profile aligned or opposed.
-
-## CI variables and command-line options
-
-Command-line flags take precedence over their environment-variable equivalents.
-
-| Environment variable | CLI flag | Required/default | Result |
-| --- | --- | --- | --- |
-| `UITEND_ORCHESTRATOR_URL` | `--orchestrator-url` | Required for assessed branches | Base URL used for submissions, polling, history, and visual-result downloads. Store it as a GitLab CI/CD variable. |
-| `UITEND_PREVIEW_URL` | `--url` | Required for assessed branches | Public preview base URL. In multi-page mode each `ci.pages[].path` is appended to its existing path. |
-| `UITEND_BRANCH` | `--branch` | Override; required for GitLab merge-request pipelines in the current client | Controls `ci.branches` matching and the branch stored with the run. Otherwise the client tries `CI_COMMIT_BRANCH`, GitHub variables, then Git. |
-| `UITEND_COMMIT_SHA` | None | Optional override | Commit recorded in the reports and assessment history. Otherwise detected from `CI_COMMIT_SHA`, GitHub, or Git. |
-| `UITEND_REPOSITORY_URL` | None | Optional override | Repository identity sent to UITend. Otherwise detected from GitLab, GitHub, or Git; URL credentials are removed. |
-| `UITEND_MERGE_REQUEST_ID` | None | Optional override | Merge-request metadata. Otherwise detected from `CI_MERGE_REQUEST_IID` or GitHub. |
-| `UITEND_CONFIG` | `--config` | Default `.uitend.json` | Reads project configuration from another path. |
-| `UITEND_REPORT` | `--report` | Default `uitend-report.json` | Changes the machine-readable report path. Keep `.gitlab-ci.yml` artifact paths in sync. |
-| `UITEND_HTML_REPORT` | `--html-report` | Default `uitend-report.html` | Changes the visual report path. Keep `.gitlab-ci.yml` artifact paths in sync. |
-| `UITEND_WARNING_EXIT_CODE` | `--warning-exit-code` | `0` or `2`; default `2` | `2` lets GitLab display an allowed warning when `allow_failure.exit_codes` includes `2`; `0` makes warning outcomes successful at process level. |
-
-The preview must not depend on a developer's local machine or an authenticated
-browser session. Every resulting page URL must remain reachable from the
-assessment service until the job has written the reports, because visual files
-are downloaded and embedded at that point.
-
-## GitLab CI
-
-The following workflow creates merge-request pipelines, suppresses the duplicate
-branch pipeline when a branch already has an open merge request, and otherwise
-creates normal branch pipelines. Save it as `.gitlab-ci.yml` at the repository
-root and merge the jobs/stages into any pipeline already present:
+The preview job must write only the public base URL to `preview.env`.
+Adapt the build and deployment commands to the application:
 
 ```yaml
-workflow:
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"'
-      when: never
-    - if: '$CI_COMMIT_BRANCH'
-
 stages: [preview, assess]
 
 ui-preview:
@@ -305,8 +146,7 @@ web-ui-assessment:
     - npm run build --prefix apps/uitend-ci
     - node apps/uitend-ci/dist/src/cli.js
   allow_failure:
-    exit_codes:
-      - 2
+    exit_codes: [2]
   artifacts:
     when: always
     expire_in: 1 week
@@ -315,186 +155,19 @@ web-ui-assessment:
       - uitend-report.json
 ```
 
-Replace `./scripts/deploy-preview.sh` with the application's actual preview
-deployment command. It must print only the final public base URL. The example
-assumes the client source is present at `apps/uitend-ci`; replace those commands
-with the consuming project's installation and invocation commands if it is
-located elsewhere.
+Add `UITEND_ORCHESTRATOR_URL` under **Settings > CI/CD > Variables** rather
+than hard-coding it. The `before_script` is needed because GitLab
+merge-request pipelines expose the source branch as
+`CI_MERGE_REQUEST_SOURCE_BRANCH_NAME`.
 
-### What each `.gitlab-ci.yml` option does
+The example builds the client from `apps/uitend-ci`. Change those three
+commands if the consuming project obtains it elsewhere. Keep the preview
+reachable until the report is complete so captures and visual metric files can
+be embedded.
 
-| YAML entry | Required | Result or alternative |
-| --- | --- | --- |
-| `workflow.rules` | Recommended | Creates merge-request pipelines, suppresses a duplicate push pipeline when an MR is open, and otherwise creates branch pipelines. Remove or merge this block if the project already controls pipeline creation globally. |
-| `stages: [preview, assess]` | Yes, unless equivalent stages exist | Ensures preview deployment precedes assessment. Add the two names to an existing `stages` list rather than replacing it. |
-| `ui-preview.stage` | Yes | Assigns preview deployment to the earlier stage. Job names are arbitrary, but references in `needs` must match. |
-| `ui-preview.image` | Runner-dependent | Supplies Node.js for the example build. Use the image and setup required by the application. |
-| `ui-preview.script` | Yes | Installs/builds the current commit, deploys it, and writes exactly `UITEND_PREVIEW_URL=<public-url>` to `preview.env`. |
-| `ui-preview.artifacts.reports.dotenv` | Yes for this hand-off pattern | Imports `UITEND_PREVIEW_URL` into later jobs. Do not store secrets in this file. A project may instead set the URL directly in the assessment job. |
-| `web-ui-assessment.image: node:20` | Yes for the source-built client | Provides a supported Node.js runtime; the client requires Node.js 18 or later. |
-| `web-ui-assessment.needs` | Yes for the dotenv pattern | Waits for `ui-preview`, starts as soon as it succeeds, and downloads its artifacts. |
-| `before_script` branch export | Yes for current GitLab MR pipelines | Uses `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME` in MR pipelines and `CI_COMMIT_BRANCH` in branch pipelines, so `.uitend.json` sees the actual source branch. |
-| Assessment `script` | Yes | Installs and builds the CI client, then runs it from the repository root so the default config/report paths resolve correctly. |
-| `allow_failure.exit_codes: [2]` | Recommended with the default warning exit code | Marks exit code `2` as an allowed failure, so warnings are visible but do not block later stages or merging. Exit code `1` still blocks. Omit it to make warnings blocking, or set `UITEND_WARNING_EXIT_CODE: "0"` to make warning jobs fully successful. |
-| `artifacts.when: always` | Recommended | Attempts to upload reports for passes, skips, warnings, and failures. Failures before the client starts cannot produce reports. |
-| `artifacts.paths` | Yes to retain reports | Makes the HTML and JSON files downloadable. Change both entries if report path options are changed. |
-| `artifacts.expire_in` | No | Retains reports for the chosen period; omit it to use the GitLab instance default. |
+## Other CI providers and local runs
 
-`UITEND_ORCHESTRATOR_URL` is intentionally absent from the YAML. Add it in the
-GitLab project or group CI/CD variables instead. It is not automatically a
-secret if it is only a public base URL, but it may be protected or masked
-according to the deployment. Protected variables are unavailable on
-unprotected branches.
-
-The UITend client still applies `ci.branches` after the jobs begin. To avoid an
-unnecessary preview deployment, optionally add matching GitLab job `rules` to
-both jobs. GitLab rules use regular expressions rather than UITend's glob
-syntax, so keep the two lists synchronized deliberately. For example:
-
-```yaml
-rules:
-  - if: '$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^(main|feature\/ui-[^\/]*)$/'
-  - if: '$CI_COMMIT_BRANCH =~ /^(main|feature\/ui-[^\/]*)$/'
-```
-
-### Merge-request branch detection
-
-GitLab merge-request pipelines normally set
-`CI_MERGE_REQUEST_SOURCE_BRANCH_NAME`, while `CI_COMMIT_BRANCH` is unavailable.
-The current client detects `CI_COMMIT_BRANCH` but does not yet automatically
-read `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME`. The `before_script` above sets
-`UITEND_BRANCH` to the correct source branch as a workaround. The merge-request
-IID itself is detected automatically from `CI_MERGE_REQUEST_IID`.
-
-In merge-request pipelines from forks, protected CI/CD variables may be
-unavailable. Ensure the orchestrator URL and preview deployment can be used in
-the project's chosen fork security model; do not expose secrets to untrusted
-pipeline code.
-
-The relevant GitLab behavior is documented in the official references for
-[`workflow:rules`](https://docs.gitlab.com/ci/yaml/workflow/),
-[`allow_failure:exit_codes`](https://docs.gitlab.com/ci/yaml/#allow_failureexit_codes),
-and [dotenv report variables](https://docs.gitlab.com/ci/variables/dotenv_variables/).
-
-## GitHub Actions
-
-Configure the workflow to run for pushes and pull requests. Restrict the branch
-lists to the branches relevant to the project:
-
-```yaml
-name: Web UI Assessment
-
-on:
-  push:
-    branches:
-      - main
-      - 'feature/ui-*'
-      - 'redesign/**'
-  pull_request:
-
-jobs:
-  uitend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Create public preview
-        id: preview
-        run: echo "url=$(./scripts/deploy-preview.sh)" >> "$GITHUB_OUTPUT"
-
-      - name: Assess Web UI
-        env:
-          UITEND_ORCHESTRATOR_URL: ${{ secrets.UITEND_ORCHESTRATOR_URL }}
-          UITEND_PREVIEW_URL: ${{ steps.preview.outputs.url }}
-        run: |
-          npm ci --prefix apps/uitend-ci
-          npm run build --prefix apps/uitend-ci
-          node apps/uitend-ci/dist/src/cli.js
-
-      - name: Attach assessment report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: uitend-assessment
-          path: |
-            uitend-report.html
-            uitend-report.json
-          if-no-files-found: ignore
-```
-
-GitHub provides the pull request's source branch through `GITHUB_HEAD_REF`,
-which the client detects automatically. Repository secrets are normally not
-provided to workflows triggered by pull requests from forks, so forked pull
-requests may need to skip the assessment or use a separately secured workflow.
-
-## Successful, skipped, and failed jobs
-
-### Successful assessment
-
-The job exits with code `0` when every page gate passes, prints page-specific
-profile outcomes and metric comparisons, and writes a completed JSON report.
-A missing baseline does not fail a page assessment; that run establishes the
-page's baseline and is classified as `not-comparable`.
-
-Multi-page reports use schema version 2. Their ordered `pages` array contains
-the complete schema-version-1 report for each page, including its target,
-result ID, profiles, metrics, comparison, and independently configured page
-quality gate. The top-level gate uses mode `per-page`, reports the most severe
-page gate (`fail`, then `warning`, then `pass`), and determines the process exit
-code.
-
-Exit code `2` is a non-blocking warning produced by `warn` mode for `mixed` or
-`opposed` outcomes and by `enforce` mode for `mixed` outcomes. Exit code `1`
-represents either an enforced `opposed` outcome or a technical failure.
-For pages with multiple profiles, one opposed profile is sufficient to fail an
-`enforce` page; one opposed or mixed profile is sufficient to warn a `warn`
-page.
-
-### Skipped assessment
-
-If the current branch does not match `ci.branches`, the client exits with code
-`0` and writes a skipped report. This is a normal outcome, not a warning or
-failure.
-
-### Technical failure
-
-The client exits with code `1` when it cannot complete the assessment. Examples
-include:
-
-- a missing, unreadable, or invalid `.uitend.json` file;
-- an unknown branch or repository URL;
-- a missing orchestrator URL or preview URL;
-- an invalid preview URL;
-- an HTTP, connectivity, timeout, or invalid-JSON error;
-- an orchestrator response without a result ID;
-- a page assessment that does not finish before its `ci.timeoutMs` deadline;
-- a configured metric that completes without results.
-
-Dependency installation, application build, preview deployment, and artifact
-upload can also fail independently of the UITend client.
-
-Exit code `2` represents a non-blocking quality warning. Configure GitLab to
-allow that code while keeping exit code `1` blocking:
-
-```yaml
-web-ui-assessment:
-  allow_failure:
-    exit_codes:
-      - 2
-```
-
-Technical errors and enforced opposed outcomes use exit code `1` and continue
-to block the job. Artifacts use `when: always`, so `uitend-report.html` and
-`uitend-report.json` are uploaded for passes, warnings, and failures. The client
-also creates both files for a branch that is skipped.
-
-## Running the client manually
-
-From the repository root, using Node.js 18 or later:
+Any provider can run the client by setting the required variables and invoking:
 
 ```bash
 npm ci --prefix apps/uitend-ci
@@ -502,32 +175,16 @@ npm run build --prefix apps/uitend-ci
 node apps/uitend-ci/dist/src/cli.js
 ```
 
-Optional command-line flags are `--config`, `--report`, `--html-report`, `--url`,
-`--branch`, `--orchestrator-url`, and `--warning-exit-code`. The complete
-precedence and default reference is in
-[CI variables and command-line options](#ci-variables-and-command-line-options).
+The client requires Node.js 18 or later. It detects common GitLab and GitHub
+branch, commit, repository, and pull-request variables; use the overrides above
+when automatic detection is insufficient.
 
 ## Troubleshooting
 
-### `Could not determine the CI branch`
-
-In a GitLab merge-request pipeline, set `UITEND_BRANCH` from
-`CI_MERGE_REQUEST_SOURCE_BRANCH_NAME` as shown in the GitLab example.
-
-### `UITEND_PREVIEW_URL is required`
-
-Check that the preview job writes a dotenv artifact, that the assessment job
-downloads it through `needs`, and that the deployment command produced a URL.
-
-### Assessment timeout
-
-Confirm that the preview is publicly reachable from the orchestrator, inspect
-the orchestrator logs, and increase `ci.timeoutMs` only if the metrics are
-working but legitimately need more time.
-
-### No baseline is shown
-
-Confirm that `ci.baselineBranch` names the intended branch and that at least one
-compatible assessment has completed on it. Check that the page path and capture
-dimensions are stable. This condition passes by default, but fails when the
-applicable `qualityGate.requireBaseline` is `true`.
+| Problem | Check |
+| --- | --- |
+| Branch cannot be determined | Set `UITEND_BRANCH`; for GitLab merge requests, use `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME`. |
+| Preview URL is missing | Confirm the preview job writes and exports `UITEND_PREVIEW_URL`. |
+| Assessment times out | Verify the preview and orchestrator are reachable, then increase `ci.timeoutMs` only if metrics legitimately need longer. |
+| No baseline appears | Check `ci.baselineBranch`, route paths, and capture dimensions. |
+| Reports are missing after failure | Use `artifacts.when: always` and keep artifact paths aligned with any CLI overrides. |
